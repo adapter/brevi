@@ -93,6 +93,18 @@ function resolveAppDist(): string | null {
   }
 }
 
+/** Tiny page shown in the popup after the Linear OAuth redirect. */
+function connectResultPage(ok: boolean, detail: string): string {
+  const title = ok ? "Linear connected" : "Connection failed";
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>brevi — ${title}</title></head>
+<body style="font-family: system-ui; padding: 4rem; background: #101014; color: #e8e8ee">
+<h1 style="font-size: 1.2rem">${title}</h1>
+<p>${detail.replace(/</g, "&lt;")}</p>
+<p style="color:#888">You can close this window and return to the brevi dashboard.</p>
+</body></html>`;
+}
+
 function statusForError(error: unknown): number {
   if (error instanceof OrchestratorError) {
     if (error.code === "not-found") return 404;
@@ -190,6 +202,37 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig): Hono {
     } catch (error) {
       return c.json({ error: errorMessage(error) }, 500);
     }
+  });
+
+  app.post("/api/connect/:provider", async (c) => {
+    const provider = c.req.param("provider");
+    if (!["linear", "github", "anthropic", "codex"].includes(provider)) {
+      return c.json({ error: "unknown provider" }, 404);
+    }
+    try {
+      const serverUrl = `http://localhost:${config.server.port}`;
+      return c.json(
+        await orchestrator.connectProvider(provider as "linear" | "github" | "anthropic" | "codex", serverUrl),
+      );
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, 500);
+    }
+  });
+
+  app.post("/api/connect/github/poll", async (c) => {
+    try {
+      return c.json(await orchestrator.pollGithubDevice());
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, 500);
+    }
+  });
+
+  app.get("/api/connect/linear/callback", async (c) => {
+    const code = c.req.query("code");
+    const state = c.req.query("state");
+    if (!code || !state) return c.html(connectResultPage(false, "Missing code or state."), 400);
+    const result = await orchestrator.completeLinearOauth(state, code);
+    return c.html(connectResultPage(result.ok, result.detail), result.ok ? 200 : 400);
   });
 
   app.get("/api/github/repos", async (c) => {

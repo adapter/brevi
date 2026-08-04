@@ -168,20 +168,19 @@ function branchNameFor(ticket: Ticket): string {
 }
 
 /**
- * Credentials forwarded into the sandbox for the coding agent. Keys configured
- * through the dashboard win over the orchestrator's host environment.
+ * Credentials forwarded into the sandbox for the coding agent. All keys come
+ * from ~/.brevi/config.json (connected via the dashboard) — the orchestrator's
+ * own environment is never consulted at run time.
  */
 function collectAgentEnv(config: BreviConfig): Record<string, string> {
   const env: Record<string, string> = {};
-  const apiKey = config.agent.anthropicApiKey || process.env.ANTHROPIC_API_KEY;
-  const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  const codexKey = config.agent.codexApiKey || process.env.OPENAI_API_KEY;
-  if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
-  if (oauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
-  if (codexKey) env.OPENAI_API_KEY = codexKey;
-  if (!apiKey && !oauthToken && !codexKey) {
+  const { anthropicApiKey, claudeCodeOauthToken, codexApiKey } = config.agent;
+  if (anthropicApiKey) env.ANTHROPIC_API_KEY = anthropicApiKey;
+  if (claudeCodeOauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = claudeCodeOauthToken;
+  if (codexApiKey) env.OPENAI_API_KEY = codexApiKey;
+  if (Object.keys(env).length === 0) {
     throw new Error(
-      "no agent credentials found: connect an Anthropic (or Codex) API key in the dashboard's Connections panel, or set ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN in the orchestrator's environment",
+      "no agent credentials configured: connect Anthropic (or Codex) in the dashboard's Connections panel",
     );
   }
   return env;

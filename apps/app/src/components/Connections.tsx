@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   BreviConfig,
   CredentialProvider,
@@ -11,11 +11,15 @@ import { api } from "../lib/api";
 import { Button, Plate, RepoChip } from "./Bits";
 import { Check, Close, External, Pin, Warn } from "./Icons";
 
+/** How the "Connect" button acquires a credential, shown as a hint. */
+type ConnectHint = string;
+
 interface ProviderSpec {
   id: CredentialProvider;
   field: keyof CredentialsUpdateRequest;
   name: string;
   role: string;
+  connectHint: ConnectHint;
   inputLabel: string;
   keyUrl: string;
   keyUrlLabel: string;
@@ -28,6 +32,7 @@ const PROVIDERS: ProviderSpec[] = [
     field: "linearApiKey",
     name: "Linear",
     role: "Ticket source — polling starts once connected",
+    connectHint: "Authorize in the browser",
     inputLabel: "Personal API key",
     keyUrl: "https://linear.app/settings/api",
     keyUrlLabel: "linear.app/settings/api",
@@ -38,6 +43,7 @@ const PROVIDERS: ProviderSpec[] = [
     field: "githubToken",
     name: "GitHub",
     role: "Branches and pull requests",
+    connectHint: "Uses your gh CLI login or a device code",
     inputLabel: 'Access token with the "repo" scope',
     keyUrl: "https://github.com/settings/tokens",
     keyUrlLabel: "github.com/settings/tokens",
@@ -46,19 +52,21 @@ const PROVIDERS: ProviderSpec[] = [
   {
     id: "anthropic",
     field: "anthropicApiKey",
-    name: "Anthropic",
+    name: "Claude",
     role: "Runs the coding agent in the sandbox",
-    inputLabel: "API key",
+    connectHint: "Found on this machine (Claude Code login or env)",
+    inputLabel: "Anthropic API key",
     keyUrl: "https://console.anthropic.com/settings/keys",
     keyUrlLabel: "console.anthropic.com",
-    connected: (c) => c.agent.anthropicApiKey !== "",
+    connected: (c) => c.agent.anthropicApiKey !== "" || c.agent.claudeCodeOauthToken !== "",
   },
   {
     id: "codex",
     field: "codexApiKey",
     name: "Codex",
     role: "Alternative agent key (OpenAI)",
-    inputLabel: "API key",
+    connectHint: "Found on this machine (Codex CLI login or env)",
+    inputLabel: "OpenAI API key",
     keyUrl: "https://platform.openai.com/api-keys",
     keyUrlLabel: "platform.openai.com",
     connected: (c) => c.agent.codexApiKey !== "",
@@ -129,6 +137,12 @@ export function Connections({
   );
 }
 
+interface DeviceState {
+  userCode: string;
+  verificationUri: string;
+  interval: number;
+}
+
 function ProviderRow({
   spec,
   config,
@@ -141,7 +155,87 @@ function ProviderRow({
   const [value, setValue] = useState("");
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<CredentialResult | null>(null);
+  const [manual, setManual] = useState(false);
+  const [manualReason, setManualReason] = useState<string | null>(null);
+  const [device, setDevice] = useState<DeviceState | null>(null);
+  const [awaitingRedirect, setAwaitingRedirect] = useState(false);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connected = spec.connected(config);
+
+  const stopPolling = () => {
+    if (pollTimer.current) clearTimeout(pollTimer.current);
+    pollTimer.current = null;
+  };
+  useEffect(() => stopPolling, []);
+
+  // The redirect flow completes server-side; the config broadcast tells us.
+  useEffect(() => {
+    if (connected) {
+      setAwaitingRedirect(false);
+      setDevice(null);
+      stopPolling();
+    }
+  }, [connected]);
+
+  const fail = (detail: string) => setResult({ ok: false, detail });
+
+  const pollDevice = (interval: number) => {
+    pollTimer.current = setTimeout(() => {
+      void api
+        .pollGithubDevice()
+        .then((poll) => {
+          if (poll.status === "pending") {
+            pollDevice(interval);
+            return;
+          }
+          setDevice(null);
+          if (poll.status === "connected") {
+            onConfig(poll.config);
+            setResult({ ok: true, detail: poll.detail });
+          } else {
+            fail(poll.detail);
+          }
+        })
+        .catch(() => pollDevice(interval));
+    }, interval * 1000);
+  };
+
+  const connect = async () => {
+    setPending(true);
+    setResult(null);
+    setManualReason(null);
+    try {
+      const response = await api.connect(spec.id);
+      switch (response.status) {
+        case "connected":
+          onConfig(response.config);
+          setResult({ ok: true, detail: response.detail });
+          setManual(false);
+          break;
+        case "device":
+          setDevice({
+            userCode: response.userCode,
+            verificationUri: response.verificationUri,
+            interval: response.interval,
+          });
+          window.open(response.verificationUri, "_blank", "noopener");
+          pollDevice(response.interval);
+          break;
+        case "redirect":
+          setAwaitingRedirect(true);
+          window.open(response.url, "_blank", "noopener");
+          break;
+        case "manual":
+          setManual(true);
+          setManualReason(response.reason);
+          break;
+      }
+    } catch (err) {
+      fail(err instanceof Error ? err.message : "The orchestrator did not respond.");
+    } finally {
+      setPending(false);
+    }
+  };
 
   const submit = async (next: string) => {
     setPending(true);
@@ -151,12 +245,13 @@ function ProviderRow({
       const outcome = response.results[spec.id];
       onConfig(response.config);
       setResult(outcome ?? null);
-      if (outcome?.ok) setValue("");
+      if (outcome?.ok) {
+        setValue("");
+        setManual(false);
+        setManualReason(null);
+      }
     } catch (err) {
-      setResult({
-        ok: false,
-        detail: err instanceof Error ? err.message : "The orchestrator did not respond.",
-      });
+      fail(err instanceof Error ? err.message : "The orchestrator did not respond.");
     } finally {
       setPending(false);
     }
@@ -180,40 +275,104 @@ function ProviderRow({
           />
           {connected ? "Connected" : "Not connected"}
         </span>
-        {connected && (
-          <span className="ml-auto">
+        <span className="ml-auto">
+          {connected ? (
             <Button onClick={() => void submit("")} disabled={pending} title="Remove this key">
               Disconnect
             </Button>
-          </span>
-        )}
+          ) : (
+            <Button
+              tone="ember"
+              onClick={() => void connect()}
+              disabled={pending || device !== null}
+              title={spec.connectHint}
+            >
+              {pending ? "Connecting" : "Connect"}
+            </Button>
+          )}
+        </span>
       </div>
 
       <p className="mt-1.5 text-[12px] leading-relaxed text-haze-400">{spec.role}</p>
 
-      <form
-        className="mt-2.5 flex items-center gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (value.trim()) void submit(value);
-        }}
-      >
-        <input
-          type="password"
-          value={value}
-          onChange={(e) => {
-            setValue(e.target.value);
-            setResult(null);
+      {device && (
+        <div className="mt-2.5 rounded-[5px] border border-ink-600 bg-ink-950/70 p-3">
+          <Plate className="text-haze-700">Enter this code on GitHub</Plate>
+          <p className="mt-2 select-all font-mono text-[20px] font-semibold tracking-[0.2em] text-haze-50">
+            {device.userCode}
+          </p>
+          <p className="mt-2 flex items-center gap-1.5 text-[12px] text-haze-400">
+            <span className="inline-block size-[6px] animate-beacon rounded-full bg-ember-500" />
+            Waiting for authorization at{" "}
+            <a
+              href={device.verificationUri}
+              target="_blank"
+              rel="noreferrer"
+              className="text-haze-200 underline decoration-ink-500 hover:text-haze-50"
+            >
+              {device.verificationUri.replace("https://", "")}
+            </a>
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setDevice(null);
+              stopPolling();
+            }}
+            className="plate mt-2.5 text-haze-700 hover:text-haze-300"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {awaitingRedirect && !connected && (
+        <p className="mt-2.5 flex items-center gap-1.5 text-[12px] text-haze-400">
+          <span className="inline-block size-[6px] animate-beacon rounded-full bg-ember-500" />
+          Finish authorizing in the opened tab — this panel updates by itself.
+        </p>
+      )}
+
+      {manualReason && (
+        <p className="mt-2.5 text-[12px] leading-relaxed text-haze-400">{manualReason}</p>
+      )}
+
+      {manual && !connected ? (
+        <form
+          className="mt-2.5 flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (value.trim()) void submit(value);
           }}
-          placeholder={connected ? "Replace key" : spec.inputLabel}
-          autoComplete="off"
-          spellCheck={false}
-          className="h-8 min-w-0 flex-1 rounded-[4px] border border-ink-600 bg-ink-950/70 px-2.5 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 focus:border-haze-600 focus:outline-none"
-        />
-        <Button type="submit" tone="ember" disabled={pending || value.trim() === ""}>
-          {pending ? "Checking" : "Save"}
-        </Button>
-      </form>
+        >
+          <input
+            type="password"
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setResult(null);
+            }}
+            placeholder={spec.inputLabel}
+            autoComplete="off"
+            spellCheck={false}
+            className="h-8 min-w-0 flex-1 rounded-[4px] border border-ink-600 bg-ink-950/70 px-2.5 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 focus:border-haze-600 focus:outline-none"
+          />
+          <Button type="submit" tone="ember" disabled={pending || value.trim() === ""}>
+            {pending ? "Checking" : "Save"}
+          </Button>
+        </form>
+      ) : (
+        !connected &&
+        !device && (
+          <button
+            type="button"
+            onClick={() => setManual(true)}
+            className="plate mt-2.5 text-haze-700 hover:text-haze-300"
+          >
+            Enter a key manually instead
+          </button>
+        )
+      )}
 
       {result && (
         <p
@@ -230,15 +389,17 @@ function ProviderRow({
         </p>
       )}
 
-      <a
-        href={spec.keyUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="mt-2.5 inline-flex items-center gap-1 font-mono text-[10.5px] text-haze-700 hover:text-haze-300"
-      >
-        Get a key: {spec.keyUrlLabel}
-        <External className="size-2.5" />
-      </a>
+      {manual && !connected && (
+        <a
+          href={spec.keyUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-2.5 inline-flex items-center gap-1 font-mono text-[10.5px] text-haze-700 hover:text-haze-300"
+        >
+          Get a key: {spec.keyUrlLabel}
+          <External className="size-2.5" />
+        </a>
+      )}
     </article>
   );
 }

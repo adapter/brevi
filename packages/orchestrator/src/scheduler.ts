@@ -4,9 +4,12 @@ import {
   redactConfig,
   repoConfigSchema,
   type BreviConfig,
+  type ConnectResponse,
+  type CredentialProvider,
   type CredentialResult,
   type CredentialsUpdateRequest,
   type CredentialsUpdateResponse,
+  type DevicePollResponse,
   type GithubRepo,
   type RepoConfig,
   type ReposUpdateRequest,
@@ -18,7 +21,21 @@ import {
 import { createSandboxProvider, type SandboxProvider } from "@brevi/sandbox";
 import { saveConfig } from "./config.js";
 import {
+  discoverAnthropicCredential,
+  discoverCodexCredential,
+  discoverGithubToken,
+  exchangeLinearCode,
+  githubClientId,
+  linearOauthApp,
+  pollGithubDeviceFlow,
+  startGithubDeviceFlow,
+  startLinearOauth,
+  type GithubDeviceSession,
+  type LinearOauthSession,
+} from "./connect.js";
+import {
   validateAnthropicApiKey,
+  validateAnthropicCredential,
   validateCodexApiKey,
   validateGithubToken,
   validateLinearApiKey,
@@ -63,6 +80,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #pollTimer?: NodeJS.Timeout;
   #stopped = false;
   #warnedNoRepo = new Set<string>();
+  #githubDevice?: GithubDeviceSession;
+  #linearOauth?: LinearOauthSession;
 
   constructor(config: BreviConfig, store: RunStore = new RunStore(), configPath?: string) {
     super();
@@ -191,6 +210,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       }),
       apply(request.anthropicApiKey, validateAnthropicApiKey, (key) => {
         this.config.agent.anthropicApiKey = key;
+        // A manual key (or a disconnect) replaces any host-discovered login.
+        this.config.agent.claudeCodeOauthToken = "";
       }),
       apply(request.codexApiKey, validateCodexApiKey, (key) => {
         this.config.agent.codexApiKey = key;
@@ -216,6 +237,175 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       }
     }
     return { results, config: redactConfig(this.config) };
+  }
+
+  /** Persist a credential mutation and hot-apply it. */
+  async #saveCredential(set: () => void, linearChanged = false): Promise<void> {
+    set();
+    await saveConfig(this.config, this.#configPath);
+    this.emit("config", redactConfig(this.config));
+    if (linearChanged) {
+      this.#linear = this.config.linear.apiKey ? new LinearService(this.config) : undefined;
+      if (this.#linear) void this.poll();
+    }
+  }
+
+  /**
+   * One-click connect: try host discovery / OAuth flows for a provider.
+   * Falls back to "manual" (dashboard shows the key input) with a reason.
+   */
+  async connectProvider(
+    provider: CredentialProvider,
+    serverUrl: string,
+  ): Promise<ConnectResponse> {
+    switch (provider) {
+      case "github": {
+        const discovered = await discoverGithubToken();
+        if (discovered) {
+          const result = await validateGithubToken(discovered.value);
+          if (result.ok) {
+            await this.#saveCredential(() => {
+              this.config.github.token = discovered.value;
+            });
+            return {
+              status: "connected",
+              provider,
+              detail: `${result.detail} (via ${discovered.source})`,
+              config: redactConfig(this.config),
+            };
+          }
+        }
+        const clientId = githubClientId(this.config);
+        if (clientId) {
+          const session = await startGithubDeviceFlow(clientId);
+          this.#githubDevice = session;
+          return {
+            status: "device",
+            provider,
+            userCode: session.userCode,
+            verificationUri: session.verificationUri,
+            interval: session.interval,
+            expiresIn: Math.floor((session.expiresAt - Date.now()) / 1000),
+          };
+        }
+        return {
+          status: "manual",
+          provider,
+          reason:
+            "No GitHub CLI login found. Run `gh auth login` and connect again, set connect.githubClientId in ~/.brevi/config.json for one-click device login, or paste a token.",
+        };
+      }
+      case "linear": {
+        const app = linearOauthApp(this.config);
+        if (app) {
+          const { session, url } = startLinearOauth(app, serverUrl);
+          this.#linearOauth = session;
+          return { status: "redirect", provider, url };
+        }
+        return {
+          status: "manual",
+          provider,
+          reason:
+            "One-click Linear connect needs an OAuth app (connect.linearClientId/linearClientSecret in ~/.brevi/config.json). Paste a personal API key instead.",
+        };
+      }
+      case "anthropic": {
+        const found = await discoverAnthropicCredential();
+        if (!found) {
+          return {
+            status: "manual",
+            provider,
+            reason:
+              "No Anthropic credential found on this machine (checked ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, and the Claude Code login). Paste an API key instead.",
+          };
+        }
+        const result = await validateAnthropicCredential(found.value, found.kind);
+        if (!result.ok) {
+          return {
+            status: "manual",
+            provider,
+            reason: `Found a credential from ${found.source}, but it failed: ${result.detail}`,
+          };
+        }
+        await this.#saveCredential(() => {
+          if (found.kind === "oauth") this.config.agent.claudeCodeOauthToken = found.value;
+          else this.config.agent.anthropicApiKey = found.value;
+        });
+        return {
+          status: "connected",
+          provider,
+          detail: `${result.detail} — from ${found.source}`,
+          config: redactConfig(this.config),
+        };
+      }
+      case "codex": {
+        const found = await discoverCodexCredential();
+        if (!found) {
+          return {
+            status: "manual",
+            provider,
+            reason:
+              "No Codex credential found on this machine (checked OPENAI_API_KEY and ~/.codex/auth.json). Paste an OpenAI API key instead.",
+          };
+        }
+        if ("unavailableReason" in found) {
+          return { status: "manual", provider, reason: found.unavailableReason };
+        }
+        const result = await validateCodexApiKey(found.value);
+        if (!result.ok) {
+          return {
+            status: "manual",
+            provider,
+            reason: `Found a credential from ${found.source}, but it failed: ${result.detail}`,
+          };
+        }
+        await this.#saveCredential(() => {
+          this.config.agent.codexApiKey = found.value;
+        });
+        return {
+          status: "connected",
+          provider,
+          detail: `${result.detail} — from ${found.source}`,
+          config: redactConfig(this.config),
+        };
+      }
+    }
+  }
+
+  /** Poll the in-flight GitHub device authorization. */
+  async pollGithubDevice(): Promise<DevicePollResponse> {
+    const session = this.#githubDevice;
+    if (!session) return { status: "error", detail: "No device authorization in progress." };
+    const outcome = await pollGithubDeviceFlow(session);
+    if (outcome.state === "pending") return { status: "pending" };
+    this.#githubDevice = undefined;
+    if (outcome.state === "error") return { status: "error", detail: outcome.detail };
+    const result = await validateGithubToken(outcome.token);
+    if (!result.ok) return { status: "error", detail: result.detail };
+    await this.#saveCredential(() => {
+      this.config.github.token = outcome.token;
+    });
+    return { status: "connected", detail: result.detail, config: redactConfig(this.config) };
+  }
+
+  /** Finish the Linear OAuth redirect: exchange the code and save the token. */
+  async completeLinearOauth(state: string, code: string): Promise<CredentialResult> {
+    const session = this.#linearOauth;
+    if (!session || session.state !== state || Date.now() > session.expiresAt) {
+      return { ok: false, detail: "Invalid or expired authorization. Start over." };
+    }
+    this.#linearOauth = undefined;
+    try {
+      const token = await exchangeLinearCode(session, code);
+      const result = await validateLinearApiKey(token);
+      if (!result.ok) return result;
+      await this.#saveCredential(() => {
+        this.config.linear.apiKey = token;
+      }, true);
+      return result;
+    } catch (error) {
+      return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   /** Repos visible to the connected GitHub token, for the dashboard's picker. */

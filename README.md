@@ -28,7 +28,14 @@ brevi ui
 
 Once published, this becomes `npx @brevi/cli init` / `npx @brevi/cli ui`. After changing CLI/orchestrator code, rerun `bun run build` (the linked bin runs the built `dist/`).
 
-`init` only picks a sandbox provider. Everything else happens in the dashboard's **Connections** panel: connect Linear, GitHub, and an Anthropic/Codex agent key (each validated live against its provider, stored in `~/.brevi/config.json`), then pick repositories straight from your GitHub account — no manual repo config. Then assign yourself a Linear issue and put `@brevi` in its title/description (or add the `brevi` label); add `SPIKE` for research-only tickets. (`ANTHROPIC_API_KEY` from the orchestrator's environment still works as a fallback for the agent key.)
+`init` only picks a sandbox provider. Everything else happens in the dashboard's **Connections** panel with one-click **Connect** buttons — no copying keys:
+
+- **GitHub** — uses your `gh` CLI login if present, or an OAuth device code (with `connect.githubClientId` configured).
+- **Claude** — found on this machine: your Claude Code login (Keychain / `~/.claude`) or `ANTHROPIC_API_KEY`.
+- **Codex** — found on this machine: `OPENAI_API_KEY` or the Codex CLI login (`~/.codex/auth.json`).
+- **Linear** — browser OAuth (with `connect.linearClientId`/`Secret` configured), else a pasted API key.
+
+Every credential is verified live before saving — agent keys with a 1-token probe on the provider's cheapest model (`claude-haiku-4-5` / `gpt-5-nano`) — and stored in `~/.brevi/config.json`. All brevi state lives under `~/.brevi/`; the orchestrator reads no environment variables. Manual key entry remains as a fallback on every provider. Then pick repositories straight from your GitHub account, assign yourself a Linear issue, and put `@brevi` in its title/description (or add the `brevi` label); add `SPIKE` for research-only tickets.
 
 Other commands: `brevi start` (headless, no browser), `brevi status`.
 

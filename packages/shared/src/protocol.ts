@@ -17,6 +17,14 @@ import type { Run, RunEvent, Ticket } from "./types.js";
  *        body: CredentialsUpdateRequest. Each provided key is validated against
  *        its provider before being saved; invalid keys are rejected per-field
  *        and valid ones in the same request are still applied.
+ *   POST /api/connect/:provider          -> ConnectResponse
+ *        One-click connect. Tries automatic strategies first (host credential
+ *        discovery, gh CLI, OAuth device/redirect flows) and reports what the
+ *        dashboard should do next; "manual" means show the key input.
+ *   POST /api/connect/github/poll        -> DevicePollResponse
+ *        Poll an in-flight GitHub device authorization.
+ *   GET  /api/connect/linear/callback    -> HTML (OAuth redirect target; the
+ *        server exchanges the code, saves the token, and broadcasts config)
  *   GET  /api/github/repos               -> GithubRepo[]   (repos visible to the
  *        connected GitHub token, most recently pushed first; 400 when GitHub
  *        isn't connected)
@@ -56,6 +64,44 @@ export interface CredentialsUpdateResponse {
   /** Redacted config after applying the valid keys. */
   config: BreviConfig;
 }
+
+/** Result of a one-click connect attempt. */
+export type ConnectResponse =
+  | {
+      /** A credential was found (or granted) and verified; it is saved. */
+      status: "connected";
+      provider: CredentialProvider;
+      /** e.g. "Connected as jane (via gh CLI)" or "Verified with claude-haiku-4-5". */
+      detail: string;
+      config: BreviConfig;
+    }
+  | {
+      /** GitHub device flow started: show the code, open the url, then poll. */
+      status: "device";
+      provider: "github";
+      userCode: string;
+      verificationUri: string;
+      /** Seconds between polls. */
+      interval: number;
+      expiresIn: number;
+    }
+  | {
+      /** OAuth redirect flow: open this url; the server finishes via callback. */
+      status: "redirect";
+      provider: "linear";
+      url: string;
+    }
+  | {
+      /** No automatic path available; the dashboard should offer manual entry. */
+      status: "manual";
+      provider: CredentialProvider;
+      reason: string;
+    };
+
+export type DevicePollResponse =
+  | { status: "pending" }
+  | { status: "connected"; detail: string; config: BreviConfig }
+  | { status: "error"; detail: string };
 
 /** A repository visible to the connected GitHub token. */
 export interface GithubRepo {

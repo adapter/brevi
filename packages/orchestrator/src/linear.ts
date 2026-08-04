@@ -11,7 +11,11 @@ export class LinearService {
 
   constructor(config: BreviConfig) {
     this.#config = config;
-    this.#client = new LinearClient({ apiKey: config.linear.apiKey });
+    // Personal API keys are sent raw; OAuth tokens (from the Connect flow) as Bearer.
+    const key = config.linear.apiKey;
+    this.#client = key.startsWith("lin_api_")
+      ? new LinearClient({ apiKey: key })
+      : new LinearClient({ accessToken: key });
   }
 
   /**

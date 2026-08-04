@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** Root directory for all brevi state: config, run history, artifacts, VM images. */
-export const BREVI_HOME = process.env.BREVI_HOME ?? join(homedir(), ".brevi");
+export const BREVI_HOME = join(homedir(), ".brevi");
 export const CONFIG_PATH = join(BREVI_HOME, "config.json");
 export const RUNS_DIR = join(BREVI_HOME, "runs");
 export const IMAGES_DIR = join(BREVI_HOME, "images");
@@ -61,6 +61,8 @@ export const configSchema = z.object({
       model: z.string().optional(),
       /** Passed to the sandboxed agent as ANTHROPIC_API_KEY. Empty = use host env. */
       anthropicApiKey: z.string().default(""),
+      /** Claude Code OAuth token (host-discovered), passed as CLAUDE_CODE_OAUTH_TOKEN. */
+      claudeCodeOauthToken: z.string().default(""),
       /** Passed to the sandboxed agent as OPENAI_API_KEY (for Codex agents). Empty = use host env. */
       codexApiKey: z.string().default(""),
     })
@@ -72,6 +74,16 @@ export const configSchema = z.object({
       firecracker: firecrackerConfigSchema.prefault({}),
       /** Hard wall-clock limit for a single run. */
       timeoutMinutes: z.number().int().min(1).default(60),
+    })
+    .prefault({}),
+  /** OAuth app settings powering the dashboard's one-click Connect flows. */
+  connect: z
+    .object({
+      /** GitHub OAuth app client id (device flow). Fallback: BREVI_GITHUB_CLIENT_ID. */
+      githubClientId: z.string().default(""),
+      /** Linear OAuth app credentials (redirect flow). Fallbacks: BREVI_LINEAR_CLIENT_ID/SECRET. */
+      linearClientId: z.string().default(""),
+      linearClientSecret: z.string().default(""),
     })
     .prefault({}),
   trigger: z
@@ -106,7 +118,9 @@ export function redactConfig(config: BreviConfig): BreviConfig {
     agent: {
       ...config.agent,
       anthropicApiKey: mask(config.agent.anthropicApiKey),
+      claudeCodeOauthToken: mask(config.agent.claudeCodeOauthToken),
       codexApiKey: mask(config.agent.codexApiKey),
     },
+    connect: { ...config.connect, linearClientSecret: mask(config.connect.linearClientSecret) },
   };
 }

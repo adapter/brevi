@@ -1,6 +1,9 @@
 import type {
+  ConnectResponse,
+  CredentialProvider,
   CredentialsUpdateRequest,
   CredentialsUpdateResponse,
+  DevicePollResponse,
   GithubRepo,
   HealthResponse,
   ReposUpdateRequest,
@@ -39,6 +42,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
     }),
+  connect: (provider: CredentialProvider) =>
+    json<ConnectResponse>(`/api/connect/${provider}`, { method: "POST" }),
+  pollGithubDevice: () =>
+    json<DevicePollResponse>("/api/connect/github/poll", { method: "POST" }),
   githubRepos: () => json<GithubRepo[]>("/api/github/repos"),
   updateRepos: (request: ReposUpdateRequest) =>
     json<ReposUpdateResponse>("/api/settings/repos", {
