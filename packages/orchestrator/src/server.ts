@@ -1,4 +1,24 @@
-import type { BreviConfig } from "@brevi/shared";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import type { Server as HttpServer, IncomingMessage } from "node:http";
+import type { Duplex } from "node:stream";
+import { createRequire } from "node:module";
+import { dirname, extname, join, resolve } from "node:path";
+import { serve } from "@hono/node-server";
+import { Hono } from "hono";
+import { WebSocketServer, type WebSocket } from "ws";
+import {
+  redactConfig,
+  type BreviConfig,
+  type ClientMessage,
+  type HealthResponse,
+  type Run,
+  type RunEvent,
+  type ServerMessage,
+  type Ticket,
+} from "@brevi/shared";
+import { loadConfig } from "./config.js";
+import { Orchestrator, OrchestratorError } from "./scheduler.js";
 
 export interface StartOptions {
   /** Pre-loaded config; when omitted, loaded from configPath. */
@@ -12,6 +32,275 @@ export interface OrchestratorHandle {
   stop(): Promise<void>;
 }
 
-export async function startOrchestrator(_options: StartOptions = {}): Promise<OrchestratorHandle> {
-  throw new Error("orchestrator server not implemented yet");
+const require = createRequire(import.meta.url);
+
+const VERSION = ((): string => {
+  try {
+    const pkg = require("../package.json") as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
+
+const CONTENT_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".log": "text/plain; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".webm": "video/webm",
+  ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
+  ".pdf": "application/pdf",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+};
+
+function contentTypeFor(path: string): string {
+  return CONTENT_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
+}
+
+const PLACEHOLDER_HTML = `<!doctype html>
+<html><head><meta charset="utf-8"><title>brevi</title></head>
+<body style="font-family: system-ui; padding: 4rem; color: #333">
+<h1>brevi</h1>
+<p>The orchestrator is running, but the dashboard isn't built yet.</p>
+<p>Run <code>bun run build</code> in <code>apps/app</code>, then restart.</p>
+<p>The API is live at <a href="/api/health">/api/health</a>.</p>
+</body></html>`;
+
+/** Locate the built dashboard, or null when @brevi/app hasn't been built. */
+function resolveAppDist(): string | null {
+  try {
+    const pkgPath = require.resolve("@brevi/app/package.json");
+    const dist = join(dirname(pkgPath), "dist");
+    return existsSync(join(dist, "index.html")) ? dist : null;
+  } catch {
+    return null;
+  }
+}
+
+function statusForError(error: unknown): number {
+  if (error instanceof OrchestratorError) {
+    if (error.code === "not-found") return 404;
+    if (error.code === "conflict") return 409;
+    return 400;
+  }
+  return 500;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function buildApp(orchestrator: Orchestrator, config: BreviConfig): Hono {
+  const app = new Hono();
+
+  app.get("/api/health", (c) => {
+    const health: HealthResponse = {
+      ok: true,
+      version: VERSION,
+      sandboxProvider: orchestrator.providerName,
+    };
+    return c.json(health);
+  });
+
+  app.get("/api/config", (c) => c.json(redactConfig(config)));
+
+  app.get("/api/tickets", (c) => c.json(orchestrator.tickets));
+
+  app.get("/api/runs", (c) => c.json(orchestrator.listRuns()));
+
+  app.get("/api/runs/:id", (c) => {
+    const run = orchestrator.getRun(c.req.param("id"));
+    if (!run) return c.json({ error: "run not found" }, 404);
+    return c.json(run);
+  });
+
+  app.get("/api/runs/:id/events", async (c) => {
+    const id = c.req.param("id");
+    if (!orchestrator.getRun(id)) return c.json({ error: "run not found" }, 404);
+    return c.json(await orchestrator.getRunEvents(id));
+  });
+
+  app.get("/api/runs/:id/artifacts/:name", async (c) => {
+    const id = c.req.param("id");
+    const name = c.req.param("name");
+    const run = orchestrator.getRun(id);
+    if (!run) return c.json({ error: "run not found" }, 404);
+    const dir = orchestrator.store.artifactsDir(id);
+    const path = resolve(dir, name);
+    if (!path.startsWith(resolve(dir) + "/")) {
+      return c.json({ error: "invalid artifact name" }, 400);
+    }
+    try {
+      const bytes = await readFile(path);
+      return c.body(new Uint8Array(bytes), 200, { "content-type": contentTypeFor(name) });
+    } catch {
+      return c.json({ error: "artifact not found" }, 404);
+    }
+  });
+
+  app.post("/api/tickets/:id/run", async (c) => {
+    try {
+      return c.json(await orchestrator.queueTicket(c.req.param("id")));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/runs/:id/cancel", async (c) => {
+    try {
+      return c.json(await orchestrator.cancelRun(c.req.param("id")));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.notFound(async (c) => {
+    // Everything outside /api serves the dashboard SPA.
+    const { pathname } = new URL(c.req.url);
+    if (c.req.method !== "GET" || pathname.startsWith("/api/")) {
+      return c.json({ error: "not found" }, 404);
+    }
+    const dist = resolveAppDist();
+    if (!dist) return c.html(PLACEHOLDER_HTML);
+
+    const requested = resolve(dist, `.${decodeURIComponent(pathname)}`);
+    const candidates =
+      requested.startsWith(resolve(dist)) && pathname !== "/" ? [requested] : [];
+    candidates.push(join(dist, "index.html"));
+    for (const candidate of candidates) {
+      try {
+        const bytes = await readFile(candidate);
+        return c.body(new Uint8Array(bytes), 200, { "content-type": contentTypeFor(candidate) });
+      } catch {
+        // fall through to the next candidate
+      }
+    }
+    return c.html(PLACEHOLDER_HTML);
+  });
+
+  return app;
+}
+
+interface WsClient {
+  socket: WebSocket;
+  /** Empty set = receive all run events; otherwise only these run ids. */
+  subscriptions: Set<string>;
+}
+
+function attachWebSockets(
+  server: HttpServer,
+  orchestrator: Orchestrator,
+  config: BreviConfig,
+): { close(): void } {
+  const wss = new WebSocketServer({ noServer: true });
+  const clients = new Set<WsClient>();
+
+  const send = (socket: WebSocket, message: ServerMessage): void => {
+    if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
+  };
+  const broadcast = (message: ServerMessage): void => {
+    for (const client of clients) send(client.socket, message);
+  };
+
+  const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
+    const { pathname } = new URL(request.url ?? "/", "http://localhost");
+    if (pathname !== "/ws") {
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(request, socket, head, (ws) => wss.emit("connection", ws, request));
+  };
+  server.on("upgrade", onUpgrade);
+
+  wss.on("connection", (socket: WebSocket) => {
+    const client: WsClient = { socket, subscriptions: new Set() };
+    clients.add(client);
+    send(socket, {
+      type: "hello",
+      runs: orchestrator.listRuns(),
+      tickets: orchestrator.tickets,
+      config: redactConfig(config),
+    });
+    socket.on("message", (data) => {
+      let message: ClientMessage;
+      try {
+        message = JSON.parse(String(data)) as ClientMessage;
+      } catch {
+        return;
+      }
+      if (message.type === "subscribe") client.subscriptions.add(message.runId);
+      else if (message.type === "unsubscribe") client.subscriptions.delete(message.runId);
+    });
+    socket.on("close", () => clients.delete(client));
+    socket.on("error", () => clients.delete(client));
+  });
+
+  const onTickets = (tickets: Ticket[]): void => broadcast({ type: "tickets", tickets });
+  const onRunUpdated = (run: Run): void => broadcast({ type: "run-updated", run });
+  const onRunEvent = (event: RunEvent): void => {
+    for (const client of clients) {
+      if (client.subscriptions.size > 0 && !client.subscriptions.has(event.runId)) continue;
+      send(client.socket, { type: "run-event", event });
+    }
+  };
+  orchestrator.on("tickets", onTickets);
+  orchestrator.store.on("run-updated", onRunUpdated);
+  orchestrator.store.on("run-event", onRunEvent);
+
+  return {
+    close(): void {
+      orchestrator.off("tickets", onTickets);
+      orchestrator.store.off("run-updated", onRunUpdated);
+      orchestrator.store.off("run-event", onRunEvent);
+      server.off("upgrade", onUpgrade);
+      for (const client of clients) client.socket.terminate();
+      clients.clear();
+      wss.close();
+    },
+  };
+}
+
+export async function startOrchestrator(options: StartOptions = {}): Promise<OrchestratorHandle> {
+  const config = options.config ?? (await loadConfig(options.configPath));
+  const orchestrator = new Orchestrator(config);
+  await orchestrator.start();
+
+  const app = buildApp(orchestrator, config);
+  const server = await new Promise<HttpServer>((resolvePromise, rejectPromise) => {
+    const instance = serve(
+      { fetch: app.fetch, port: config.server.port, hostname: "127.0.0.1" },
+      () => resolvePromise(instance as HttpServer),
+    ) as HttpServer;
+    instance.once("error", rejectPromise);
+  });
+
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : config.server.port;
+  const sockets = attachWebSockets(server, orchestrator, config);
+
+  return {
+    port,
+    url: `http://localhost:${port}`,
+    async stop(): Promise<void> {
+      sockets.close();
+      await orchestrator.stop();
+      await new Promise<void>((resolveClose, rejectClose) => {
+        server.close((error) => (error ? rejectClose(error) : resolveClose()));
+      });
+    },
+  };
 }
