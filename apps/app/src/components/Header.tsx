@@ -1,4 +1,6 @@
 import type { BreviConfig, HealthResponse } from "@brevi/shared";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 import type { Connection } from "../lib/useOrchestrator";
 import { Command, Plate } from "./Bits";
 
@@ -52,7 +54,7 @@ export function Header({
         )}
       </div>
 
-      <span className="hidden h-4 w-px bg-ink-600 sm:block" />
+      <Separator orientation="vertical" className="hidden h-4 self-center bg-ink-600 sm:block" />
       <Plate className="hidden text-haze-700 sm:block">Mission control</Plate>
 
       <div className="ml-auto flex items-center gap-2.5">
@@ -64,22 +66,22 @@ export function Header({
         )}
 
         {provider && (
-          <span className="hidden items-center gap-1.5 rounded-[4px] border border-ink-600 bg-ink-800 px-2 py-1.5 sm:inline-flex">
-            <Plate className="text-haze-700">Sandbox</Plate>
-            <span className="font-mono text-[11px] leading-none text-haze-200">{provider}</span>
-          </span>
+          <Badge variant="secondary" className="hidden gap-1.5 px-2 py-1.5 sm:inline-flex">
+            <span className="text-haze-700">Sandbox</span>
+            <span className="font-mono text-[11px] leading-none tracking-normal normal-case text-haze-200">
+              {provider}
+            </span>
+          </Badge>
         )}
 
-        <span
-          className={`inline-flex items-center gap-2 rounded-[4px] border border-ink-600 bg-ink-800 px-2 py-1.5 ${c.text}`}
-        >
+        <Badge variant="secondary" className={`gap-2 px-2 py-1.5 ${c.text}`}>
           <span
             className={`inline-block size-[7px] shrink-0 rounded-full ${c.dot} ${
               c.live || conn === "reconnecting" ? "animate-beacon" : ""
             }`}
           />
-          <span className="plate">{c.label}</span>
-        </span>
+          {c.label}
+        </Badge>
       </div>
     </header>
   );

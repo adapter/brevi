@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import type { Run } from "@brevi/shared";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Connections } from "./components/Connections";
 import { Header } from "./components/Header";
 import { QueueRail } from "./components/QueueRail";
@@ -73,18 +75,24 @@ export default function App() {
       />
 
       {notice && (
-        <div className="flex shrink-0 items-center gap-2.5 border-b border-rust-500/30 bg-rust-500/10 px-4 py-2 text-rust-400">
-          <Warn className="size-3.5 shrink-0" />
-          <p className="min-w-0 flex-1 text-[12.5px]">{notice}</p>
-          <button
-            type="button"
-            onClick={dismissNotice}
-            aria-label="Dismiss"
-            className="rounded-[3px] p-1 hover:bg-rust-500/15"
-          >
-            <Close className="size-3" />
-          </button>
-        </div>
+        <Alert
+          variant="destructive"
+          className="shrink-0 items-center rounded-none border-x-0 border-t-0 border-rust-500/30 bg-rust-500/10 px-4 py-2 has-data-[slot=alert-action]:pr-12"
+        >
+          <Warn className="size-3.5 text-rust-400" />
+          <AlertDescription className="text-[12.5px] text-rust-400">{notice}</AlertDescription>
+          <AlertAction className="top-1/2 right-2.5 -translate-y-1/2">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={dismissNotice}
+              aria-label="Dismiss"
+              className="text-rust-400 hover:bg-rust-500/15 hover:text-rust-400"
+            >
+              <Close className="size-3" />
+            </Button>
+          </AlertAction>
+        </Alert>
       )}
 
       <main

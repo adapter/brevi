@@ -1,4 +1,6 @@
 import type { Run } from "@brevi/shared";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { Plate } from "./Bits";
 import { Branch, Comment, External, Merge } from "./Icons";
 
@@ -15,7 +17,7 @@ export function ResultCard({ run }: { run: Run }) {
         <Plate className={shipped ? "text-mint-400" : "text-haze-600"}>
           {result.kind === "spike" ? "Research delivered" : "Result"}
         </Plate>
-        <span className="h-px flex-1 bg-ink-700" />
+        <Separator className="flex-1" />
       </div>
 
       <p className="mt-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap text-haze-100">
@@ -60,18 +62,18 @@ function Link({
   children: React.ReactNode;
 }) {
   const tones = {
-    mint: "border-mint-500/35 bg-mint-500/10 text-mint-400 hover:bg-mint-500/20",
-    iris: "border-iris-400/35 bg-iris-400/10 text-iris-400 hover:bg-iris-400/20",
-    plain: "border-ink-600 text-haze-300 hover:bg-ink-750 hover:text-haze-50",
+    mint: "border-mint-500/35 bg-mint-500/10 text-mint-400 hover:border-mint-500/35 hover:bg-mint-500/20 hover:text-mint-400",
+    iris: "border-iris-400/35 bg-iris-400/10 text-iris-400 hover:border-iris-400/35 hover:bg-iris-400/20 hover:text-iris-400",
+    plain: "",
   };
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className={`plate inline-flex items-center gap-1.5 rounded-[4px] border px-2 py-1.5 transition-colors ${tones[tone]}`}
+    <Button
+      variant="outline"
+      size="plate"
+      className={tones[tone]}
+      render={<a href={href} target="_blank" rel="noreferrer" />}
     >
       {children}
-    </a>
+    </Button>
   );
 }

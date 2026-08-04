@@ -1,6 +1,7 @@
 import type { BreviConfig, Run, Ticket } from "@brevi/shared";
+import { Button } from "@/components/ui/button";
 import { STATUS_TONE } from "../lib/status";
-import { Button, KindChip, Plate, RepoChip, StatusDot } from "./Bits";
+import { KindChip, Plate, RepoChip, StatusDot } from "./Bits";
 import { External, Play, Sliders } from "./Icons";
 
 export function QueueRail({
@@ -110,16 +111,14 @@ function TicketStrip({
           <RepoChip repo={ticket.repo} />
           <span className="ml-auto">
             {active ? (
-              <button
-                type="button"
-                onClick={() => onOpenRun(active.id)}
-                className={`plate inline-flex items-center gap-1.5 rounded-[4px] border border-ink-600 px-2 py-1.5 ${STATUS_TONE[active.status].fg} hover:border-ink-500 hover:bg-ink-750`}
-              >
+              <Button variant="outline" size="plate" onClick={() => onOpenRun(active.id)}>
                 <StatusDot status={active.status} size={6} />
-                {STATUS_TONE[active.status].label}
-              </button>
+                <span className={STATUS_TONE[active.status].fg}>
+                  {STATUS_TONE[active.status].label}
+                </span>
+              </Button>
             ) : (
-              <Button tone="ember" onClick={onRun} disabled={busy}>
+              <Button size="plate" onClick={onRun} disabled={busy}>
                 <Play className="size-3" />
                 {busy ? "Queueing" : "Run"}
               </Button>
@@ -142,7 +141,7 @@ function ConnectLinearCard({ onOpenConnections }: { onOpenConnections: () => voi
         plus an agent key while you&apos;re there — and the queue fills itself.
       </p>
       <div className="mt-3.5 border-t border-ink-700 pt-3.5">
-        <Button tone="ember" onClick={onOpenConnections}>
+        <Button size="plate" onClick={onOpenConnections}>
           <Sliders className="size-3" />
           Open Connections
         </Button>

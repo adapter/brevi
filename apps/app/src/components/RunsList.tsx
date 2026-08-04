@@ -1,4 +1,5 @@
 import type { Run } from "@brevi/shared";
+import { Button } from "@/components/ui/button";
 import { duration, relative } from "../lib/format";
 import { STATUS_TONE, isActive } from "../lib/status";
 import { Command, Plate, StatusDot } from "./Bits";
@@ -39,21 +40,22 @@ export function RunsList({
           </span>
         )}
         {!connectionsOpen && (
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="plate"
             onClick={onToggleConnections}
             title="Open the Connections rail"
-            className="relative ml-auto inline-flex items-center gap-1.5 rounded-[4px] border border-ink-600 px-2 py-1 text-haze-400 transition-colors duration-100 hover:border-ink-500 hover:bg-ink-750 hover:text-haze-50"
+            className="relative ml-auto text-haze-400"
           >
             <Sliders className="size-3" />
-            <span className="plate">Connections</span>
+            Connections
             {needsSetup && (
               <span
                 className="absolute -top-1 -right-1 size-2 animate-beacon rounded-full bg-ember-500"
                 aria-label="Setup needed"
               />
             )}
-          </button>
+          </Button>
         )}
       </div>
 

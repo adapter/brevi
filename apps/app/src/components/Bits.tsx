@@ -1,4 +1,7 @@
 import type { RunStatus, Ticket } from "@brevi/shared";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
 import { STATUS_TONE } from "../lib/status";
 import { Repo, Warn } from "./Icons";
 
@@ -23,44 +26,38 @@ export function StatusDot({ status, size = 7 }: { status: RunStatus; size?: numb
 export function StatusChip({ status, className = "" }: { status: RunStatus; className?: string }) {
   const tone = STATUS_TONE[status];
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-[4px] border px-1.5 py-1 ${tone.wash} ${tone.edge} ${tone.fg} ${className}`}
-    >
+    <Badge variant="outline" className={cn(tone.wash, tone.edge, tone.fg, className)}>
       <StatusDot status={status} size={6} />
-      <span className="plate">{tone.label}</span>
-    </span>
+      {tone.label}
+    </Badge>
   );
 }
 
 export function KindChip({ kind }: { kind: Ticket["kind"] }) {
   if (kind === "spike") {
     return (
-      <span className="plate inline-flex items-center rounded-[4px] border border-iris-400/35 bg-iris-400/12 px-1.5 py-1 text-iris-400">
+      <Badge variant="outline" className="border-iris-400/35 bg-iris-400/12 text-iris-400">
         Spike
-      </span>
+      </Badge>
     );
   }
-  return (
-    <span className="plate inline-flex items-center rounded-[4px] border border-ink-600 px-1.5 py-1 text-haze-600">
-      Impl
-    </span>
-  );
+  return <Badge variant="outline">Impl</Badge>;
 }
 
 export function RepoChip({ repo }: { repo?: string }) {
   if (!repo) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-[4px] border border-rust-500/35 bg-rust-500/10 px-1.5 py-1 text-rust-400">
+      <Badge variant="destructive">
         <Warn className="size-3" />
-        <span className="plate">No repo mapped</span>
-      </span>
+        No repo mapped
+      </Badge>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-[4px] border border-ink-600 bg-ink-800 px-1.5 py-1 text-haze-300">
+    <Badge variant="secondary">
       <Repo className="size-3 text-haze-600" />
-      <span className="font-mono text-[11px] leading-none">{repo}</span>
-    </span>
+      <span className="font-mono text-[11px] leading-none tracking-normal normal-case">{repo}</span>
+    </Badge>
   );
 }
 
@@ -82,46 +79,11 @@ export function Section({
         {count !== undefined && (
           <span className="font-mono text-[11px] leading-none text-haze-700">{count}</span>
         )}
-        <span className="h-px flex-1 bg-ink-700" />
+        <Separator className="flex-1" />
         {right}
       </header>
       {children}
     </section>
-  );
-}
-
-export function Button({
-  children,
-  onClick,
-  tone = "ghost",
-  disabled,
-  title,
-  type = "button",
-}: {
-  children: React.ReactNode;
-  onClick?: () => void;
-  tone?: "ghost" | "ember" | "rust";
-  disabled?: boolean;
-  title?: string;
-  type?: "button" | "submit";
-}) {
-  const tones = {
-    ghost:
-      "border-ink-600 text-haze-300 hover:border-ink-500 hover:bg-ink-750 hover:text-haze-50",
-    ember:
-      "border-ember-600/50 bg-ember-500/10 text-ember-500 hover:border-ember-500 hover:bg-ember-500 hover:text-ink-950",
-    rust: "border-rust-600/50 bg-rust-500/10 text-rust-400 hover:border-rust-500 hover:bg-rust-500 hover:text-ink-950",
-  };
-  return (
-    <button
-      type={type}
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      className={`plate inline-flex items-center gap-1.5 rounded-[4px] border px-2 py-1.5 transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent ${tones[tone]}`}
-    >
-      {children}
-    </button>
   );
 }
 

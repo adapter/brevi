@@ -7,8 +7,11 @@ import type {
   GithubRepo,
   RepoConfig,
 } from "@brevi/shared";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { api } from "../lib/api";
-import { Button, Plate, RepoChip } from "./Bits";
+import { Plate, RepoChip } from "./Bits";
 import { Check, ChevronRight, Close, External, Pin, Warn } from "./Icons";
 
 /** How the "Connect" button acquires a credential, shown as a hint. */
@@ -105,15 +108,16 @@ export function Connections({
         <span className="font-mono text-[11px] leading-none text-haze-700">
           {config ? `${connectedCount}/${PROVIDERS.length}` : "–"}
         </span>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-xs"
           onClick={onClose}
           aria-label="Collapse connections"
           title="Collapse"
-          className="ml-auto rounded-[4px] p-1 text-haze-700 hover:bg-ink-750 hover:text-haze-50"
+          className="ml-auto"
         >
           <ChevronRight className="size-3.5" />
-        </button>
+        </Button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -270,26 +274,33 @@ function ProviderRow({
         <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
           {spec.name}
         </h3>
-        <span
-          className={`plate inline-flex items-center gap-1.5 rounded-[4px] border px-1.5 py-1 ${
+        <Badge
+          variant="outline"
+          className={
             connected
               ? "border-mint-500/30 bg-mint-500/10 text-mint-400"
-              : "border-ink-600 text-haze-700"
-          }`}
+              : "text-haze-700"
+          }
         >
           <span
             className={`inline-block size-[5px] rounded-full ${connected ? "bg-mint-500" : "bg-haze-700"}`}
           />
           {connected ? "Connected" : "Not connected"}
-        </span>
+        </Badge>
         <span className="ml-auto">
           {connected ? (
-            <Button onClick={() => void submit("")} disabled={pending} title="Remove this key">
+            <Button
+              variant="outline"
+              size="plate"
+              onClick={() => void submit("")}
+              disabled={pending}
+              title="Remove this key"
+            >
               Disconnect
             </Button>
           ) : (
             <Button
-              tone="ember"
+              size="plate"
               onClick={() => void connect()}
               disabled={pending || device !== null}
               title={spec.connectHint}
@@ -320,16 +331,17 @@ function ProviderRow({
               {device.verificationUri.replace("https://", "")}
             </a>
           </p>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="plate"
             onClick={() => {
               setDevice(null);
               stopPolling();
             }}
-            className="plate mt-2.5 text-haze-700 hover:text-haze-300"
+            className="mt-2.5 -ml-2 hover:bg-transparent hover:text-haze-300"
           >
             Cancel
-          </button>
+          </Button>
         </div>
       )}
 
@@ -352,7 +364,7 @@ function ProviderRow({
             if (value.trim()) void submit(value);
           }}
         >
-          <input
+          <Input
             type="password"
             value={value}
             onChange={(e) => {
@@ -362,22 +374,23 @@ function ProviderRow({
             placeholder={spec.inputLabel}
             autoComplete="off"
             spellCheck={false}
-            className="h-8 min-w-0 flex-1 rounded-[4px] border border-ink-600 bg-ink-950/70 px-2.5 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 focus:border-haze-600 focus:outline-none"
+            className="flex-1 rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
           />
-          <Button type="submit" tone="ember" disabled={pending || value.trim() === ""}>
+          <Button type="submit" size="plate" disabled={pending || value.trim() === ""}>
             {pending ? "Checking" : "Save"}
           </Button>
         </form>
       ) : (
         !connected &&
         !device && (
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="plate"
             onClick={() => setManual(true)}
-            className="plate mt-2.5 text-haze-700 hover:text-haze-300"
+            className="mt-2.5 -ml-2 hover:bg-transparent hover:text-haze-300"
           >
             Enter a key manually instead
-          </button>
+          </Button>
         )
       )}
 
@@ -522,12 +535,14 @@ function RepositoriesSection({
                   <span className="font-mono text-[10px] text-haze-700">{repo.defaultBranch}</span>
                   <span className="ml-auto flex items-center gap-1.5">
                     {config.defaultRepo === key ? (
-                      <span className="plate inline-flex items-center gap-1 rounded-[4px] border border-ember-600/40 bg-ember-500/10 px-1.5 py-1 text-ember-500">
-                        <Pin className="size-2.5" />
+                      <Badge className="gap-1">
+                        <Pin className="size-2.5!" />
                         Default
-                      </span>
+                      </Badge>
                     ) : (
                       <Button
+                        variant="outline"
+                        size="plate"
                         onClick={() => void mutate(config.repos, key)}
                         disabled={pending}
                         title="Unmatched tickets run against the default repo"
@@ -535,15 +550,16 @@ function RepositoriesSection({
                         Make default
                       </Button>
                     )}
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
                       onClick={() => remove(key)}
                       disabled={pending}
                       aria-label={`Remove ${key}`}
-                      className="rounded-[4px] p-1 text-haze-700 hover:bg-ink-750 hover:text-rust-400"
+                      className="hover:text-rust-400"
                     >
                       <Close className="size-3" />
-                    </button>
+                    </Button>
                   </span>
                 </li>
               ))}
@@ -551,14 +567,14 @@ function RepositoriesSection({
           )}
 
           <div className="mt-3">
-            <input
+            <Input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={available ? "Add a repository — search your account" : "Loading repositories…"}
               disabled={!available}
               spellCheck={false}
-              className="h-8 w-full rounded-[4px] border border-ink-600 bg-ink-950/70 px-2.5 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 focus:border-haze-600 focus:outline-none disabled:opacity-60"
+              className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
             />
             {loadError && (
               <p className="mt-2 flex items-start gap-1.5 text-[12px] text-rust-400">

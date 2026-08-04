@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ArtifactRef } from "@brevi/shared";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { artifactUrl } from "../lib/api";
 import { bytes } from "../lib/format";
 import { Plate, Section } from "./Bits";
@@ -127,89 +129,81 @@ function Lightbox({
     [index, onIndex, shots.length],
   );
 
+  // The dialog owns Escape; arrows page between screenshots.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
       if (e.key === "ArrowRight") step(1);
       if (e.key === "ArrowLeft") step(-1);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, step]);
+  }, [step]);
 
   if (!shot) return null;
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={shot.name}
-      className="fixed inset-0 z-50 flex flex-col bg-ink-950/94 backdrop-blur-sm"
-    >
-      <button
-        type="button"
-        aria-label="Close preview"
-        onClick={onClose}
-        className="absolute inset-0 cursor-zoom-out"
-      />
-      <div className="relative flex h-12 shrink-0 items-center gap-3 border-b border-ink-700 px-4">
-        <span className="font-mono text-[12px] text-haze-200">{shot.name}</span>
-        <span className="font-mono text-[11px] text-haze-700">{bytes(shot.size)}</span>
-        {shots.length > 1 && (
-          <span className="plate ml-2 text-haze-700">
-            {index + 1} / {shots.length}
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-2">
-          {shots.length > 1 && (
-            <>
-              <NavButton label="Previous screenshot" onClick={() => step(-1)}>
-                ←
-              </NavButton>
-              <NavButton label="Next screenshot" onClick={() => step(1)}>
-                →
-              </NavButton>
-            </>
-          )}
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close preview"
-            autoFocus
-            className="rounded-[4px] border border-ink-600 p-1.5 text-haze-300 hover:bg-ink-750 hover:text-haze-50"
-          >
-            <Close className="size-3.5" />
-          </button>
-        </div>
-      </div>
-      <div className="pointer-events-none relative flex min-h-0 flex-1 items-center justify-center p-6">
-        <img
-          src={artifactUrl(runId, shot.name)}
-          alt={shot.name}
-          className="max-h-full max-w-full rounded-[5px] border border-ink-700 object-contain shadow-2xl shadow-black/60"
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        showCloseButton={false}
+        aria-label={shot.name}
+        className="top-0 left-0 flex h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none bg-ink-950/94 p-0 ring-0 backdrop-blur-sm sm:max-w-none"
+      >
+        <button
+          type="button"
+          aria-label="Close preview"
+          onClick={onClose}
+          className="absolute inset-0 cursor-zoom-out"
         />
-      </div>
-    </div>
-  );
-}
-
-function NavButton({
-  label,
-  onClick,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      className="rounded-[4px] border border-ink-600 px-2 py-1 font-mono text-[12px] text-haze-300 hover:bg-ink-750 hover:text-haze-50"
-    >
-      {children}
-    </button>
+        <div className="relative flex h-12 shrink-0 items-center gap-3 border-b border-ink-700 px-4">
+          <span className="font-mono text-[12px] text-haze-200">{shot.name}</span>
+          <span className="font-mono text-[11px] text-haze-700">{bytes(shot.size)}</span>
+          {shots.length > 1 && (
+            <span className="plate ml-2 text-haze-700">
+              {index + 1} / {shots.length}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            {shots.length > 1 && (
+              <>
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="Previous screenshot"
+                  onClick={() => step(-1)}
+                  className="font-mono text-[12px]"
+                >
+                  ←
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="Next screenshot"
+                  onClick={() => step(1)}
+                  className="font-mono text-[12px]"
+                >
+                  →
+                </Button>
+              </>
+            )}
+            <Button
+              variant="outline"
+              size="icon-sm"
+              onClick={onClose}
+              aria-label="Close preview"
+              autoFocus
+            >
+              <Close className="size-3.5" />
+            </Button>
+          </div>
+        </div>
+        <div className="pointer-events-none relative flex min-h-0 flex-1 items-center justify-center p-6">
+          <img
+            src={artifactUrl(runId, shot.name)}
+            alt={shot.name}
+            className="max-h-full max-w-full rounded-[5px] border border-ink-700 object-contain shadow-2xl shadow-black/60"
+          />
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

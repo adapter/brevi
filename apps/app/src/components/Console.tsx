@@ -1,5 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RunEvent } from "@brevi/shared";
+import { Button } from "@/components/ui/button";
+import {
+  Collapsible as CollapsibleRoot,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { toAgentBlocks, type AgentBlock } from "../lib/agent";
 import { bytes, clock, oneLine } from "../lib/format";
 import { STATUS_TONE } from "../lib/status";
@@ -49,23 +55,20 @@ export function Console({
             <span className="plate">Streaming</span>
           </span>
         )}
-        <button
-          type="button"
+        <Button
+          size="plate"
+          variant={stick ? "outline" : "default"}
           onClick={() => {
             setStick(true);
             const el = scroller.current;
             if (el) el.scrollTop = el.scrollHeight;
           }}
           aria-pressed={stick}
-          className={`plate ml-auto inline-flex items-center gap-1.5 rounded-[4px] border px-2 py-1.5 transition-colors ${
-            stick
-              ? "border-ink-600 bg-ink-750 text-haze-300"
-              : "border-ember-600/50 bg-ember-500/10 text-ember-500 hover:bg-ember-500/20"
-          }`}
+          className={stick ? "ml-auto bg-ink-750" : "ml-auto"}
         >
           <Pin className="size-3" />
           {stick ? "Following" : "Jump to latest"}
-        </button>
+        </Button>
       </div>
 
       <div
@@ -263,14 +266,16 @@ function Collapsible({
   children: React.ReactNode;
 }) {
   return (
-    <details className="group/row">
-      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-[3px] py-[2px] hover:bg-ink-800">
-        <span className="w-2.5 shrink-0 text-center font-mono text-[9px] text-haze-700 transition-transform group-open/row:rotate-90">
+    <CollapsibleRoot>
+      <CollapsibleTrigger className="group/row flex w-full cursor-pointer items-center gap-2 rounded-[3px] py-[2px] text-left hover:bg-ink-800">
+        <span className="w-2.5 shrink-0 text-center font-mono text-[9px] text-haze-700 transition-transform group-data-[panel-open]/row:rotate-90">
           ▸
         </span>
         {summary}
-      </summary>
-      <div className="mt-1 mb-1.5 ml-[18px] border-l border-ink-600 pl-3">{children}</div>
-    </details>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1 mb-1.5 ml-[18px] border-l border-ink-600 pl-3">
+        {children}
+      </CollapsibleContent>
+    </CollapsibleRoot>
   );
 }

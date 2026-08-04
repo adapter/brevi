@@ -1,4 +1,8 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
 
 /*
   brevi dashboard — "cold room, warm signal"
@@ -102,6 +106,7 @@
     font-feature-settings: "cv05", "ss01";
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    @apply bg-background text-foreground;
   }
 
   ::selection {
@@ -118,6 +123,7 @@
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--color-ink-600) transparent;
+    @apply border-border outline-ring/50;
   }
 
   *::-webkit-scrollbar {
@@ -135,6 +141,9 @@
   *::-webkit-scrollbar-thumb:hover {
     background: var(--color-ink-500);
     background-clip: content-box;
+  }
+  html {
+    @apply font-sans;
   }
 }
 
@@ -198,4 +207,86 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+}
+/*
+  shadcn/Base UI token bridge. The semantic tokens the ui/ components consume
+  are aliased straight onto the palette above, so shadcn parts come out of the
+  box looking like the rest of the room.
+*/
+@theme inline {
+  --font-heading: var(--font-plate);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+/* The dashboard is permanently dark — one theme, straight off the palette. */
+:root,
+.dark {
+  --background: var(--color-ink-950);
+  --foreground: var(--color-haze-200);
+  --card: var(--color-ink-850);
+  --card-foreground: var(--color-haze-200);
+  --popover: var(--color-ink-850);
+  --popover-foreground: var(--color-haze-200);
+  --primary: var(--color-ember-500);
+  --primary-foreground: var(--color-ink-950);
+  --secondary: var(--color-ink-750);
+  --secondary-foreground: var(--color-haze-200);
+  --muted: var(--color-ink-750);
+  --muted-foreground: var(--color-haze-400);
+  --accent: var(--color-ink-750);
+  --accent-foreground: var(--color-haze-50);
+  --destructive: var(--color-rust-500);
+  --border: var(--color-ink-700);
+  --input: var(--color-ink-600);
+  --ring: var(--color-peri-400);
+  --chart-1: var(--color-ember-500);
+  --chart-2: var(--color-mint-500);
+  --chart-3: var(--color-peri-400);
+  --chart-4: var(--color-iris-400);
+  --chart-5: var(--color-rust-500);
+  --radius: 0.5rem;
+  --sidebar: var(--color-ink-900);
+  --sidebar-foreground: var(--color-haze-200);
+  --sidebar-primary: var(--color-ember-500);
+  --sidebar-primary-foreground: var(--color-ink-950);
+  --sidebar-accent: var(--color-ink-750);
+  --sidebar-accent-foreground: var(--color-haze-50);
+  --sidebar-border: var(--color-ink-700);
+  --sidebar-ring: var(--color-peri-400);
 }

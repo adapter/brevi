@@ -1,8 +1,10 @@
 import type { Run, RunEvent } from "@brevi/shared";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { relative } from "../lib/format";
 import { isActive } from "../lib/status";
 import { Artifacts } from "./Artifacts";
-import { Button, KindChip, Plate, RepoChip, StatusChip } from "./Bits";
+import { KindChip, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { ArrowLeft, External, Stop } from "./Icons";
 import { PhaseSpine } from "./PhaseSpine";
@@ -29,14 +31,10 @@ export function RunDetail({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/70 px-4 py-2">
-        <button
-          type="button"
-          onClick={onBack}
-          className="plate inline-flex items-center gap-1.5 rounded-[4px] border border-ink-600 px-2 py-1.5 text-haze-400 transition-colors hover:bg-ink-750 hover:text-haze-50"
-        >
+        <Button variant="outline" size="plate" onClick={onBack} className="text-haze-400">
           <ArrowLeft className="size-3" />
           Runs
-        </button>
+        </Button>
 
         <a
           href={run.ticket.url}
@@ -56,7 +54,7 @@ export function RunDetail({
             started {relative(run.startedAt ?? run.createdAt, now)}
           </span>
           {live && (
-            <Button tone="rust" onClick={onCancel} disabled={busy}>
+            <Button variant="destructive" size="plate" onClick={onCancel} disabled={busy}>
               <Stop className="size-3" />
               {busy ? "Cancelling" : "Cancel run"}
             </Button>
@@ -72,19 +70,20 @@ export function RunDetail({
             </h2>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <RepoChip repo={run.ticket.repo} />
-              <span className="inline-flex items-center gap-1.5 rounded-[4px] border border-ink-600 bg-ink-800 px-1.5 py-1">
-                <Plate className="text-haze-700">State</Plate>
-                <span className="font-mono text-[11px] leading-none text-haze-300">
+              <Badge variant="secondary">
+                <span className="text-haze-700">State</span>
+                <span className="font-mono text-[11px] leading-none tracking-normal normal-case text-haze-300">
                   {run.ticket.state}
                 </span>
-              </span>
+              </Badge>
               {run.ticket.labels.slice(0, 4).map((label) => (
-                <span
+                <Badge
                   key={label}
-                  className="rounded-[4px] border border-ink-700 px-1.5 py-1 font-mono text-[10.5px] leading-none text-haze-600"
+                  variant="outline"
+                  className="border-ink-700 font-mono text-[10.5px] tracking-normal normal-case"
                 >
                   {label}
-                </span>
+                </Badge>
               ))}
             </div>
           </div>

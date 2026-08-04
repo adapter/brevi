@@ -1,4 +1,5 @@
 import type { Run, RunEvent, RunStatus } from "@brevi/shared";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { clock, duration } from "../lib/format";
 import { PHASES, STATUS_TONE, isTerminal, phaseIndex } from "../lib/status";
 
@@ -108,12 +109,15 @@ export function PhaseSpine({
       </div>
 
       {run.error && (
-        <div className="mt-3 rounded-[5px] border border-rust-500/35 bg-rust-500/8 p-3">
-          <span className="plate text-rust-400">Error</span>
-          <p className="mt-1.5 font-mono text-[11.5px] leading-relaxed break-words whitespace-pre-wrap text-rust-400/90">
+        <Alert
+          variant="destructive"
+          className="mt-3 rounded-[5px] border-rust-500/35 bg-rust-500/8 p-3"
+        >
+          <AlertTitle className="plate text-rust-400">Error</AlertTitle>
+          <AlertDescription className="mt-1 font-mono text-[11.5px] leading-relaxed text-wrap break-words whitespace-pre-wrap text-rust-400/90 md:text-wrap">
             {run.error}
-          </p>
-        </div>
+          </AlertDescription>
+        </Alert>
       )}
     </div>
   );
