@@ -1,49 +1,30 @@
-# Starlight Starter Kit: Basics
+# @brevi/docs
 
-[![Built with Starlight](https://astro.badg.es/v2/built-with-starlight/tiny.svg)](https://starlight.astro.build)
+The brevi documentation site — [Astro](https://astro.build) + [Starlight](https://starlight.astro.build).
 
-```
-bun create astro@latest -- --template starlight
-```
-
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
-
-## 🚀 Project Structure
-
-Inside of your Astro + Starlight project, you'll see the following folders and files:
+Pages live in `src/content/docs/`; the sidebar and site metadata are in `astro.config.mjs`.
 
 ```
-.
-├── public/
-├── src/
-│   ├── assets/
-│   ├── content/
-│   │   └── docs/
-│   └── content.config.ts
-├── astro.config.mjs
-├── package.json
-└── tsconfig.json
+src/content/docs/
+├── index.mdx                 landing page
+├── getting-started.mdx       install, first run, first ticket
+├── guides/
+│   ├── connections.md        Connect flows, credential storage, api.brevi.dev
+│   ├── tickets.md            eligibility, repo routing, run output, reruns
+│   └── sandboxes.md          provider selection, Firecracker setup, caveats
+└── reference/
+    ├── cli.md                brevi init / ui / start / status
+    ├── configuration.md      ~/.brevi/config.json schema
+    └── api.md                orchestrator HTTP + WS protocol, api.brevi.dev
 ```
 
-Starlight looks for `.md` or `.mdx` files in the `src/content/docs/` directory. Each file is exposed as a route based on its file name.
+## Commands
 
-Images can be added to `src/assets/` and embedded in Markdown with a relative link.
+| Command | Action |
+| --- | --- |
+| `bun run dev` | Dev server at `localhost:4321` |
+| `bun run build` | Build the static site to `./dist/` |
+| `bun run preview` | Preview the build locally |
+| `bun run lint` | oxlint |
 
-Static assets, like favicons, can be placed in the `public/` directory.
-
-## 🧞 Commands
-
-All commands are run from the root of the project, from a terminal:
-
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `bun install`             | Installs dependencies                            |
-| `bun dev`             | Starts local dev server at `localhost:4321`      |
-| `bun build`           | Build your production site to `./dist/`          |
-| `bun preview`         | Preview your build locally, before deploying     |
-| `bun astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `bun astro -- --help` | Get help using the Astro CLI                     |
-
-## 👀 Want to learn more?
-
-Check out [Starlight’s docs](https://starlight.astro.build/), read [the Astro documentation](https://docs.astro.build), or jump into the [Astro Discord server](https://astro.build/chat).
+Ground truth for the reference pages is the source: `packages/shared/src/config.ts` (configuration), `packages/shared/src/protocol.ts` (API), `packages/cli/src/commands/` (CLI). Update these docs when those change.

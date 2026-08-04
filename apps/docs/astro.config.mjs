@@ -9,7 +9,7 @@ export default defineConfig({
 			title: 'brevi',
 			description:
 				'A local sandbox and orchestrator for coding agents. Tag a Linear ticket, get a pull request with a demo.',
-			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/adapter/brevi' }],
+			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/adapterlabs/brevi' }],
 			sidebar: [
 				{ label: 'Getting started', slug: 'getting-started' },
 				{

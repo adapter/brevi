@@ -62,7 +62,7 @@ A ChatGPT login can't be probed the same way, so it is validated offline: the to
 
 At run time a ChatGPT login travels as a *file*, not an environment variable. brevi writes it to `.brevi/codex-home/auth.json` inside the sandbox workspace and points `CODEX_HOME` at that directory, which is what the Codex CLI reads. The directory is deleted again before anything is committed, so the login can never reach a branch.
 
-To use Codex as the agent, also set `agent.command` (and any `agent.args`) in the config — see the [configuration reference](/reference/configuration/).
+Connecting Codex only stores the credential; which CLI actually runs is `agent.command`, which defaults to `claude`. See the [configuration reference](/reference/configuration/).
 
 ## Linear
 
