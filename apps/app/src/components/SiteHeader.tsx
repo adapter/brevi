@@ -37,8 +37,6 @@ export function SiteHeader({
 
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-center gap-2.5 border-b border-ink-700 bg-ink-900/80 px-4 backdrop-blur-md">
-      <Plate className="text-haze-700">Mission control</Plate>
-
       <div className="ml-auto flex items-center gap-2.5">
         {conn === "offline" && showHint && (
           <div className="hidden items-center gap-2 lg:flex">
