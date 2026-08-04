@@ -44,7 +44,7 @@ export const configSchema = z.object({
     token: z.string().min(1),
   }),
   /** Map of repo key -> repo config. Ticket labels or project names select the key. */
-  repos: z.record(z.string(), repoConfigSchema).default({}),
+  repos: z.record(z.string(), repoConfigSchema).prefault({}),
   /** Repo key to use when a ticket doesn't match any mapping. */
   defaultRepo: z.string().optional(),
   agent: z
@@ -54,16 +54,16 @@ export const configSchema = z.object({
       args: z.array(z.string()).default([]),
       model: z.string().optional(),
     })
-    .default({ command: "claude", args: [] }),
+    .prefault({}),
   sandbox: z
     .object({
       /** "auto" picks firecracker on Linux with KVM, process otherwise. */
       provider: z.enum(["auto", "firecracker", "process"]).default("auto"),
-      firecracker: firecrackerConfigSchema.default({}),
+      firecracker: firecrackerConfigSchema.prefault({}),
       /** Hard wall-clock limit for a single run. */
       timeoutMinutes: z.number().int().min(1).default(60),
     })
-    .default({}),
+    .prefault({}),
   trigger: z
     .object({
       /** Mention that opts a ticket in, searched in title/description/labels. */
@@ -73,8 +73,8 @@ export const configSchema = z.object({
       /** Label or title prefix marking a ticket as research-only. */
       spikeMarker: z.string().default("SPIKE"),
     })
-    .default({}),
-  server: z.object({ port: z.number().int().default(DEFAULT_PORT) }).default({}),
+    .prefault({}),
+  server: z.object({ port: z.number().int().default(DEFAULT_PORT) }).prefault({}),
   pollIntervalSeconds: z.number().int().min(10).default(60),
 });
 
