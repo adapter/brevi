@@ -29,8 +29,8 @@ export function RunDetail({
   const artifacts = run.result?.artifacts ?? collectArtifacts(events);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/70 px-4 py-2">
+    <div className="flex flex-col">
+      <div className="sticky top-0 z-10 flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/70 bg-ink-900/90 px-4 py-2 backdrop-blur-md">
         <Button variant="outline" size="plate" onClick={onBack} className="text-haze-400">
           <ArrowLeft className="size-3" />
           Runs
@@ -62,7 +62,7 @@ export function RunDetail({
         </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div>
         <div className="flex flex-col gap-4 p-4">
           <div>
             <h2 className="text-[17px] leading-snug font-medium text-haze-50">

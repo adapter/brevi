@@ -144,3 +144,23 @@ export const Pin = (p: IconProps) => (
     <path d="M8 2.6v8.2m0 0L4.6 7.4M8 10.8l3.4-3.4M3 13.4h10" />
   </Svg>
 );
+
+export const Sun = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="3" />
+    <path d="M8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1" />
+  </Svg>
+);
+
+export const Moon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M13.4 9.6A5.8 5.8 0 0 1 6.4 2.6a5.8 5.8 0 1 0 7 7z" />
+  </Svg>
+);
+
+export const Monitor = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="1.8" y="2.8" width="12.4" height="8.4" rx="1.2" />
+    <path d="M5.8 13.6h4.4M8 11.2v2.4" />
+  </Svg>
+);

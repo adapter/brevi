@@ -1,5 +1,6 @@
 import type { Run, RunEvent, RunStatus } from "@brevi/shared";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Card } from "@/components/ui/card";
 import { clock, duration } from "../lib/format";
 import { PHASES, STATUS_TONE, isTerminal, phaseIndex } from "../lib/status";
 
@@ -45,7 +46,7 @@ export function PhaseSpine({
   ];
 
   return (
-    <div className="panel px-4 py-3.5">
+    <Card className="block px-4 py-3.5">
       <div className="flex items-start">
         {nodes.map((node, i) => {
           const last = i === nodes.length - 1;
@@ -119,7 +120,7 @@ export function PhaseSpine({
           </AlertDescription>
         </Alert>
       )}
-    </div>
+    </Card>
   );
 }
 

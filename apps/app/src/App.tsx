@@ -2,11 +2,12 @@ import { useMemo, useState } from "react";
 import type { Run } from "@brevi/shared";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Connections } from "./components/Connections";
-import { Header } from "./components/Header";
-import { QueueRail } from "./components/QueueRail";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { AppSidebar } from "./components/AppSidebar";
+import { ConnectionsSheet, PROVIDERS } from "./components/ConnectionsSheet";
 import { RunDetail } from "./components/RunDetail";
-import { RunsList } from "./components/RunsList";
+import { RunsDashboard } from "./components/RunsDashboard";
+import { SiteHeader } from "./components/SiteHeader";
 import { Close, Warn } from "./components/Icons";
 import { isActive } from "./lib/status";
 import { useNow } from "./lib/useNow";
@@ -32,8 +33,8 @@ export default function App() {
     applyConfig,
   } = useOrchestrator();
 
-  // Right rail, like the queue on the left. Visible by default on first run;
-  // the choice sticks across sessions.
+  // The Connections sheet. Open by default on first run; the choice sticks
+  // across sessions so a configured machine starts with it closed.
   const [connectionsOpen, setConnectionsOpen] = useState<boolean>(() => {
     const saved = localStorage.getItem("brevi.connections.open");
     return saved === null ? true : saved === "1";
@@ -59,61 +60,65 @@ export default function App() {
   const unreachable = conn === "offline" && !loaded;
   const offlineCard = unreachable && !selectedRun;
 
+  const connectedCount = config
+    ? PROVIDERS.filter((spec) => spec.connected(config)).length
+    : 0;
+  const needsSetup = config !== null && config.linear.apiKey === "";
+
   const handleRun = async (ticketId: string) => {
     const run = await runTicket(ticketId);
     if (run) openRun(run.id);
   };
 
   return (
-    <div className="flex h-full flex-col">
-      <Header
-        conn={conn}
-        health={health}
+    <SidebarProvider className="h-svh min-h-svh overflow-hidden">
+      <AppSidebar
+        tickets={tickets}
+        activeByTicket={activeByTicket}
         config={config}
-        busy={anyActive}
-        showHint={!offlineCard}
+        health={health}
+        busy={busy}
+        unreachable={unreachable}
+        connectedCount={connectedCount}
+        providerCount={PROVIDERS.length}
+        needsSetup={needsSetup}
+        onRun={(id) => void handleRun(id)}
+        onOpenRun={openRun}
+        onOpenConnections={() => toggleConnections(true)}
       />
 
-      {notice && (
-        <Alert
-          variant="destructive"
-          className="shrink-0 items-center rounded-none border-x-0 border-t-0 border-rust-500/30 bg-rust-500/10 px-4 py-2 has-data-[slot=alert-action]:pr-12"
-        >
-          <Warn className="size-3.5 text-rust-400" />
-          <AlertDescription className="text-[12.5px] text-rust-400">{notice}</AlertDescription>
-          <AlertAction className="top-1/2 right-2.5 -translate-y-1/2">
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={dismissNotice}
-              aria-label="Dismiss"
-              className="text-rust-400 hover:bg-rust-500/15 hover:text-rust-400"
-            >
-              <Close className="size-3" />
-            </Button>
-          </AlertAction>
-        </Alert>
-      )}
-
-      <main
-        className={`grid min-h-0 flex-1 lg:grid-rows-1 ${
-          connectionsOpen
-            ? "grid-rows-[minmax(0,30vh)_minmax(0,1fr)_minmax(0,38vh)] lg:grid-cols-[340px_minmax(0,1fr)_380px]"
-            : "grid-rows-[minmax(0,38vh)_minmax(0,1fr)] lg:grid-cols-[340px_minmax(0,1fr)]"
-        }`}
-      >
-        <QueueRail
-          tickets={tickets}
-          activeByTicket={activeByTicket}
+      <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
+        <SiteHeader
+          conn={conn}
+          health={health}
           config={config}
-          unreachable={unreachable}
-          busy={busy}
-          onRun={(id) => void handleRun(id)}
-          onOpenRun={openRun}
-          onOpenConnections={() => toggleConnections(true)}
+          run={selectedRun ?? null}
+          showHint={!offlineCard}
+          onBack={() => openRun(null)}
         />
 
-        <section className="flex min-h-0 flex-col">
+        {notice && (
+          <Alert
+            variant="destructive"
+            className="shrink-0 items-center rounded-none border-x-0 border-t-0 border-rust-500/30 bg-rust-500/10 px-4 py-2 has-data-[slot=alert-action]:pr-12"
+          >
+            <Warn className="size-3.5 text-rust-400" />
+            <AlertDescription className="text-[12.5px] text-rust-400">{notice}</AlertDescription>
+            <AlertAction className="top-1/2 right-2.5 -translate-y-1/2">
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={dismissNotice}
+                aria-label="Dismiss"
+                className="text-rust-400 hover:bg-rust-500/15 hover:text-rust-400"
+              >
+                <Close className="size-3" />
+              </Button>
+            </AlertAction>
+          </Alert>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-y-auto">
           {selectedRun ? (
             <RunDetail
               run={selectedRun}
@@ -124,26 +129,24 @@ export default function App() {
               onCancel={() => void cancelRun(selectedRun.id)}
             />
           ) : (
-            <RunsList
+            <RunsDashboard
               runs={runs}
+              tickets={tickets}
               now={now}
               conn={conn}
               loaded={loaded || selectedRunId !== null}
-              connectionsOpen={connectionsOpen}
-              needsSetup={config !== null && config.linear.apiKey === ""}
-              onToggleConnections={() => toggleConnections(!connectionsOpen)}
               onOpen={openRun}
             />
           )}
-        </section>
+        </div>
+      </SidebarInset>
 
-        <Connections
-          open={connectionsOpen}
-          config={config}
-          onClose={() => toggleConnections(false)}
-          onConfig={applyConfig}
-        />
-      </main>
-    </div>
+      <ConnectionsSheet
+        open={connectionsOpen}
+        onOpenChange={toggleConnections}
+        config={config}
+        onConfig={applyConfig}
+      />
+    </SidebarProvider>
   );
 }

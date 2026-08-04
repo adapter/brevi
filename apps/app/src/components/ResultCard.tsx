@@ -1,5 +1,6 @@
 import type { Run } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Plate } from "./Bits";
 import { Branch, Comment, External, Merge } from "./Icons";
@@ -12,7 +13,7 @@ export function ResultCard({ run }: { run: Run }) {
   const accent = shipped ? "border-mint-500/30" : "border-ink-700";
 
   return (
-    <section className={`panel animate-rise border-l-2 ${accent} p-4`}>
+    <Card className={`block animate-rise border-l-2 ${accent} p-4`}>
       <div className="flex items-center gap-2">
         <Plate className={shipped ? "text-mint-400" : "text-haze-600"}>
           {result.kind === "spike" ? "Research delivered" : "Result"}
@@ -48,7 +49,7 @@ export function ResultCard({ run }: { run: Run }) {
           </span>
         )}
       </div>
-    </section>
+    </Card>
   );
 }
 

@@ -1,15 +1,30 @@
-import type { BreviConfig, Run, Ticket } from "@brevi/shared";
+import type { BreviConfig, HealthResponse, Run, Ticket } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarRail,
+} from "@/components/ui/sidebar";
+import { Card } from "@/components/ui/card";
 import { STATUS_TONE } from "../lib/status";
 import { KindChip, Plate, RepoChip, StatusDot } from "./Bits";
 import { External, Play, Sliders } from "./Icons";
 
-export function QueueRail({
+export function AppSidebar({
   tickets,
   activeByTicket,
   config,
+  health,
   busy,
   unreachable,
+  connectedCount,
+  providerCount,
+  needsSetup,
   onRun,
   onOpenRun,
   onOpenConnections,
@@ -17,52 +32,98 @@ export function QueueRail({
   tickets: Ticket[];
   activeByTicket: Map<string, Run>;
   config: BreviConfig | null;
+  health: HealthResponse | null;
   busy: Record<string, true | undefined>;
   /** No orchestrator has answered yet, so an empty queue means nothing. */
   unreachable: boolean;
+  connectedCount: number;
+  providerCount: number;
+  needsSetup: boolean;
   onRun: (ticketId: string) => void;
   onOpenRun: (runId: string) => void;
   onOpenConnections: () => void;
 }) {
   const linearConnected = config === null || config.linear.apiKey !== "";
-  return (
-    <aside className="flex min-h-0 flex-col border-b border-ink-700 bg-ink-900/50 lg:border-r lg:border-b-0">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-ink-700/70 px-4">
-        <Plate className="text-haze-400">Queue</Plate>
-        <span className="font-mono text-[11px] leading-none text-haze-700">{tickets.length}</span>
-        <span className="ml-auto">
-          <Plate className="text-haze-700">Linear</Plate>
-        </span>
-      </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {tickets.length === 0 ? (
-          unreachable ? (
-            <p className="px-1 py-2 text-[12.5px] leading-relaxed text-haze-700">
-              The queue loads once the orchestrator is running.
-            </p>
-          ) : !linearConnected ? (
-            <ConnectLinearCard onOpenConnections={onOpenConnections} />
-          ) : (
-            <SummonCard config={config} />
-          )
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {tickets.map((ticket) => (
-              <li key={ticket.id}>
-                <TicketStrip
-                  ticket={ticket}
-                  active={activeByTicket.get(ticket.id)}
-                  busy={busy[ticket.id] === true}
-                  onRun={() => onRun(ticket.id)}
-                  onOpenRun={onOpenRun}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </aside>
+  return (
+    <Sidebar collapsible="offcanvas">
+      <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
+        <div className="flex items-center gap-2.5">
+          <img src="/logo.png" alt="" className="size-[22px]" />
+          <span className="font-plate text-[15px] leading-none font-semibold tracking-[0.02em] text-haze-50">
+            brevi
+          </span>
+          {health?.version && (
+            <span className="mt-px font-mono text-[10.5px] leading-none text-haze-700">
+              v{health.version}
+            </span>
+          )}
+        </div>
+      </SidebarHeader>
+
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel className="gap-2">
+            <Plate className="text-haze-400">Queue</Plate>
+            <span className="font-mono text-[11px] leading-none text-haze-700">
+              {tickets.length}
+            </span>
+            <span className="ml-auto">
+              <Plate className="text-haze-700">Linear</Plate>
+            </span>
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            {tickets.length === 0 ? (
+              unreachable ? (
+                <p className="px-2 py-2 text-[12.5px] leading-relaxed text-haze-700">
+                  The queue loads once the orchestrator is running.
+                </p>
+              ) : !linearConnected ? (
+                <ConnectLinearCard onOpenConnections={onOpenConnections} />
+              ) : (
+                <SummonCard config={config} />
+              )
+            ) : (
+              <ul className="flex flex-col gap-2 px-1 pt-1">
+                {tickets.map((ticket) => (
+                  <li key={ticket.id}>
+                    <TicketStrip
+                      ticket={ticket}
+                      active={activeByTicket.get(ticket.id)}
+                      busy={busy[ticket.id] === true}
+                      onRun={() => onRun(ticket.id)}
+                      onOpenRun={onOpenRun}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+
+      <SidebarFooter className="border-t border-sidebar-border">
+        <Button
+          variant="outline"
+          size="plate"
+          onClick={onOpenConnections}
+          className="relative w-full justify-start gap-2 py-2 text-haze-400"
+        >
+          <Sliders className="size-3" />
+          Connections
+          <span className="ml-auto font-mono text-[11px] leading-none tracking-normal normal-case text-haze-700">
+            {config ? `${connectedCount}/${providerCount}` : "–"}
+          </span>
+          {needsSetup && (
+            <span
+              className="absolute -top-1 -right-1 size-2 animate-beacon rounded-full bg-ember-500"
+              aria-label="Setup needed"
+            />
+          )}
+        </Button>
+      </SidebarFooter>
+      <SidebarRail />
+    </Sidebar>
   );
 }
 
@@ -86,7 +147,7 @@ function TicketStrip({
       : "bg-peri-400/60";
 
   return (
-    <article className="strip group flex overflow-hidden">
+    <Card size="sm" className="group flex-row gap-0 overflow-hidden rounded-strip py-0">
       <span className={`w-[3px] shrink-0 ${band}`} aria-hidden="true" />
       <div className="min-w-0 flex-1 p-2.5">
         <div className="flex items-center gap-2">
@@ -126,14 +187,14 @@ function TicketStrip({
           </span>
         </div>
       </div>
-    </article>
+    </Card>
   );
 }
 
-/** First-run UX: no ticket source yet — point at the Connections panel. */
+/** First-run UX: no ticket source yet — point at the Connections sheet. */
 function ConnectLinearCard({ onOpenConnections }: { onOpenConnections: () => void }) {
   return (
-    <div className="panel p-4">
+    <Card size="sm" className="mx-1 block p-4">
       <Plate className="text-haze-700">No ticket source</Plate>
       <h3 className="mt-2.5 text-[15px] leading-snug text-haze-50">Connect Linear to begin</h3>
       <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
@@ -146,7 +207,7 @@ function ConnectLinearCard({ onOpenConnections }: { onOpenConnections: () => voi
           Open Connections
         </Button>
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -164,7 +225,7 @@ function SummonCard({ config }: { config: BreviConfig | null }) {
   ];
 
   return (
-    <div className="panel p-4">
+    <Card size="sm" className="mx-1 block p-4">
       <Plate className="text-haze-700">Nothing queued</Plate>
       <h3 className="mt-2.5 text-[15px] leading-snug text-haze-50">How to summon brevi</h3>
       <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
@@ -183,6 +244,6 @@ function SummonCard({ config }: { config: BreviConfig | null }) {
       <p className="border-t border-ink-700 pt-3 font-mono text-[11px] text-haze-700">
         Checking Linear every {poll}s
       </p>
-    </div>
+    </Card>
   );
 }

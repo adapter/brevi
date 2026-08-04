@@ -4,6 +4,53 @@
 
 @custom-variant dark (&:is(.dark *));
 
+.dark {
+  color-scheme: dark;
+}
+
+/*
+  Light theme: the same room with the lights on. The ink ramp inverts into
+  paper, the haze ramp inverts into readable slate text, and the signal
+  colours deepen a step so they keep their contrast on white. Every component
+  reads the palette through these variables, so nothing else has to change.
+*/
+.light {
+  color-scheme: light;
+
+  /* room */
+  --color-ink-950: #f4f5fa;
+  --color-ink-900: #eef0f7;
+  --color-ink-850: #ffffff;
+  --color-ink-800: #f1f3f9;
+  --color-ink-750: #e9ecf5;
+  --color-ink-700: #dde1ee;
+  --color-ink-600: #c8cede;
+  --color-ink-500: #aab2c9;
+
+  /* text */
+  --color-haze-700: #8b93b0;
+  --color-haze-600: #767f9e;
+  --color-haze-400: #5a6384;
+  --color-haze-300: #47506f;
+  --color-haze-200: #333c5c;
+  --color-haze-50: #10162b;
+
+  /* signal */
+  --color-ember-700: #8f3d0d;
+  --color-ember-600: #b45113;
+  --color-ember-500: #d9631f;
+  --color-ember-300: #b95d10;
+  --color-mint-600: #157a5b;
+  --color-mint-500: #1c8c69;
+  --color-mint-400: #157a5b;
+  --color-rust-600: #a32e26;
+  --color-rust-500: #c53a30;
+  --color-rust-400: #b8382f;
+  --color-peri-500: #3f4dc4;
+  --color-peri-400: #4c5ad4;
+  --color-iris-400: #7444c4;
+}
+
 /*
   brevi dashboard — "cold room, warm signal"
 

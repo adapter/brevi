@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RunEvent } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
   Collapsible as CollapsibleRoot,
   CollapsibleContent,
@@ -45,7 +46,7 @@ export function Console({
   };
 
   return (
-    <div className="panel flex max-h-[clamp(320px,52vh,680px)] min-h-[180px] flex-col overflow-hidden">
+    <Card className="flex max-h-[clamp(320px,52vh,680px)] min-h-[180px] flex-col gap-0 overflow-hidden py-0">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
         <Plate className="text-haze-400">Console</Plate>
         <span className="font-mono text-[11px] leading-none text-haze-700">{events.length}</span>
@@ -88,7 +89,7 @@ export function Console({
           </div>
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 

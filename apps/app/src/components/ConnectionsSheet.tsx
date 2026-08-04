@@ -9,10 +9,18 @@ import type {
 } from "@brevi/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { api } from "../lib/api";
 import { Plate, RepoChip } from "./Bits";
-import { Check, ChevronRight, Close, External, Pin, Warn } from "./Icons";
+import { Check, Close, External, Pin, Warn } from "./Icons";
 
 /** How the "Connect" button acquires a credential, shown as a hint. */
 type ConnectHint = string;
@@ -29,7 +37,7 @@ interface ProviderSpec {
   connected: (config: BreviConfig) => boolean;
 }
 
-const PROVIDERS: ProviderSpec[] = [
+export const PROVIDERS: ProviderSpec[] = [
   {
     id: "linear",
     field: "linearApiKey",
@@ -77,74 +85,61 @@ const PROVIDERS: ProviderSpec[] = [
 ];
 
 /**
- * Right rail to connect Linear, GitHub, and agent credentials — the mirror of
- * the queue rail on the left, collapsible via its header chevron (or the
- * header's Connections button).
+ * Right-side sheet to connect Linear, GitHub, and agent credentials, opened
+ * from the sidebar footer (or anywhere a setup nudge points).
  */
-export function Connections({
+export function ConnectionsSheet({
   open,
+  onOpenChange,
   config,
-  onClose,
   onConfig,
 }: {
   open: boolean;
+  onOpenChange: (open: boolean) => void;
   config: BreviConfig | null;
-  onClose: () => void;
   onConfig: (config: BreviConfig) => void;
 }) {
-  if (!open) return null;
-
   const connectedCount = config
     ? PROVIDERS.filter((spec) => spec.connected(config)).length
     : 0;
 
   return (
-    <aside
-      aria-label="Connections"
-      className="flex min-h-0 flex-col border-t border-ink-700 bg-ink-900/50 lg:border-t-0 lg:border-l"
-    >
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-ink-700/70 px-4">
-        <Plate className="text-haze-400">Connections</Plate>
-        <span className="font-mono text-[11px] leading-none text-haze-700">
-          {config ? `${connectedCount}/${PROVIDERS.length}` : "–"}
-        </span>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={onClose}
-          aria-label="Collapse connections"
-          title="Collapse"
-          className="ml-auto"
-        >
-          <ChevronRight className="size-3.5" />
-        </Button>
-      </div>
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-full gap-0 overflow-y-auto p-0 sm:max-w-md">
+        <SheetHeader className="border-b border-ink-700/70 px-4 py-3.5">
+          <SheetTitle className="flex items-center gap-2">
+            <Plate className="text-haze-400">Connections</Plate>
+            <span className="font-mono text-[11px] leading-none font-normal text-haze-700">
+              {config ? `${connectedCount}/${PROVIDERS.length}` : "–"}
+            </span>
+          </SheetTitle>
+          <SheetDescription className="text-[12px] leading-relaxed text-haze-700">
+            Credentials are validated with the provider, then stored in{" "}
+            <code className="font-mono text-[11px] text-haze-400">~/.brevi/config.json</code>. They
+            never leave this machine.
+          </SheetDescription>
+        </SheetHeader>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        <p className="px-1 text-[12px] leading-relaxed text-haze-700">
-          Credentials are validated with the provider, then stored in{" "}
-          <code className="font-mono text-[11px] text-haze-400">~/.brevi/config.json</code>. They
-          never leave this machine.
-        </p>
-
-        {config ? (
-          <>
-            <ul className="mt-3 flex flex-col gap-2.5">
-              {PROVIDERS.map((spec) => (
-                <li key={spec.id}>
-                  <ProviderRow spec={spec} config={config} onConfig={onConfig} />
-                </li>
-              ))}
-            </ul>
-            <RepositoriesSection config={config} onConfig={onConfig} />
-          </>
-        ) : (
-          <p className="mt-3 px-1 text-[12.5px] leading-relaxed text-haze-700">
-            Waiting for the orchestrator — connections can be edited once it answers.
-          </p>
-        )}
-      </div>
-    </aside>
+        <div className="min-h-0 flex-1 p-3">
+          {config ? (
+            <>
+              <ul className="flex flex-col gap-2.5">
+                {PROVIDERS.map((spec) => (
+                  <li key={spec.id}>
+                    <ProviderRow spec={spec} config={config} onConfig={onConfig} />
+                  </li>
+                ))}
+              </ul>
+              <RepositoriesSection config={config} onConfig={onConfig} />
+            </>
+          ) : (
+            <p className="mt-3 px-1 text-[12.5px] leading-relaxed text-haze-700">
+              Waiting for the orchestrator — connections can be edited once it answers.
+            </p>
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -269,158 +264,162 @@ function ProviderRow({
   };
 
   return (
-    <article className="panel p-3.5">
-      <div className="flex items-center gap-2">
-        <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
-          {spec.name}
-        </h3>
-        <Badge
-          variant="outline"
-          className={
-            connected
-              ? "border-mint-500/30 bg-mint-500/10 text-mint-400"
-              : "text-haze-700"
-          }
-        >
-          <span
-            className={`inline-block size-[5px] rounded-full ${connected ? "bg-mint-500" : "bg-haze-700"}`}
-          />
-          {connected ? "Connected" : "Not connected"}
-        </Badge>
-        <span className="ml-auto">
-          {connected ? (
-            <Button
-              variant="outline"
-              size="plate"
-              onClick={() => void submit("")}
-              disabled={pending}
-              title="Remove this key"
-            >
-              Disconnect
-            </Button>
-          ) : (
-            <Button
-              size="plate"
-              onClick={() => void connect()}
-              disabled={pending || device !== null}
-              title={spec.connectHint}
-            >
-              {pending ? "Connecting" : "Connect"}
-            </Button>
-          )}
-        </span>
-      </div>
-
-      <p className="mt-1.5 text-[12px] leading-relaxed text-haze-400">{spec.role}</p>
-
-      {device && (
-        <div className="mt-2.5 rounded-[5px] border border-ink-600 bg-ink-950/70 p-3">
-          <Plate className="text-haze-700">Enter this code on GitHub</Plate>
-          <p className="mt-2 select-all font-mono text-[20px] font-semibold tracking-[0.2em] text-haze-50">
-            {device.userCode}
-          </p>
-          <p className="mt-2 flex items-center gap-1.5 text-[12px] text-haze-400">
-            <span className="inline-block size-[6px] animate-beacon rounded-full bg-ember-500" />
-            Waiting for authorization at{" "}
-            <a
-              href={device.verificationUri}
-              target="_blank"
-              rel="noreferrer"
-              className="text-haze-200 underline decoration-ink-500 hover:text-haze-50"
-            >
-              {device.verificationUri.replace("https://", "")}
-            </a>
-          </p>
-          <Button
-            variant="ghost"
-            size="plate"
-            onClick={() => {
-              setDevice(null);
-              stopPolling();
-            }}
-            className="mt-2.5 -ml-2 hover:bg-transparent hover:text-haze-300"
+    <Card size="sm" className="gap-1.5">
+      <CardHeader className="gap-0">
+        <div className="flex items-center gap-2">
+          <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
+            {spec.name}
+          </h3>
+          <Badge
+            variant="outline"
+            className={
+              connected
+                ? "border-mint-500/30 bg-mint-500/10 text-mint-400"
+                : "text-haze-700"
+            }
           >
-            Cancel
-          </Button>
+            <span
+              className={`inline-block size-[5px] rounded-full ${connected ? "bg-mint-500" : "bg-haze-700"}`}
+            />
+            {connected ? "Connected" : "Not connected"}
+          </Badge>
+          <span className="ml-auto">
+            {connected ? (
+              <Button
+                variant="outline"
+                size="plate"
+                onClick={() => void submit("")}
+                disabled={pending}
+                title="Remove this key"
+              >
+                Disconnect
+              </Button>
+            ) : (
+              <Button
+                size="plate"
+                onClick={() => void connect()}
+                disabled={pending || device !== null}
+                title={spec.connectHint}
+              >
+                {pending ? "Connecting" : "Connect"}
+              </Button>
+            )}
+          </span>
         </div>
-      )}
+      </CardHeader>
 
-      {awaitingRedirect && !connected && (
-        <p className="mt-2.5 flex items-center gap-1.5 text-[12px] text-haze-400">
-          <span className="inline-block size-[6px] animate-beacon rounded-full bg-ember-500" />
-          Finish authorizing in the opened tab — this panel updates by itself.
-        </p>
-      )}
+      <CardContent>
+        <p className="text-[12px] leading-relaxed text-haze-400">{spec.role}</p>
 
-      {manualReason && (
-        <p className="mt-2.5 text-[12px] leading-relaxed text-haze-400">{manualReason}</p>
-      )}
+        {device && (
+          <div className="mt-2.5 rounded-[5px] border border-ink-600 bg-ink-950/70 p-3">
+            <Plate className="text-haze-700">Enter this code on GitHub</Plate>
+            <p className="mt-2 select-all font-mono text-[20px] font-semibold tracking-[0.2em] text-haze-50">
+              {device.userCode}
+            </p>
+            <p className="mt-2 flex items-center gap-1.5 text-[12px] text-haze-400">
+              <span className="inline-block size-[6px] animate-beacon rounded-full bg-ember-500" />
+              Waiting for authorization at{" "}
+              <a
+                href={device.verificationUri}
+                target="_blank"
+                rel="noreferrer"
+                className="text-haze-200 underline decoration-ink-500 hover:text-haze-50"
+              >
+                {device.verificationUri.replace("https://", "")}
+              </a>
+            </p>
+            <Button
+              variant="ghost"
+              size="plate"
+              onClick={() => {
+                setDevice(null);
+                stopPolling();
+              }}
+              className="mt-2.5 -ml-2 hover:bg-transparent hover:text-haze-300"
+            >
+              Cancel
+            </Button>
+          </div>
+        )}
 
-      {manual && !connected ? (
-        <form
-          className="mt-2.5 flex items-center gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (value.trim()) void submit(value);
-          }}
-        >
-          <Input
-            type="password"
-            value={value}
-            onChange={(e) => {
-              setValue(e.target.value);
-              setResult(null);
+        {awaitingRedirect && !connected && (
+          <p className="mt-2.5 flex items-center gap-1.5 text-[12px] text-haze-400">
+            <span className="inline-block size-[6px] animate-beacon rounded-full bg-ember-500" />
+            Finish authorizing in the opened tab — this panel updates by itself.
+          </p>
+        )}
+
+        {manualReason && (
+          <p className="mt-2.5 text-[12px] leading-relaxed text-haze-400">{manualReason}</p>
+        )}
+
+        {manual && !connected ? (
+          <form
+            className="mt-2.5 flex items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (value.trim()) void submit(value);
             }}
-            placeholder={spec.inputLabel}
-            autoComplete="off"
-            spellCheck={false}
-            className="flex-1 rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
-          />
-          <Button type="submit" size="plate" disabled={pending || value.trim() === ""}>
-            {pending ? "Checking" : "Save"}
-          </Button>
-        </form>
-      ) : (
-        !connected &&
-        !device && (
-          <Button
-            variant="ghost"
-            size="plate"
-            onClick={() => setManual(true)}
-            className="mt-2.5 -ml-2 hover:bg-transparent hover:text-haze-300"
           >
-            Enter a key manually instead
-          </Button>
-        )
-      )}
+            <Input
+              type="password"
+              value={value}
+              onChange={(e) => {
+                setValue(e.target.value);
+                setResult(null);
+              }}
+              placeholder={spec.inputLabel}
+              autoComplete="off"
+              spellCheck={false}
+              className="flex-1 rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+            />
+            <Button type="submit" size="plate" disabled={pending || value.trim() === ""}>
+              {pending ? "Checking" : "Save"}
+            </Button>
+          </form>
+        ) : (
+          !connected &&
+          !device && (
+            <Button
+              variant="ghost"
+              size="plate"
+              onClick={() => setManual(true)}
+              className="mt-2.5 -ml-2 hover:bg-transparent hover:text-haze-300"
+            >
+              Enter a key manually instead
+            </Button>
+          )
+        )}
 
-      {result && (
-        <p
-          className={`mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed ${
-            result.ok ? "text-mint-400" : "text-rust-400"
-          }`}
-        >
-          {result.ok ? (
-            <Check className="mt-px size-3 shrink-0" />
-          ) : (
-            <Warn className="mt-px size-3 shrink-0" />
-          )}
-          {result.detail}
-        </p>
-      )}
+        {result && (
+          <p
+            className={`mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed ${
+              result.ok ? "text-mint-400" : "text-rust-400"
+            }`}
+          >
+            {result.ok ? (
+              <Check className="mt-px size-3 shrink-0" />
+            ) : (
+              <Warn className="mt-px size-3 shrink-0" />
+            )}
+            {result.detail}
+          </p>
+        )}
 
-      {manual && !connected && (
-        <a
-          href={spec.keyUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-2.5 inline-flex items-center gap-1 font-mono text-[10.5px] text-haze-700 hover:text-haze-300"
-        >
-          Get a key: {spec.keyUrlLabel}
-          <External className="size-2.5" />
-        </a>
-      )}
-    </article>
+        {manual && !connected && (
+          <a
+            href={spec.keyUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-2.5 inline-flex items-center gap-1 font-mono text-[10.5px] text-haze-700 hover:text-haze-300"
+          >
+            Get a key: {spec.keyUrlLabel}
+            <External className="size-2.5" />
+          </a>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
