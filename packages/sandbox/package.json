@@ -1,0 +1,30 @@
+{
+  "name": "@brevi/sandbox",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "oxlint --max-warnings 0",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@brevi/shared": "*",
+    "execa": "^9.6.0",
+    "undici": "^7.16.0"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "*",
+    "@types/node": "^22.15.3",
+    "oxlint": "^1.22.0",
+    "typescript": "5.9.2"
+  }
+}

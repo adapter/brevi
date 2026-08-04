@@ -1,0 +1,31 @@
+{
+  "name": "@brevi/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Local sandbox and orchestrator for coding agents. Connects Linear + GitHub, runs @brevi-tagged tickets in Firecracker microVMs, and opens PRs with demos.",
+  "bin": {
+    "brevi": "./dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "oxlint --max-warnings 0",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@brevi/orchestrator": "*",
+    "@brevi/shared": "*",
+    "@clack/prompts": "^0.11.0",
+    "commander": "^14.0.0",
+    "open": "^10.1.0",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "*",
+    "@types/node": "^22.15.3",
+    "oxlint": "^1.22.0",
+    "typescript": "5.9.2"
+  }
+}

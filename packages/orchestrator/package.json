@@ -1,0 +1,37 @@
+{
+  "name": "@brevi/orchestrator",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "oxlint --max-warnings 0",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@brevi/app": "*",
+    "@brevi/sandbox": "*",
+    "@brevi/shared": "*",
+    "@hono/node-server": "^1.14.0",
+    "@linear/sdk": "^60.0.0",
+    "execa": "^9.6.0",
+    "hono": "^4.7.0",
+    "octokit": "^5.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "*",
+    "@types/node": "^22.15.3",
+    "@types/ws": "^8.18.0",
+    "oxlint": "^1.22.0",
+    "typescript": "5.9.2"
+  }
+}
