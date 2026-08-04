@@ -19,17 +19,6 @@ function Svg({ className, children }: IconProps & { children: React.ReactNode })
   );
 }
 
-/** The brevi mark: three stacked rules, shortest last — a brief, condensed. */
-export function Mark({ className, tone }: IconProps & { tone: string }) {
-  return (
-    <svg viewBox="0 0 16 16" aria-hidden="true" className={className ?? "size-4"}>
-      <rect x="1" y="2.5" width="14" height="2.4" rx="1.2" className={tone} />
-      <rect x="1" y="6.8" width="10" height="2.4" rx="1.2" fill="currentColor" opacity="0.55" />
-      <rect x="1" y="11.1" width="6" height="2.4" rx="1.2" fill="currentColor" opacity="0.28" />
-    </svg>
-  );
-}
-
 export const Play = (p: IconProps) => (
   <Svg {...p}>
     <path d="M5 3.4 12.4 8 5 12.6z" fill="currentColor" stroke="none" />

@@ -32,18 +32,11 @@ export function Header({
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-center gap-3 border-b border-ink-700 bg-ink-900/80 px-4 backdrop-blur-md">
       <div className="flex items-center gap-2.5">
-        <svg viewBox="0 0 16 16" aria-hidden="true" className="size-[18px] text-haze-300">
-          <rect
-            x="1"
-            y="2.5"
-            width="14"
-            height="2.4"
-            rx="1.2"
-            className={busy ? "fill-ember-500" : "fill-haze-400"}
-          />
-          <rect x="1" y="6.8" width="10" height="2.4" rx="1.2" fill="currentColor" opacity="0.5" />
-          <rect x="1" y="11.1" width="6" height="2.4" rx="1.2" fill="currentColor" opacity="0.24" />
-        </svg>
+        <img
+          src="/logo.png"
+          alt=""
+          className={`size-[22px] ${busy ? "animate-beacon" : ""}`}
+        />
         <span className="font-plate text-[15px] leading-none font-semibold tracking-[0.02em] text-haze-50">
           brevi
         </span>
