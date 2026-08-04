@@ -70,7 +70,6 @@ export default function App() {
         config={config}
         busy={anyActive}
         showHint={!offlineCard}
-        onOpenConnections={() => toggleConnections(!connectionsOpen)}
       />
 
       {notice && (
@@ -122,6 +121,9 @@ export default function App() {
               now={now}
               conn={conn}
               loaded={loaded || selectedRunId !== null}
+              connectionsOpen={connectionsOpen}
+              needsSetup={config !== null && config.linear.apiKey === ""}
+              onToggleConnections={() => toggleConnections(!connectionsOpen)}
               onOpen={openRun}
             />
           )}

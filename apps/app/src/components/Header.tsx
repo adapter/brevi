@@ -1,7 +1,6 @@
 import type { BreviConfig, HealthResponse } from "@brevi/shared";
 import type { Connection } from "../lib/useOrchestrator";
 import { Command, Plate } from "./Bits";
-import { Sliders } from "./Icons";
 
 const CONNECTION = {
   connecting: { label: "Connecting", dot: "bg-haze-600", text: "text-haze-400", live: false },
@@ -16,7 +15,6 @@ export function Header({
   config,
   busy,
   showHint,
-  onOpenConnections,
 }: {
   conn: Connection;
   health: HealthResponse | null;
@@ -25,12 +23,9 @@ export function Header({
   busy: boolean;
   /** Suppressed when the main pane is already showing the offline card. */
   showHint: boolean;
-  onOpenConnections: () => void;
 }) {
   const c = CONNECTION[conn];
   const provider = health?.sandboxProvider ?? config?.sandbox.provider;
-  /** Nudge until the ticket source exists — nothing works without Linear. */
-  const needsSetup = config !== null && config.linear.apiKey === "";
 
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-center gap-3 border-b border-ink-700 bg-ink-900/80 px-4 backdrop-blur-md">
@@ -50,6 +45,11 @@ export function Header({
         <span className="font-plate text-[15px] leading-none font-semibold tracking-[0.02em] text-haze-50">
           brevi
         </span>
+        {health?.version && (
+          <span className="mt-px font-mono text-[10.5px] leading-none text-haze-700">
+            v{health.version}
+          </span>
+        )}
       </div>
 
       <span className="hidden h-4 w-px bg-ink-600 sm:block" />
@@ -69,27 +69,6 @@ export function Header({
             <span className="font-mono text-[11px] leading-none text-haze-200">{provider}</span>
           </span>
         )}
-
-        {health?.version && (
-          <span className="hidden font-mono text-[11px] text-haze-700 xl:block">
-            v{health.version}
-          </span>
-        )}
-
-        <button
-          type="button"
-          onClick={onOpenConnections}
-          className="relative inline-flex items-center gap-2 rounded-[4px] border border-ink-600 bg-ink-800 px-2 py-1.5 text-haze-300 hover:border-ink-500 hover:bg-ink-750 hover:text-haze-50"
-        >
-          <Sliders className="size-3.5" />
-          <span className="plate hidden sm:block">Connections</span>
-          {needsSetup && (
-            <span
-              className="absolute -top-1 -right-1 size-2 rounded-full bg-ember-500 animate-beacon"
-              aria-label="Setup needed"
-            />
-          )}
-        </button>
 
         <span
           className={`inline-flex items-center gap-2 rounded-[4px] border border-ink-600 bg-ink-800 px-2 py-1.5 ${c.text}`}

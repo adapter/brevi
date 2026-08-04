@@ -2,7 +2,7 @@ import type { Run } from "@brevi/shared";
 import { duration, relative } from "../lib/format";
 import { STATUS_TONE, isActive } from "../lib/status";
 import { Command, Plate, StatusDot } from "./Bits";
-import { ChevronRight } from "./Icons";
+import { ChevronRight, Sliders } from "./Icons";
 import type { Connection } from "../lib/useOrchestrator";
 
 export function RunsList({
@@ -10,12 +10,19 @@ export function RunsList({
   now,
   conn,
   loaded,
+  connectionsOpen,
+  needsSetup,
+  onToggleConnections,
   onOpen,
 }: {
   runs: Run[];
   now: number;
   conn: Connection;
   loaded: boolean;
+  connectionsOpen: boolean;
+  /** Linear isn't connected yet — nudge until the ticket source exists. */
+  needsSetup: boolean;
+  onToggleConnections: () => void;
   onOpen: (runId: string) => void;
 }) {
   const active = runs.filter((r) => isActive(r.status)).length;
@@ -31,9 +38,26 @@ export function RunsList({
             <span className="plate">{active} active</span>
           </span>
         )}
-        <span className="ml-auto">
-          <Plate className="text-haze-700">Newest first</Plate>
-        </span>
+        <button
+          type="button"
+          onClick={onToggleConnections}
+          aria-pressed={connectionsOpen}
+          title={connectionsOpen ? "Collapse the Connections rail" : "Open the Connections rail"}
+          className={`relative ml-auto inline-flex items-center gap-1.5 rounded-[4px] border px-2 py-1 transition-colors duration-100 ${
+            connectionsOpen
+              ? "border-ink-500 bg-ink-750 text-haze-50"
+              : "border-ink-600 text-haze-400 hover:border-ink-500 hover:bg-ink-750 hover:text-haze-50"
+          }`}
+        >
+          <Sliders className="size-3" />
+          <span className="plate">Connections</span>
+          {needsSetup && !connectionsOpen && (
+            <span
+              className="absolute -top-1 -right-1 size-2 animate-beacon rounded-full bg-ember-500"
+              aria-label="Setup needed"
+            />
+          )}
+        </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
