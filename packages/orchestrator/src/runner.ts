@@ -83,6 +83,15 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     sandbox = await provider.create({ id: run.id, env: agentEnv });
     await store.update(run.id, { sandbox: { provider: provider.name, id: sandbox.id } });
     await sandbox.pushDirectory(checkoutDir, sandbox.workspacePath);
+    // A Codex ChatGPT login travels as a file, not an env var: the Codex CLI
+    // reads $CODEX_HOME/auth.json. Kept inside the workspace so every provider
+    // can write it; scrubbed again before anything is committed.
+    let codexHome: string | undefined;
+    if (config.agent.codexAuthJson) {
+      codexHome = `${sandbox.workspacePath}/${CODEX_HOME_DIR}`;
+      await sandbox.exec("mkdir", ["-p", codexHome]);
+      await sandbox.writeFile(`${codexHome}/auth.json`, config.agent.codexAuthJson);
+    }
     await linear.moveToStarted(ticket.id);
     throwIfAborted(signal);
 
@@ -110,6 +119,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     const exec = await raceWithAbort(
       sandbox.exec(config.agent.command, args, {
         cwd: sandbox.workspacePath,
+        env: codexHome ? { CODEX_HOME: codexHome } : undefined,
         timeoutMs: config.sandbox.timeoutMinutes * 60_000,
         onStdout: (chunk) => stdoutSink.write(chunk),
         onStderr: (chunk) => stderrSink.write(chunk),
@@ -174,17 +184,20 @@ function branchNameFor(ticket: Ticket): string {
  */
 function collectAgentEnv(config: BreviConfig): Record<string, string> {
   const env: Record<string, string> = {};
-  const { anthropicApiKey, claudeCodeOauthToken, codexApiKey } = config.agent;
+  const { anthropicApiKey, claudeCodeOauthToken, codexApiKey, codexAuthJson } = config.agent;
   if (anthropicApiKey) env.ANTHROPIC_API_KEY = anthropicApiKey;
   if (claudeCodeOauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = claudeCodeOauthToken;
   if (codexApiKey) env.OPENAI_API_KEY = codexApiKey;
-  if (Object.keys(env).length === 0) {
+  if (Object.keys(env).length === 0 && !codexAuthJson) {
     throw new Error(
-      "no agent credentials configured: connect Anthropic (or Codex) in the dashboard's Connections panel",
+      "no agent credentials configured: connect Claude (or Codex) in the dashboard's Connections panel",
     );
   }
   return env;
 }
+
+/** In-workspace directory holding a Codex ChatGPT login, wired up via CODEX_HOME. */
+const CODEX_HOME_DIR = ".brevi/codex-home";
 
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new RunCancelledError();
@@ -348,6 +361,8 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
     .then((text) => text.trim())
     .catch(() => `Automated change for ${ticket.identifier}: ${ticket.title}`);
 
+  // Never let the mounted Codex login reach the branch.
+  await rm(join(pulledDir, CODEX_HOME_DIR), { recursive: true, force: true });
   await git(["add", "-A"], pulledDir, token);
   const status = await git(["status", "--porcelain"], pulledDir, token);
   if (!String(status.stdout).trim()) {

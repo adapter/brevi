@@ -16,7 +16,8 @@ export interface DiscoveredCredential {
   value: string;
   /** Where it came from, for the "Connected via ..." detail. */
   source: string;
-  kind: "api-key" | "oauth";
+  /** "chatgpt" = a Codex CLI ChatGPT login (full auth.json blob, no API key). */
+  kind: "api-key" | "oauth" | "chatgpt";
 }
 
 // --- Host discovery ----------------------------------------------------------
@@ -87,24 +88,27 @@ export async function discoverAnthropicCredential(): Promise<DiscoveredCredentia
   return null;
 }
 
-/** Codex: OPENAI_API_KEY env, then ~/.codex/auth.json. */
-export async function discoverCodexCredential(): Promise<
-  DiscoveredCredential | { unavailableReason: string } | null
-> {
+/**
+ * Codex: OPENAI_API_KEY env, then ~/.codex/auth.json — which holds either an
+ * API key or a ChatGPT OAuth login ({auth_mode, tokens: {access_token,
+ * refresh_token, id_token, account_id}}). ChatGPT logins are captured whole:
+ * the sandboxed Codex CLI consumes the file directly via CODEX_HOME.
+ */
+export async function discoverCodexCredential(): Promise<DiscoveredCredential | null> {
   if (process.env.OPENAI_API_KEY) {
     return { value: process.env.OPENAI_API_KEY, source: "OPENAI_API_KEY", kind: "api-key" };
   }
   try {
     const raw = await readFile(join(homedir(), ".codex", "auth.json"), "utf8");
-    const parsed = JSON.parse(raw) as { OPENAI_API_KEY?: string | null; tokens?: unknown };
+    const parsed = JSON.parse(raw) as {
+      OPENAI_API_KEY?: string | null;
+      tokens?: { access_token?: string } | null;
+    };
     if (parsed.OPENAI_API_KEY) {
       return { value: parsed.OPENAI_API_KEY, source: "Codex CLI login", kind: "api-key" };
     }
-    if (parsed.tokens) {
-      return {
-        unavailableReason:
-          "Codex CLI is logged in with a ChatGPT account, which has no API key brevi can use. Paste an OpenAI API key instead.",
-      };
+    if (parsed.tokens?.access_token) {
+      return { value: raw, source: "Codex CLI login (ChatGPT)", kind: "chatgpt" };
     }
   } catch {
     // no codex auth

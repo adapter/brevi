@@ -37,6 +37,7 @@ import {
   validateAnthropicApiKey,
   validateAnthropicCredential,
   validateCodexApiKey,
+  validateCodexChatgptAuth,
   validateGithubToken,
   validateLinearApiKey,
 } from "./credentials.js";
@@ -215,6 +216,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       }),
       apply(request.codexApiKey, validateCodexApiKey, (key) => {
         this.config.agent.codexApiKey = key;
+        // A manual key (or a disconnect) replaces any host-discovered login.
+        this.config.agent.codexAuthJson = "";
       }),
     ]);
     if (linear) results.linear = linear;
@@ -319,7 +322,10 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
               "No Anthropic credential found on this machine (checked ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, and the Claude Code login). Paste an API key instead.",
           };
         }
-        const result = await validateAnthropicCredential(found.value, found.kind);
+        const result = await validateAnthropicCredential(
+          found.value,
+          found.kind === "oauth" ? "oauth" : "api-key",
+        );
         if (!result.ok) {
           return {
             status: "manual",
@@ -345,13 +351,13 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
             status: "manual",
             provider,
             reason:
-              "No Codex credential found on this machine (checked OPENAI_API_KEY and ~/.codex/auth.json). Paste an OpenAI API key instead.",
+              "No Codex credential found on this machine (checked OPENAI_API_KEY and ~/.codex/auth.json). Log in with `codex login` and connect again, or paste an OpenAI API key.",
           };
         }
-        if ("unavailableReason" in found) {
-          return { status: "manual", provider, reason: found.unavailableReason };
-        }
-        const result = await validateCodexApiKey(found.value);
+        const result =
+          found.kind === "chatgpt"
+            ? validateCodexChatgptAuth(found.value)
+            : await validateCodexApiKey(found.value);
         if (!result.ok) {
           return {
             status: "manual",
@@ -360,7 +366,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
           };
         }
         await this.#saveCredential(() => {
-          this.config.agent.codexApiKey = found.value;
+          if (found.kind === "chatgpt") this.config.agent.codexAuthJson = found.value;
+          else this.config.agent.codexApiKey = found.value;
         });
         return {
           status: "connected",

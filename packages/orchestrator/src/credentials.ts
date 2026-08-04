@@ -105,6 +105,56 @@ export function validateAnthropicApiKey(apiKey: string): Promise<CredentialResul
   return validateAnthropicCredential(apiKey, "api-key");
 }
 
+/** Decode a JWT payload without verifying (we only read our own stored token). */
+function jwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const segment = token.split(".")[1];
+    if (!segment) return null;
+    return JSON.parse(Buffer.from(segment, "base64url").toString()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate a Codex CLI ChatGPT login (the raw ~/.codex/auth.json contents).
+ * There is no stable API to probe with a ChatGPT credential, so this checks
+ * the token set offline: shape, id_token identity, and expiry/refreshability.
+ */
+export function validateCodexChatgptAuth(raw: string): CredentialResult {
+  try {
+    const parsed = JSON.parse(raw) as {
+      tokens?: {
+        access_token?: string;
+        refresh_token?: string;
+        id_token?: string;
+      } | null;
+    };
+    const tokens = parsed.tokens;
+    if (!tokens?.access_token) {
+      return { ok: false, detail: "This Codex login has no usable tokens. Run `codex login` again." };
+    }
+    const access = jwtPayload(tokens.access_token);
+    const expired = typeof access?.exp === "number" && access.exp * 1000 < Date.now();
+    if (expired && !tokens.refresh_token) {
+      return {
+        ok: false,
+        detail: "The Codex login has expired and has no refresh token. Run `codex login` again.",
+      };
+    }
+    const id = tokens.id_token ? jwtPayload(tokens.id_token) : null;
+    const email = typeof id?.email === "string" ? id.email : undefined;
+    const auth = id?.["https://api.openai.com/auth"] as { chatgpt_plan_type?: string } | undefined;
+    const plan = auth?.chatgpt_plan_type;
+    const who = email ? `Connected as ${email}` : "Codex login verified";
+    const planNote = plan ? ` (ChatGPT ${plan})` : "";
+    const expiryNote = expired ? " — token expired; Codex will refresh it on first run" : "";
+    return { ok: true, detail: `${who}${planNote}${expiryNote}` };
+  } catch {
+    return { ok: false, detail: "Could not parse the Codex login file." };
+  }
+}
+
 /**
  * Verify an OpenAI/Codex key with a 1-token completion on the cheapest model;
  * accounts without that model fall back to a plain auth check.

@@ -63,8 +63,13 @@ export const configSchema = z.object({
       anthropicApiKey: z.string().default(""),
       /** Claude Code OAuth token (host-discovered), passed as CLAUDE_CODE_OAUTH_TOKEN. */
       claudeCodeOauthToken: z.string().default(""),
-      /** Passed to the sandboxed agent as OPENAI_API_KEY (for Codex agents). Empty = use host env. */
+      /** Passed to the sandboxed agent as OPENAI_API_KEY (for Codex agents). */
       codexApiKey: z.string().default(""),
+      /**
+       * Codex CLI ChatGPT login (the contents of ~/.codex/auth.json), for
+       * accounts without an API key. Mounted into the sandbox via CODEX_HOME.
+       */
+      codexAuthJson: z.string().default(""),
     })
     .prefault({}),
   sandbox: z
@@ -120,6 +125,7 @@ export function redactConfig(config: BreviConfig): BreviConfig {
       anthropicApiKey: mask(config.agent.anthropicApiKey),
       claudeCodeOauthToken: mask(config.agent.claudeCodeOauthToken),
       codexApiKey: mask(config.agent.codexApiKey),
+      codexAuthJson: mask(config.agent.codexAuthJson),
     },
     connect: { ...config.connect, linearClientSecret: mask(config.connect.linearClientSecret) },
   };

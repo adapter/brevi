@@ -69,7 +69,7 @@ const PROVIDERS: ProviderSpec[] = [
     inputLabel: "OpenAI API key",
     keyUrl: "https://platform.openai.com/api-keys",
     keyUrlLabel: "platform.openai.com",
-    connected: (c) => c.agent.codexApiKey !== "",
+    connected: (c) => c.agent.codexApiKey !== "" || c.agent.codexAuthJson !== "",
   },
 ];
 
