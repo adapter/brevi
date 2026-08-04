@@ -1,13 +1,15 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   BreviConfig,
   CredentialProvider,
   CredentialResult,
   CredentialsUpdateRequest,
+  GithubRepo,
+  RepoConfig,
 } from "@brevi/shared";
 import { api } from "../lib/api";
-import { Button, Plate } from "./Bits";
-import { Check, Close, External, Warn } from "./Icons";
+import { Button, Plate, RepoChip } from "./Bits";
+import { Check, Close, External, Pin, Warn } from "./Icons";
 
 interface ProviderSpec {
   id: CredentialProvider;
@@ -106,13 +108,16 @@ export function Connections({
           </p>
 
           {config ? (
-            <ul className="mt-4 flex flex-col gap-3">
-              {PROVIDERS.map((spec) => (
-                <li key={spec.id}>
-                  <ProviderRow spec={spec} config={config} onConfig={onConfig} />
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="mt-4 flex flex-col gap-3">
+                {PROVIDERS.map((spec) => (
+                  <li key={spec.id}>
+                    <ProviderRow spec={spec} config={config} onConfig={onConfig} />
+                  </li>
+                ))}
+              </ul>
+              <RepositoriesSection config={config} onConfig={onConfig} />
+            </>
           ) : (
             <p className="mt-4 text-[12.5px] leading-relaxed text-haze-700">
               Waiting for the orchestrator — connections can be edited once it answers.
@@ -235,5 +240,199 @@ function ProviderRow({
         <External className="size-2.5" />
       </a>
     </article>
+  );
+}
+
+/**
+ * Repo mappings, sourced from the connected GitHub account. Tickets resolve to
+ * a repo via a "repo:<key>" label, a project name, or the default mapping.
+ */
+function RepositoriesSection({
+  config,
+  onConfig,
+}: {
+  config: BreviConfig;
+  onConfig: (config: BreviConfig) => void;
+}) {
+  const githubConnected = config.github.token !== "";
+  const mapped = Object.entries(config.repos);
+
+  const [available, setAvailable] = useState<GithubRepo[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [pending, setPending] = useState(false);
+  const [mutateError, setMutateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!githubConnected) {
+      setAvailable(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadError(null);
+    api
+      .githubRepos()
+      .then((repos) => {
+        if (!cancelled) setAvailable(repos);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : "Could not list repos.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [githubConnected, config.github.token]);
+
+  const mappedRemotes = useMemo(() => new Set(mapped.map(([, repo]) => repo.remote)), [mapped]);
+  const candidates = useMemo(() => {
+    if (!available) return [];
+    const q = search.trim().toLowerCase();
+    return available
+      .filter((repo) => !mappedRemotes.has(repo.fullName))
+      .filter((repo) => q === "" || repo.fullName.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [available, mappedRemotes, search]);
+
+  const mutate = async (repos: Record<string, RepoConfig>, defaultRepo?: string) => {
+    setPending(true);
+    setMutateError(null);
+    try {
+      const response = await api.updateRepos({ repos, defaultRepo });
+      onConfig(response.config);
+    } catch (err) {
+      setMutateError(err instanceof Error ? err.message : "The orchestrator did not respond.");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const add = (repo: GithubRepo) => {
+    const name = repo.fullName.split("/")[1] ?? repo.fullName;
+    const key = config.repos[name] ? repo.fullName.replace("/", "-") : name;
+    void mutate(
+      { ...config.repos, [key]: { remote: repo.fullName, defaultBranch: repo.defaultBranch } },
+      config.defaultRepo ?? key,
+    );
+    setSearch("");
+  };
+
+  const remove = (key: string) => {
+    const next = { ...config.repos };
+    delete next[key];
+    const defaultRepo = config.defaultRepo === key ? undefined : config.defaultRepo;
+    void mutate(next, defaultRepo);
+  };
+
+  return (
+    <section className="mt-5 border-t border-ink-700 pt-4">
+      <div className="flex items-center gap-2">
+        <Plate className="text-haze-400">Repositories</Plate>
+        <span className="font-mono text-[11px] leading-none text-haze-700">{mapped.length}</span>
+      </div>
+      <p className="mt-1.5 text-[12px] leading-relaxed text-haze-400">
+        Tickets run against these checkouts. A <code className="font-mono text-[11px]">repo:&lt;key&gt;</code>{" "}
+        label or matching project name picks one; everything else uses the default.
+      </p>
+
+      {!githubConnected ? (
+        <p className="mt-3 text-[12.5px] leading-relaxed text-haze-700">
+          Connect GitHub above to pick repositories from your account.
+        </p>
+      ) : (
+        <>
+          {mapped.length > 0 && (
+            <ul className="mt-3 flex flex-col gap-2">
+              {mapped.map(([key, repo]) => (
+                <li
+                  key={key}
+                  className="strip flex items-center gap-2 px-2.5 py-2"
+                >
+                  <RepoChip repo={key} />
+                  <span className="min-w-0 truncate font-mono text-[11px] text-haze-400">
+                    {repo.remote}
+                  </span>
+                  <span className="font-mono text-[10px] text-haze-700">{repo.defaultBranch}</span>
+                  <span className="ml-auto flex items-center gap-1.5">
+                    {config.defaultRepo === key ? (
+                      <span className="plate inline-flex items-center gap-1 rounded-[4px] border border-ember-600/40 bg-ember-500/10 px-1.5 py-1 text-ember-500">
+                        <Pin className="size-2.5" />
+                        Default
+                      </span>
+                    ) : (
+                      <Button
+                        onClick={() => void mutate(config.repos, key)}
+                        disabled={pending}
+                        title="Unmatched tickets run against the default repo"
+                      >
+                        Make default
+                      </Button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => remove(key)}
+                      disabled={pending}
+                      aria-label={`Remove ${key}`}
+                      className="rounded-[4px] p-1 text-haze-700 hover:bg-ink-750 hover:text-rust-400"
+                    >
+                      <Close className="size-3" />
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="mt-3">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={available ? "Add a repository — search your account" : "Loading repositories…"}
+              disabled={!available}
+              spellCheck={false}
+              className="h-8 w-full rounded-[4px] border border-ink-600 bg-ink-950/70 px-2.5 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 focus:border-haze-600 focus:outline-none disabled:opacity-60"
+            />
+            {loadError && (
+              <p className="mt-2 flex items-start gap-1.5 text-[12px] text-rust-400">
+                <Warn className="mt-px size-3 shrink-0" />
+                {loadError}
+              </p>
+            )}
+            {available && candidates.length > 0 && (
+              <ul className="mt-2 overflow-hidden rounded-[5px] border border-ink-600">
+                {candidates.map((repo) => (
+                  <li key={repo.fullName} className="border-b border-ink-700 last:border-b-0">
+                    <button
+                      type="button"
+                      onClick={() => add(repo)}
+                      disabled={pending}
+                      className="flex w-full items-center gap-2 bg-ink-900 px-2.5 py-2 text-left hover:bg-ink-750"
+                    >
+                      <span className="min-w-0 truncate font-mono text-[12px] text-haze-100">
+                        {repo.fullName}
+                      </span>
+                      {repo.private && <Plate className="text-haze-700">private</Plate>}
+                      <span className="ml-auto font-mono text-[10px] text-haze-700">
+                        {repo.defaultBranch}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {available && search.trim() !== "" && candidates.length === 0 && (
+              <p className="mt-2 text-[12px] text-haze-700">No unmapped repos match.</p>
+            )}
+          </div>
+
+          {mutateError && (
+            <p className="mt-2 flex items-start gap-1.5 text-[12px] text-rust-400">
+              <Warn className="mt-px size-3 shrink-0" />
+              {mutateError}
+            </p>
+          )}
+        </>
+      )}
+    </section>
   );
 }

@@ -13,6 +13,7 @@ import {
   type ClientMessage,
   type CredentialsUpdateRequest,
   type HealthResponse,
+  type ReposUpdateRequest,
   type Run,
   type RunEvent,
   type ServerMessage,
@@ -188,6 +189,31 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig): Hono {
       return c.json(await orchestrator.updateCredentials(request));
     } catch (error) {
       return c.json({ error: errorMessage(error) }, 500);
+    }
+  });
+
+  app.get("/api/github/repos", async (c) => {
+    try {
+      return c.json(await orchestrator.listGithubRepos());
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.put("/api/settings/repos", async (c) => {
+    let body: ReposUpdateRequest;
+    try {
+      body = (await c.req.json()) as ReposUpdateRequest;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    if (typeof body.repos !== "object" || body.repos === null || Array.isArray(body.repos)) {
+      return c.json({ error: "repos must be an object of key -> repo config" }, 400);
+    }
+    try {
+      return c.json(await orchestrator.updateRepos(body));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }
   });
 

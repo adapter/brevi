@@ -2,10 +2,15 @@ import { EventEmitter } from "node:events";
 import {
   CONFIG_PATH,
   redactConfig,
+  repoConfigSchema,
   type BreviConfig,
   type CredentialResult,
   type CredentialsUpdateRequest,
   type CredentialsUpdateResponse,
+  type GithubRepo,
+  type RepoConfig,
+  type ReposUpdateRequest,
+  type ReposUpdateResponse,
   type Run,
   type RunEvent,
   type Ticket,
@@ -18,6 +23,7 @@ import {
   validateGithubToken,
   validateLinearApiKey,
 } from "./credentials.js";
+import { listRepos } from "./github.js";
 import { LinearService } from "./linear.js";
 import { executeRun } from "./runner.js";
 import { ACTIVE_STATUSES, RunStore, isTerminal } from "./state.js";
@@ -210,6 +216,45 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       }
     }
     return { results, config: redactConfig(this.config) };
+  }
+
+  /** Repos visible to the connected GitHub token, for the dashboard's picker. */
+  async listGithubRepos(): Promise<GithubRepo[]> {
+    if (!this.config.github.token) {
+      throw new OrchestratorError("invalid", "GitHub is not connected");
+    }
+    return listRepos(this.config.github.token);
+  }
+
+  /** Replace the repo mappings from the dashboard and re-resolve tickets. */
+  async updateRepos(request: ReposUpdateRequest): Promise<ReposUpdateResponse> {
+    const repos: Record<string, RepoConfig> = {};
+    for (const [key, value] of Object.entries(request.repos ?? {})) {
+      const trimmed = key.trim();
+      if (!trimmed) throw new OrchestratorError("invalid", "repo keys must be non-empty");
+      const parsed = repoConfigSchema.safeParse(value);
+      if (!parsed.success) {
+        throw new OrchestratorError(
+          "invalid",
+          `repo "${trimmed}": ${parsed.error.issues[0]?.message ?? "invalid"}`,
+        );
+      }
+      repos[trimmed] = parsed.data;
+    }
+    let defaultRepo = request.defaultRepo?.trim() || undefined;
+    if (defaultRepo && !repos[defaultRepo]) {
+      throw new OrchestratorError("invalid", `defaultRepo "${defaultRepo}" is not a repo key`);
+    }
+    // Losing the default silently would strand tickets; fall back to any repo.
+    if (!defaultRepo) defaultRepo = Object.keys(repos)[0];
+
+    this.config.repos = repos;
+    this.config.defaultRepo = defaultRepo;
+    await saveConfig(this.config, this.#configPath);
+    this.emit("config", redactConfig(this.config));
+    this.#warnedNoRepo.clear();
+    void this.poll(); // Tickets may now resolve to a repo.
+    return { config: redactConfig(this.config) };
   }
 
   /** Cancel a queued or active run. Terminal runs are returned unchanged. */

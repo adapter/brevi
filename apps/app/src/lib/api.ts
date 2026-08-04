@@ -1,7 +1,10 @@
 import type {
   CredentialsUpdateRequest,
   CredentialsUpdateResponse,
+  GithubRepo,
   HealthResponse,
+  ReposUpdateRequest,
+  ReposUpdateResponse,
   Run,
   RunEvent,
   Ticket,
@@ -32,6 +35,13 @@ export const api = {
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
   updateCredentials: (request: CredentialsUpdateRequest) =>
     json<CredentialsUpdateResponse>("/api/settings/credentials", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }),
+  githubRepos: () => json<GithubRepo[]>("/api/github/repos"),
+  updateRepos: (request: ReposUpdateRequest) =>
+    json<ReposUpdateResponse>("/api/settings/repos", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),

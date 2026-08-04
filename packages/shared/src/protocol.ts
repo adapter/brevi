@@ -1,4 +1,4 @@
-import type { BreviConfig } from "./config.js";
+import type { BreviConfig, RepoConfig } from "./config.js";
 import type { Run, RunEvent, Ticket } from "./types.js";
 
 /**
@@ -17,6 +17,11 @@ import type { Run, RunEvent, Ticket } from "./types.js";
  *        body: CredentialsUpdateRequest. Each provided key is validated against
  *        its provider before being saved; invalid keys are rejected per-field
  *        and valid ones in the same request are still applied.
+ *   GET  /api/github/repos               -> GithubRepo[]   (repos visible to the
+ *        connected GitHub token, most recently pushed first; 400 when GitHub
+ *        isn't connected)
+ *   PUT  /api/settings/repos             -> ReposUpdateResponse
+ *        body: ReposUpdateRequest. Replaces the repo mappings wholesale.
  *   GET  /ws                             -> WebSocket, messages below
  *
  * Everything else serves the built dashboard (SPA fallback to index.html).
@@ -49,6 +54,28 @@ export interface CredentialsUpdateResponse {
   /** One entry per provider present in the request. */
   results: Partial<Record<CredentialProvider, CredentialResult>>;
   /** Redacted config after applying the valid keys. */
+  config: BreviConfig;
+}
+
+/** A repository visible to the connected GitHub token. */
+export interface GithubRepo {
+  /** "owner/name". */
+  fullName: string;
+  defaultBranch: string;
+  private: boolean;
+  description: string;
+  /** ISO timestamp of the last push. */
+  pushedAt: string;
+}
+
+/** Replaces config.repos and defaultRepo wholesale. */
+export interface ReposUpdateRequest {
+  repos: Record<string, RepoConfig>;
+  defaultRepo?: string;
+}
+
+export interface ReposUpdateResponse {
+  /** Redacted config after the update. */
   config: BreviConfig;
 }
 

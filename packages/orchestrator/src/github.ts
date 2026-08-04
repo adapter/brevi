@@ -1,4 +1,5 @@
 import { Octokit } from "octokit";
+import type { GithubRepo } from "@brevi/shared";
 
 export interface RemoteParts {
   owner: string;
@@ -22,6 +23,23 @@ export function authenticatedRemote(remote: string, token: string): string {
 export function plainRemote(remote: string): string {
   const { owner, name } = parseRemote(remote);
   return `https://github.com/${owner}/${name}.git`;
+}
+
+/** Repos visible to the token, most recently pushed first. */
+export async function listRepos(token: string): Promise<GithubRepo[]> {
+  const octokit = new Octokit({ auth: token });
+  const repos = await octokit.paginate(octokit.rest.repos.listForAuthenticatedUser, {
+    sort: "pushed",
+    direction: "desc",
+    per_page: 100,
+  });
+  return repos.slice(0, 300).map((repo) => ({
+    fullName: repo.full_name,
+    defaultBranch: repo.default_branch ?? "main",
+    private: repo.private,
+    description: repo.description ?? "",
+    pushedAt: repo.pushed_at ?? "",
+  }));
 }
 
 export interface CreatePullRequestOptions {
