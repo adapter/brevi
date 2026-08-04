@@ -5,6 +5,7 @@
     "": {
       "name": "brevi",
       "devDependencies": {
+        "@types/node": "^22.15.3",
         "prettier": "^3.7.4",
         "turbo": "^2.10.8",
         "typescript": "5.9.2",
