@@ -88,14 +88,7 @@ export default function App() {
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
-        <SiteHeader
-          conn={conn}
-          health={health}
-          config={config}
-          run={selectedRun ?? null}
-          showHint={!offlineCard}
-          onBack={() => openRun(null)}
-        />
+        <SiteHeader conn={conn} health={health} config={config} showHint={!offlineCard} />
 
         {notice && (
           <Alert

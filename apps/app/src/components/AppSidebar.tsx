@@ -8,7 +8,6 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
-  SidebarRail,
 } from "@/components/ui/sidebar";
 import { Card } from "@/components/ui/card";
 import { STATUS_TONE } from "../lib/status";
@@ -46,7 +45,7 @@ export function AppSidebar({
   const linearConnected = config === null || config.linear.apiKey !== "";
 
   return (
-    <Sidebar collapsible="offcanvas">
+    <Sidebar collapsible="none" className="h-svh shrink-0 border-r border-sidebar-border">
       <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
         <div className="flex items-center gap-2.5">
           <img src="/logo.png" alt="" className="size-[22px]" />
@@ -122,7 +121,6 @@ export function AppSidebar({
           )}
         </Button>
       </SidebarFooter>
-      <SidebarRail />
     </Sidebar>
   );
 }

@@ -1,13 +1,5 @@
-import type { BreviConfig, HealthResponse, Run } from "@brevi/shared";
+import type { BreviConfig, HealthResponse } from "@brevi/shared";
 import { Badge } from "@/components/ui/badge";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -16,8 +8,6 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Separator } from "@/components/ui/separator";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import type { Connection } from "../lib/useOrchestrator";
 import { useTheme, type ThemePref } from "../lib/useTheme";
 import { Command, Plate } from "./Bits";
@@ -34,57 +24,20 @@ export function SiteHeader({
   conn,
   health,
   config,
-  run,
   showHint,
-  onBack,
 }: {
   conn: Connection;
   health: HealthResponse | null;
   config: BreviConfig | null;
-  /** The open run, if the detail view is showing. */
-  run: Run | null;
   /** Suppressed when the main pane is already showing the offline card. */
   showHint: boolean;
-  onBack: () => void;
 }) {
   const c = CONNECTION[conn];
   const provider = health?.sandboxProvider ?? config?.sandbox.provider;
 
   return (
-    <header className="relative z-20 flex h-14 shrink-0 items-center gap-3 border-b border-ink-700 bg-ink-900/80 px-4 backdrop-blur-md">
-      <SidebarTrigger className="-ml-1 text-haze-400 hover:text-haze-50" />
-      <Separator orientation="vertical" className="h-4 self-center bg-ink-600" />
-
-      <Breadcrumb>
-        <BreadcrumbList className="flex-nowrap">
-          <BreadcrumbItem>
-            <Plate className="text-haze-700">Mission control</Plate>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            {run ? (
-              <BreadcrumbLink
-                onClick={onBack}
-                className="plate cursor-pointer text-haze-400 hover:text-haze-50"
-              >
-                Runs
-              </BreadcrumbLink>
-            ) : (
-              <BreadcrumbPage className="plate text-haze-300">Runs</BreadcrumbPage>
-            )}
-          </BreadcrumbItem>
-          {run && (
-            <>
-              <BreadcrumbSeparator />
-              <BreadcrumbItem>
-                <BreadcrumbPage className="font-plate text-[11px] tracking-[0.06em] text-haze-200">
-                  {run.ticket.identifier}
-                </BreadcrumbPage>
-              </BreadcrumbItem>
-            </>
-          )}
-        </BreadcrumbList>
-      </Breadcrumb>
+    <header className="relative z-20 flex h-14 shrink-0 items-center gap-2.5 border-b border-ink-700 bg-ink-900/80 px-4 backdrop-blur-md">
+      <Plate className="text-haze-700">Mission control</Plate>
 
       <div className="ml-auto flex items-center gap-2.5">
         {conn === "offline" && showHint && (
