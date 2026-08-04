@@ -30,7 +30,16 @@ export default function App() {
     applyConfig,
   } = useOrchestrator();
 
-  const [connectionsOpen, setConnectionsOpen] = useState(false);
+  // Right rail, like the queue on the left. Visible by default on first run;
+  // the choice sticks across sessions.
+  const [connectionsOpen, setConnectionsOpen] = useState<boolean>(() => {
+    const saved = localStorage.getItem("brevi.connections.open");
+    return saved === null ? true : saved === "1";
+  });
+  const toggleConnections = (next: boolean) => {
+    setConnectionsOpen(next);
+    localStorage.setItem("brevi.connections.open", next ? "1" : "0");
+  };
 
   const anyActive = useMemo(() => runs.some((r) => isActive(r.status)), [runs]);
   const now = useNow(anyActive);
@@ -61,7 +70,7 @@ export default function App() {
         config={config}
         busy={anyActive}
         showHint={!offlineCard}
-        onOpenConnections={() => setConnectionsOpen(true)}
+        onOpenConnections={() => toggleConnections(!connectionsOpen)}
       />
 
       {notice && (
@@ -79,7 +88,13 @@ export default function App() {
         </div>
       )}
 
-      <main className="grid min-h-0 flex-1 grid-rows-[minmax(0,38vh)_minmax(0,1fr)] lg:grid-cols-[340px_minmax(0,1fr)] lg:grid-rows-1">
+      <main
+        className={`grid min-h-0 flex-1 lg:grid-rows-1 ${
+          connectionsOpen
+            ? "grid-rows-[minmax(0,30vh)_minmax(0,1fr)_minmax(0,38vh)] lg:grid-cols-[340px_minmax(0,1fr)_380px]"
+            : "grid-rows-[minmax(0,38vh)_minmax(0,1fr)] lg:grid-cols-[340px_minmax(0,1fr)]"
+        }`}
+      >
         <QueueRail
           tickets={tickets}
           activeByTicket={activeByTicket}
@@ -88,7 +103,7 @@ export default function App() {
           busy={busy}
           onRun={(id) => void handleRun(id)}
           onOpenRun={openRun}
-          onOpenConnections={() => setConnectionsOpen(true)}
+          onOpenConnections={() => toggleConnections(true)}
         />
 
         <section className="flex min-h-0 flex-col">
@@ -111,14 +126,14 @@ export default function App() {
             />
           )}
         </section>
-      </main>
 
-      <Connections
-        open={connectionsOpen}
-        config={config}
-        onClose={() => setConnectionsOpen(false)}
-        onConfig={applyConfig}
-      />
+        <Connections
+          open={connectionsOpen}
+          config={config}
+          onClose={() => toggleConnections(false)}
+          onConfig={applyConfig}
+        />
+      </main>
     </div>
   );
 }

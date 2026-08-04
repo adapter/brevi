@@ -9,7 +9,7 @@ import type {
 } from "@brevi/shared";
 import { api } from "../lib/api";
 import { Button, Plate, RepoChip } from "./Bits";
-import { Check, Close, External, Pin, Warn } from "./Icons";
+import { Check, ChevronRight, Close, External, Pin, Warn } from "./Icons";
 
 /** How the "Connect" button acquires a credential, shown as a hint. */
 type ConnectHint = string;
@@ -73,7 +73,11 @@ const PROVIDERS: ProviderSpec[] = [
   },
 ];
 
-/** Slide-over panel to connect Linear, GitHub, and agent API keys. */
+/**
+ * Right rail to connect Linear, GitHub, and agent credentials — the mirror of
+ * the queue rail on the left, collapsible via its header chevron (or the
+ * header's Connections button).
+ */
 export function Connections({
   open,
   config,
@@ -87,53 +91,56 @@ export function Connections({
 }) {
   if (!open) return null;
 
+  const connectedCount = config
+    ? PROVIDERS.filter((spec) => spec.connected(config)).length
+    : 0;
+
   return (
-    <div className="fixed inset-0 z-40" role="dialog" aria-label="Connections">
-      <button
-        type="button"
-        aria-label="Close connections"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-ink-950/60 backdrop-blur-[2px]"
-      />
-      <aside className="absolute inset-y-0 right-0 flex w-full max-w-[400px] flex-col border-l border-ink-700 bg-ink-900 shadow-2xl">
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-ink-700 px-4">
-          <Plate className="text-haze-400">Connections</Plate>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="ml-auto rounded-[4px] p-1.5 text-haze-400 hover:bg-ink-750 hover:text-haze-50"
-          >
-            <Close className="size-3.5" />
-          </button>
-        </header>
+    <aside
+      aria-label="Connections"
+      className="flex min-h-0 flex-col border-t border-ink-700 bg-ink-900/50 lg:border-t-0 lg:border-l"
+    >
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-ink-700/70 px-4">
+        <Plate className="text-haze-400">Connections</Plate>
+        <span className="font-mono text-[11px] leading-none text-haze-700">
+          {config ? `${connectedCount}/${PROVIDERS.length}` : "–"}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Collapse connections"
+          title="Collapse"
+          className="ml-auto rounded-[4px] p-1 text-haze-700 hover:bg-ink-750 hover:text-haze-50"
+        >
+          <ChevronRight className="size-3.5" />
+        </button>
+      </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <p className="text-[12.5px] leading-relaxed text-haze-400">
-            Keys are validated with the provider, then stored locally in{" "}
-            <code className="font-mono text-[11.5px] text-haze-300">~/.brevi/config.json</code>.
-            They never leave this machine.
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <p className="px-1 text-[12px] leading-relaxed text-haze-700">
+          Credentials are validated with the provider, then stored in{" "}
+          <code className="font-mono text-[11px] text-haze-400">~/.brevi/config.json</code>. They
+          never leave this machine.
+        </p>
+
+        {config ? (
+          <>
+            <ul className="mt-3 flex flex-col gap-2.5">
+              {PROVIDERS.map((spec) => (
+                <li key={spec.id}>
+                  <ProviderRow spec={spec} config={config} onConfig={onConfig} />
+                </li>
+              ))}
+            </ul>
+            <RepositoriesSection config={config} onConfig={onConfig} />
+          </>
+        ) : (
+          <p className="mt-3 px-1 text-[12.5px] leading-relaxed text-haze-700">
+            Waiting for the orchestrator — connections can be edited once it answers.
           </p>
-
-          {config ? (
-            <>
-              <ul className="mt-4 flex flex-col gap-3">
-                {PROVIDERS.map((spec) => (
-                  <li key={spec.id}>
-                    <ProviderRow spec={spec} config={config} onConfig={onConfig} />
-                  </li>
-                ))}
-              </ul>
-              <RepositoriesSection config={config} onConfig={onConfig} />
-            </>
-          ) : (
-            <p className="mt-4 text-[12.5px] leading-relaxed text-haze-700">
-              Waiting for the orchestrator — connections can be edited once it answers.
-            </p>
-          )}
-        </div>
-      </aside>
-    </div>
+        )}
+      </div>
+    </aside>
   );
 }
 
