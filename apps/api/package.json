@@ -1,0 +1,24 @@
+{
+  "name": "@brevi/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "brevi's hosted OAuth application backend (api.brevi.dev), a Hono app on Cloudflare Workers.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "tsc --noEmit",
+    "check-types": "tsc --noEmit",
+    "lint": "oxlint --max-warnings 0",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260804.1",
+    "@repo/typescript-config": "*",
+    "oxlint": "^1.22.0",
+    "typescript": "5.9.2",
+    "wrangler": "^4.118.0"
+  }
+}

@@ -84,9 +84,15 @@ export const configSchema = z.object({
   /** OAuth app settings powering the dashboard's one-click Connect flows. */
   connect: z
     .object({
-      /** GitHub OAuth app client id (device flow). Fallback: BREVI_GITHUB_CLIENT_ID. */
+      /**
+       * brevi's hosted OAuth backend, used when no personal OAuth app is
+       * configured below. Point at your own deployment of apps/api to
+       * self-host; empty disables hosted flows entirely.
+       */
+      apiBase: z.string().default("https://api.brevi.dev"),
+      /** Personal GitHub OAuth app client id (device flow), overrides apiBase. */
       githubClientId: z.string().default(""),
-      /** Linear OAuth app credentials (redirect flow). Fallbacks: BREVI_LINEAR_CLIENT_ID/SECRET. */
+      /** Personal Linear OAuth app credentials (redirect flow), override apiBase. */
       linearClientId: z.string().default(""),
       linearClientSecret: z.string().default(""),
     })

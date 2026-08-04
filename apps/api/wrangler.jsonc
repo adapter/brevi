@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "brevi-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "routes": [{ "pattern": "api.brevi.dev", "custom_domain": true }],
+  "observability": { "enabled": true }
+  // Secrets (set via `wrangler secret put <NAME>`):
+  //   GITHUB_CLIENT_ID      — brevi's GitHub OAuth app (device flow enabled)
+  //   LINEAR_CLIENT_ID      — brevi's Linear OAuth app
+  //   LINEAR_CLIENT_SECRET  — its client secret (never leaves this worker)
+  // The Linear app must register redirect URIs of the form
+  //   http://localhost:<port>/api/connect/linear/callback
+  // for the ports brevi uses (default 4400).
+}

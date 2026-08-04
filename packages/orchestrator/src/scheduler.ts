@@ -26,6 +26,7 @@ import {
   discoverGithubToken,
   exchangeLinearCode,
   githubClientId,
+  hostedApiReachable,
   linearOauthApp,
   pollGithubDeviceFlow,
   startGithubDeviceFlow,
@@ -279,8 +280,13 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
           }
         }
         const clientId = githubClientId(this.config);
-        if (clientId) {
-          const session = await startGithubDeviceFlow(clientId);
+        const deviceSource = clientId
+          ? { clientId }
+          : (await hostedApiReachable(this.config.connect.apiBase))
+            ? { apiBase: this.config.connect.apiBase }
+            : null;
+        if (deviceSource) {
+          const session = await startGithubDeviceFlow(deviceSource);
           this.#githubDevice = session;
           return {
             status: "device",
@@ -295,13 +301,21 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
           status: "manual",
           provider,
           reason:
-            "No GitHub CLI login found. Run `gh auth login` and connect again, set connect.githubClientId in ~/.brevi/config.json for one-click device login, or paste a token.",
+            "No GitHub CLI login found and the brevi connect service is unreachable. Run `gh auth login` and connect again, or paste a token.",
         };
       }
       case "linear": {
         const app = linearOauthApp(this.config);
         if (app) {
-          const { session, url } = startLinearOauth(app, serverUrl);
+          const { session, url } = startLinearOauth({ app, serverUrl });
+          this.#linearOauth = session;
+          return { status: "redirect", provider, url };
+        }
+        if (await hostedApiReachable(this.config.connect.apiBase)) {
+          const { session, url } = startLinearOauth({
+            apiBase: this.config.connect.apiBase,
+            port: this.config.server.port,
+          });
           this.#linearOauth = session;
           return { status: "redirect", provider, url };
         }
@@ -309,7 +323,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
           status: "manual",
           provider,
           reason:
-            "One-click Linear connect needs an OAuth app (connect.linearClientId/linearClientSecret in ~/.brevi/config.json). Paste a personal API key instead.",
+            "The brevi connect service is unreachable and no personal OAuth app is configured (connect.linearClientId/Secret). Paste a personal API key instead.",
         };
       }
       case "anthropic": {

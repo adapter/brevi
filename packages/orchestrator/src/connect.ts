@@ -116,6 +116,19 @@ export async function discoverCodexCredential(): Promise<DiscoveredCredential | 
   return null;
 }
 
+// --- Hosted OAuth backend (apps/api on api.brevi.dev) ------------------------
+
+/** Quick liveness probe so we never hand the dashboard a dead flow. */
+export async function hostedApiReachable(apiBase: string): Promise<boolean> {
+  if (!apiBase) return false;
+  try {
+    const res = await fetch(`${apiBase}/health`, { signal: AbortSignal.timeout(3000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // --- GitHub device flow ------------------------------------------------------
 
 export interface GithubDeviceSession {
@@ -125,34 +138,43 @@ export interface GithubDeviceSession {
   /** Seconds between polls (GitHub raises this on slow_down). */
   interval: number;
   expiresAt: number;
-  clientId: string;
+  /** Exactly one of these is set: a personal OAuth app, or the hosted backend. */
+  clientId?: string;
+  apiBase?: string;
 }
 
 export function githubClientId(config: BreviConfig): string {
   return config.connect.githubClientId;
 }
 
-export async function startGithubDeviceFlow(clientId: string): Promise<GithubDeviceSession> {
-  const res = await fetch("https://github.com/login/device/code", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ client_id: clientId, scope: "repo" }),
-  });
+interface DeviceCodeGrant {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+}
+
+export async function startGithubDeviceFlow(
+  source: { clientId: string } | { apiBase: string },
+): Promise<GithubDeviceSession> {
+  const res =
+    "clientId" in source
+      ? await fetch("https://github.com/login/device/code", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ client_id: source.clientId, scope: "repo" }),
+        })
+      : await fetch(`${source.apiBase}/oauth/github/device/code`, { method: "POST" });
   if (!res.ok) throw new Error(`GitHub device authorization failed (${res.status})`);
-  const body = (await res.json()) as {
-    device_code: string;
-    user_code: string;
-    verification_uri: string;
-    expires_in: number;
-    interval: number;
-  };
+  const body = (await res.json()) as DeviceCodeGrant;
   return {
     deviceCode: body.device_code,
     userCode: body.user_code,
     verificationUri: body.verification_uri,
     interval: body.interval,
     expiresAt: Date.now() + body.expires_in * 1000,
-    clientId,
+    ...source,
   };
 }
 
@@ -167,15 +189,21 @@ export async function pollGithubDeviceFlow(
   if (Date.now() > session.expiresAt) {
     return { state: "error", detail: "The device code expired. Start over." };
   }
-  const res = await fetch("https://github.com/login/oauth/access_token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      client_id: session.clientId,
-      device_code: session.deviceCode,
-      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-    }),
-  });
+  const res = session.apiBase
+    ? await fetch(`${session.apiBase}/oauth/github/device/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_code: session.deviceCode }),
+      })
+    : await fetch("https://github.com/login/oauth/access_token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          client_id: session.clientId,
+          device_code: session.deviceCode,
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        }),
+      });
   const body = (await res.json()) as { access_token?: string; error?: string; interval?: number };
   if (body.access_token) return { state: "token", token: body.access_token };
   switch (body.error) {
@@ -209,26 +237,36 @@ export function linearOauthApp(config: BreviConfig): LinearOauthApp | null {
 
 export interface LinearOauthSession {
   state: string;
-  redirectUri: string;
-  app: LinearOauthApp;
   expiresAt: number;
+  /** Exactly one of these is set: a personal OAuth app, or the hosted backend. */
+  app?: { redirectUri: string } & LinearOauthApp;
+  hosted?: { apiBase: string; port: number };
 }
 
-export function startLinearOauth(app: LinearOauthApp, serverUrl: string): {
-  session: LinearOauthSession;
-  url: string;
-} {
+export function startLinearOauth(
+  source: { app: LinearOauthApp; serverUrl: string } | { apiBase: string; port: number },
+): { session: LinearOauthSession; url: string } {
   const state = randomBytes(16).toString("hex");
-  const redirectUri = `${serverUrl}/api/connect/linear/callback`;
-  const url = new URL("https://linear.app/oauth/authorize");
-  url.searchParams.set("client_id", app.clientId);
-  url.searchParams.set("redirect_uri", redirectUri);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", "read,write");
+  const expiresAt = Date.now() + 10 * 60 * 1000;
+  if ("app" in source) {
+    const redirectUri = `${source.serverUrl}/api/connect/linear/callback`;
+    const url = new URL("https://linear.app/oauth/authorize");
+    url.searchParams.set("client_id", source.app.clientId);
+    url.searchParams.set("redirect_uri", redirectUri);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("scope", "read,write");
+    url.searchParams.set("state", state);
+    url.searchParams.set("actor", "user");
+    return {
+      session: { state, expiresAt, app: { ...source.app, redirectUri } },
+      url: url.toString(),
+    };
+  }
+  const url = new URL(`${source.apiBase}/oauth/linear/authorize`);
   url.searchParams.set("state", state);
-  url.searchParams.set("actor", "user");
+  url.searchParams.set("port", String(source.port));
   return {
-    session: { state, redirectUri, app, expiresAt: Date.now() + 10 * 60 * 1000 },
+    session: { state, expiresAt, hosted: { apiBase: source.apiBase, port: source.port } },
     url: url.toString(),
   };
 }
@@ -237,17 +275,23 @@ export async function exchangeLinearCode(
   session: LinearOauthSession,
   code: string,
 ): Promise<string> {
-  const res = await fetch("https://api.linear.app/oauth/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      code,
-      redirect_uri: session.redirectUri,
-      client_id: session.app.clientId,
-      client_secret: session.app.clientSecret,
-      grant_type: "authorization_code",
-    }),
-  });
+  const res = session.hosted
+    ? await fetch(`${session.hosted.apiBase}/oauth/linear/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, port: session.hosted.port }),
+      })
+    : await fetch("https://api.linear.app/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code,
+          redirect_uri: session.app?.redirectUri ?? "",
+          client_id: session.app?.clientId ?? "",
+          client_secret: session.app?.clientSecret ?? "",
+          grant_type: "authorization_code",
+        }),
+      });
   if (!res.ok) throw new Error(`Linear token exchange failed (${res.status})`);
   const body = (await res.json()) as { access_token?: string };
   if (!body.access_token) throw new Error("Linear returned no access token");

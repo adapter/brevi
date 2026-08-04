@@ -1,40 +1,69 @@
 ---
-title: Welcome to Starlight
-description: Get started building your docs site with Starlight.
-template: splash # Remove or comment out this line to display the site sidebar on this page.
+title: brevi
+description: A local sandbox and orchestrator for coding agents — tag a Linear ticket with @brevi and get back a pull request with a demo.
+template: splash
 hero:
-  tagline: Congrats on setting up a new Starlight project!
-  image:
-    file: ../../assets/houston.webp
+  tagline: A local sandbox and orchestrator for coding agents. Linear tickets in, pull requests with demos out — all executed on your own machine.
   actions:
-    - text: Example Guide
-      link: /guides/example/
+    - text: Get started
+      link: /getting-started/
       icon: right-arrow
-    - text: Read the Starlight docs
-      link: https://starlight.astro.build
+    - text: View on GitHub
+      link: https://github.com/adapter/brevi
       icon: external
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-## Next steps
+## What brevi does
 
-<CardGrid stagger>
-	<Card title="Update content" icon="pencil">
-		Edit `src/content/docs/index.mdx` to see this page change.
+You connect your machine to Linear and GitHub, then tag a ticket with **`@brevi`** (or add the `brevi` label) and assign it to yourself. brevi polls Linear, picks the ticket up, and runs a coding agent against a checkout of the mapped repository inside a sandbox:
+
+- **Implementation tickets** → a branch `brevi/<ticket-id>` is force-pushed and a pull request is opened, including a **Demo** section with screenshots or a recording the agent captured.
+- **SPIKE tickets** → no code changes; the research is posted back to the Linear issue as a comment.
+
+Everything runs locally. All state lives under `~/.brevi/` — config, run history, artifacts, and VM images.
+
+<CardGrid>
+	<Card title="One-click connections" icon="approve-check">
+		brevi finds credentials that are already on your machine — the `gh` CLI, your Claude
+		Code login, a Codex/ChatGPT login — verifies them live, and stores them. No copying
+		keys, no environment variables.
 	</Card>
-	<Card title="Change page layout" icon="document">
-		Delete `template: splash` in `src/content/docs/index.mdx` to display a
-		sidebar on this page.
+	<Card title="Real isolation" icon="seti:shell">
+		On Linux with KVM each run boots its own Firecracker microVM with a private
+		network. Elsewhere a process sandbox keeps development moving.
 	</Card>
-	<Card title="Add new content" icon="add-document">
-		Add Markdown or MDX files to `src/content/docs` to create new pages.
+	<Card title="Demos, not just diffs" icon="laptop">
+		Implementation runs are required to produce evidence under `.brevi/demo/` — real
+		screenshots or a recording — which brevi embeds in the pull request body.
 	</Card>
-	<Card title="Configure your site" icon="setting">
-		Edit your `sidebar` and other config in `astro.config.mjs`.
-	</Card>
-	<Card title="Read the docs" icon="open-book">
-		Learn more in [the Starlight Docs](https://starlight.astro.build/).
+	<Card title="A live dashboard" icon="rocket">
+		`brevi ui` serves a dashboard on `localhost:4400`: the eligible ticket queue,
+		streaming agent output per run, artifacts, and the Connections rail.
 	</Card>
 </CardGrid>
+
+## Start here
+
+<LinkCard
+	title="Getting started"
+	href="/getting-started/"
+	description="Install brevi from the repo, pick a sandbox provider, connect your accounts, and run your first ticket."
+/>
+<LinkCard
+	title="Connections"
+	href="/guides/connections/"
+	description="How each Connect button acquires a credential, and where credentials are stored."
+/>
+<LinkCard
+	title="Tickets and runs"
+	href="/guides/tickets/"
+	description="Eligibility rules, repository routing, what a run produces, and when a ticket runs again."
+/>
+<LinkCard
+	title="Configuration reference"
+	href="/reference/configuration/"
+	description="Every field in ~/.brevi/config.json."
+/>

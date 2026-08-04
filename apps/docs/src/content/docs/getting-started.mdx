@@ -1,0 +1,123 @@
+---
+title: Getting started
+description: Install brevi from the repository, pick a sandbox provider, connect Linear, GitHub and a coding agent, and run your first ticket.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+brevi runs on your machine: a CLI, an orchestrator that polls Linear, and a dashboard served from the same process. This page takes you from a clone to a first pull request.
+
+## Prerequisites
+
+- **Bun** (the repo is a Bun workspace + Turborepo) and **Node.js 18+**.
+- **git**, and a GitHub account with access to the repositories you want brevi to work on.
+- A **Linear** account, with issues you can assign to yourself.
+- A coding agent credential brevi can find or that you can paste: a Claude Code login / Anthropic API key, or a Codex (ChatGPT or OpenAI) login.
+- Optional: **Linux with `/dev/kvm`** if you want Firecracker microVM isolation. See [Sandboxes](/guides/sandboxes/).
+
+## Install
+
+The packages are not published to npm yet, so run the CLI from a clone of the repo:
+
+```sh
+git clone https://github.com/adapter/brevi.git
+cd brevi
+bun install && bun run build
+```
+
+Then either call the CLI through the root script:
+
+```sh
+bun run brevi -- init
+bun run brevi -- ui
+```
+
+…or link it once and use `brevi` from anywhere:
+
+```sh
+cd packages/cli && bun link
+brevi init
+brevi ui
+```
+
+<Aside type="note">
+Once the packages are published this becomes `npx @brevi/cli init` / `npx @brevi/cli ui`. After changing CLI or orchestrator code, rerun `bun run build` — the linked binary runs the built `dist/`.
+</Aside>
+
+## First run
+
+<Steps>
+
+1. **Pick a sandbox provider — `brevi init`**
+
+   `init` is deliberately small: it creates `~/.brevi/config.json` and asks one question, the sandbox provider.
+
+   - `auto` (recommended) — Firecracker on Linux with KVM, the process sandbox everywhere else.
+   - `firecracker` — fails fast at startup if the host isn't ready.
+   - `process` — no isolation, development only.
+
+   Re-running `init` keeps everything else in the config (credentials, repositories) untouched.
+
+2. **Start the orchestrator — `brevi ui`**
+
+   The orchestrator binds `http://localhost:4400`, serves the dashboard, and opens it in your browser. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up.
+
+3. **Open the Connections rail**
+
+   The dashboard's **Connections** panel is where every credential is set. Each provider has a **Connect** button that tries automatic strategies first and only falls back to a manual key input:
+
+   - **GitHub** — your `gh` CLI login, otherwise an OAuth device code (a code to type on github.com).
+   - **Claude** — a Claude Code login discovered on this machine (macOS Keychain or `~/.claude`), or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` in the orchestrator's environment.
+   - **Codex** — `OPENAI_API_KEY`, or the Codex CLI login at `~/.codex/auth.json` (including ChatGPT logins).
+   - **Linear** — a browser OAuth round trip, otherwise a pasted personal API key.
+
+   Every credential is verified against its provider before it is saved, so "Connected" means the agent can actually run. Details in [Connections](/guides/connections/).
+
+4. **Pick repositories**
+
+   Once GitHub is connected, the **Repositories** section lists the repos your token can see, most recently pushed first. Add the ones brevi may work on. Each becomes a repo *key* (the repo name) mapped to `owner/name` and its default branch. One repo is the default — unmatched tickets run against it.
+
+5. **Tag a Linear ticket**
+
+   Assign an issue to yourself, leave it in an unstarted/backlog state, and either put `@brevi` in the title or description or add the `brevi` label. Add `SPIKE` to the title (or as a label) for research-only tickets.
+
+6. **Watch the run**
+
+   brevi polls Linear every 60 seconds, queues eligible tickets, and runs them one at a time. The dashboard streams the agent's output live; when the run finishes you get a pull request with a **Demo** section, or a research comment on the issue for a SPIKE.
+
+</Steps>
+
+## What just happened
+
+```
+Linear (issues assigned to you, tagged @brevi)
+   │  poll every pollIntervalSeconds
+   ▼
+orchestrator ──► classify: SPIKE │ implementation
+   │
+   ▼
+sandbox (Firecracker microVM / process)
+   │  clone of the mapped repo + the coding agent, headless
+   ▼
+implementation → branch + PR with demo artifacts      SPIKE → research comment
+```
+
+State lives under `~/.brevi/`:
+
+| Path | Contents |
+| --- | --- |
+| `~/.brevi/config.json` | Everything brevi knows: credentials, repos, sandbox, triggers |
+| `~/.brevi/runs/` | Run history, event logs, and collected artifacts |
+| `~/.brevi/images/` | Firecracker kernel, rootfs, and ssh key |
+| `~/.brevi/workspaces/` | Per-run scratch space (removed when a run ends) |
+
+<Aside type="tip">
+brevi reads no environment variables of its own for configuration — everything is in `~/.brevi/config.json`. Env vars like `ANTHROPIC_API_KEY` are only ever *discovered* by a Connect button and then stored.
+</Aside>
+
+## Next steps
+
+- [Connections](/guides/connections/) — the full strategy chain per provider.
+- [Tickets and runs](/guides/tickets/) — eligibility, repo routing, rerun semantics.
+- [Sandboxes](/guides/sandboxes/) — provider selection and the Firecracker host setup.
+- [Configuration](/reference/configuration/) — every config field.

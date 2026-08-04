@@ -6,19 +6,27 @@ import starlight from '@astrojs/starlight';
 export default defineConfig({
 	integrations: [
 		starlight({
-			title: 'My Docs',
-			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/withastro/starlight' }],
+			title: 'brevi',
+			description:
+				'A local sandbox and orchestrator for coding agents. Tag a Linear ticket, get a pull request with a demo.',
+			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/adapter/brevi' }],
 			sidebar: [
+				{ label: 'Getting started', slug: 'getting-started' },
 				{
 					label: 'Guides',
 					items: [
-						// Each item here is one entry in the navigation menu.
-						{ label: 'Example Guide', slug: 'guides/example' },
+						{ label: 'Connections', slug: 'guides/connections' },
+						{ label: 'Tickets and runs', slug: 'guides/tickets' },
+						{ label: 'Sandboxes', slug: 'guides/sandboxes' },
 					],
 				},
 				{
 					label: 'Reference',
-					items: [{ autogenerate: { directory: 'reference' } }],
+					items: [
+						{ label: 'CLI', slug: 'reference/cli' },
+						{ label: 'Configuration', slug: 'reference/configuration' },
+						{ label: 'API', slug: 'reference/api' },
+					],
 				},
 			],
 		}),
