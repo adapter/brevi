@@ -11,13 +11,22 @@ Every execution runs in an isolated sandbox. On Linux with KVM, sandboxes are [F
 
 ## Quick start
 
-```sh
-# One-time setup: connect Linear + GitHub, map repos, pick a sandbox provider
-npx @brevi/cli init
+The packages aren't published to npm yet, so run the CLI from this repo:
 
-# Start the orchestrator and open the dashboard
-npx @brevi/cli ui
+```sh
+bun install && bun run build
+
+# either through the root script…
+bun run brevi -- init
+bun run brevi -- ui
+
+# …or link it once and use `brevi` anywhere
+cd packages/cli && bun link
+brevi init
+brevi ui
 ```
+
+Once published, this becomes `npx @brevi/cli init` / `npx @brevi/cli ui`. After changing CLI/orchestrator code, rerun `bun run build` (the linked bin runs the built `dist/`).
 
 Then assign yourself a Linear issue and put `@brevi` in its title/description (or add the `brevi` label). Add `SPIKE` for research-only tickets. Make sure `ANTHROPIC_API_KEY` is exported so the coding agent can run.
 

@@ -2,6 +2,7 @@
   "name": "brevi",
   "private": true,
   "scripts": {
+    "brevi": "node packages/cli/dist/index.js",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
