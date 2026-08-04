@@ -65,7 +65,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     if (!repoKey || !repo) {
       throw new Error(`ticket ${ticket.identifier} has no resolved repo mapping`);
     }
-    const agentEnv = collectAgentEnv();
+    const agentEnv = collectAgentEnv(config);
     const branch = branchNameFor(ticket);
 
     await mkdir(tempRoot, { recursive: true });
@@ -167,16 +167,21 @@ function branchNameFor(ticket: Ticket): string {
   return `brevi/${ticket.identifier.toLowerCase()}`;
 }
 
-/** Host credentials forwarded into the sandbox for the coding agent. */
-function collectAgentEnv(): Record<string, string> {
+/**
+ * Credentials forwarded into the sandbox for the coding agent. Keys configured
+ * through the dashboard win over the orchestrator's host environment.
+ */
+function collectAgentEnv(config: BreviConfig): Record<string, string> {
   const env: Record<string, string> = {};
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = config.agent.anthropicApiKey || process.env.ANTHROPIC_API_KEY;
   const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  const codexKey = config.agent.codexApiKey || process.env.OPENAI_API_KEY;
   if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
   if (oauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
-  if (!apiKey && !oauthToken) {
+  if (codexKey) env.OPENAI_API_KEY = codexKey;
+  if (!apiKey && !oauthToken && !codexKey) {
     throw new Error(
-      "no agent credentials found: set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in the orchestrator's environment",
+      "no agent credentials found: connect an Anthropic (or Codex) API key in the dashboard's Connections panel, or set ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN in the orchestrator's environment",
     );
   }
   return env;

@@ -1,26 +1,17 @@
 import { existsSync } from "node:fs";
 import { loadConfig, saveConfig } from "@brevi/orchestrator";
 import { CONFIG_PATH, type BreviConfig, type RepoConfig } from "@brevi/shared";
-import { confirm, intro, log, note, outro, password, select, spinner, text } from "@clack/prompts";
+import { confirm, intro, log, note, outro, select, spinner, text } from "@clack/prompts";
 import type { Command } from "commander";
 import pc from "picocolors";
 import { errorMessage, exitOnCancel, formatZodIssues, isZodLikeError } from "../lib/util.js";
-import { validateGitHubToken, validateLinearApiKey, ValidationError } from "../lib/validate.js";
 
 type SandboxProvider = "auto" | "firecracker" | "process";
-
-interface ConfigDraft {
-  linear: { apiKey: string; teamKeys: string[] };
-  github: { token: string };
-  repos: Record<string, RepoConfig>;
-  defaultRepo?: string;
-  sandbox: { provider: SandboxProvider };
-}
 
 export function registerInitCommand(program: Command): void {
   program
     .command("init")
-    .description("Configure brevi: Linear, GitHub, repositories, and sandbox provider")
+    .description("Configure brevi: repositories and sandbox provider")
     .action(async () => {
       try {
         await runInit();
@@ -50,20 +41,22 @@ async function runInit(): Promise<void> {
     }
   }
 
-  const linearApiKey = await collectLinearApiKey(existing);
-  const githubToken = await collectGitHubToken(existing);
+  log.info(
+    "Credentials (Linear, GitHub, Anthropic/Codex keys) are connected later from the dashboard's Connections panel.",
+  );
+
   const { repos, defaultRepo } = await collectRepos(existing);
   const provider = await collectSandboxProvider(existing);
 
-  const draft: ConfigDraft = {
-    linear: { apiKey: linearApiKey, teamKeys: existing?.linear.teamKeys ?? [] },
-    github: { token: githubToken },
+  // Preserve everything else from an existing config (credentials, triggers, ...).
+  const draft = {
+    ...existing,
     repos,
     defaultRepo,
-    sandbox: { provider },
+    sandbox: { ...existing?.sandbox, provider },
   };
 
-  note(summarize(draft), "Configuration summary");
+  note(summarize(draft, existing), "Configuration summary");
 
   const confirmed = exitOnCancel(
     await confirm({ message: "Save this configuration?", initialValue: true }),
@@ -91,9 +84,9 @@ async function runInit(): Promise<void> {
   outro(
     [
       "Next steps:",
-      `  1. Tag a Linear ticket with "@brevi" (or add the "brevi" label).`,
-      `  2. Export ${pc.bold("ANTHROPIC_API_KEY")} in your shell.`,
-      `  3. Run ${pc.cyan("npx @brevi/cli ui")} to start brevi.`,
+      `  1. Run ${pc.cyan("npx @brevi/cli ui")} to start brevi and open the dashboard.`,
+      "  2. Connect Linear, GitHub, and an agent API key in the Connections panel.",
+      `  3. Tag a Linear ticket with "@brevi" (or add the "brevi" label).`,
     ].join("\n"),
   );
 }
@@ -105,64 +98,6 @@ async function loadExisting(): Promise<BreviConfig | undefined> {
   } catch (err) {
     log.warn(`Found a config at ${CONFIG_PATH}, but it could not be parsed: ${errorMessage(err)}`);
     return undefined;
-  }
-}
-
-async function collectLinearApiKey(existing: BreviConfig | undefined): Promise<string> {
-  if (existing) {
-    const keep = exitOnCancel(
-      await confirm({ message: "Keep the existing Linear API key?", initialValue: true }),
-    );
-    if (keep) return existing.linear.apiKey;
-  }
-
-  for (;;) {
-    const apiKey = exitOnCancel(
-      await password({
-        message: "Linear API key (create one at linear.app/settings/api)",
-        validate: (value) => (value.trim().length === 0 ? "Required." : undefined),
-      }),
-    );
-
-    const s = spinner();
-    s.start("Validating Linear API key");
-    try {
-      const viewer = await validateLinearApiKey(apiKey);
-      s.stop(`Connected to Linear as ${viewer.name} (${viewer.email})`);
-      return apiKey;
-    } catch (err) {
-      s.stop("Could not validate that Linear API key", 1);
-      log.error(err instanceof ValidationError ? err.message : errorMessage(err));
-    }
-  }
-}
-
-async function collectGitHubToken(existing: BreviConfig | undefined): Promise<string> {
-  if (existing) {
-    const keep = exitOnCancel(
-      await confirm({ message: "Keep the existing GitHub token?", initialValue: true }),
-    );
-    if (keep) return existing.github.token;
-  }
-
-  for (;;) {
-    const token = exitOnCancel(
-      await password({
-        message: "GitHub personal access token (needs the \"repo\" scope)",
-        validate: (value) => (value.trim().length === 0 ? "Required." : undefined),
-      }),
-    );
-
-    const s = spinner();
-    s.start("Validating GitHub token");
-    try {
-      const user = await validateGitHubToken(token);
-      s.stop(`Connected to GitHub as ${user.login}`);
-      return token;
-    } catch (err) {
-      s.stop("Could not validate that GitHub token", 1);
-      log.error(err instanceof ValidationError ? err.message : errorMessage(err));
-    }
   }
 }
 
@@ -283,7 +218,10 @@ async function collectSandboxProvider(existing: BreviConfig | undefined): Promis
   return provider;
 }
 
-function summarize(draft: ConfigDraft): string {
+function summarize(
+  draft: { repos: Record<string, RepoConfig>; defaultRepo?: string; sandbox: { provider: string } },
+  existing: BreviConfig | undefined,
+): string {
   const repoLines = Object.entries(draft.repos)
     .map(
       ([key, repo]) =>
@@ -291,9 +229,14 @@ function summarize(draft: ConfigDraft): string {
     )
     .join("\n");
 
+  const connection = (label: string, connected: boolean | undefined): string =>
+    `${label}: ${connected ? "connected" : "not connected — use the dashboard"}`;
+
   return [
-    "Linear: connected (key hidden)",
-    "GitHub: connected (token hidden)",
+    connection("Linear", Boolean(existing?.linear.apiKey)),
+    connection("GitHub", Boolean(existing?.github.token)),
+    connection("Anthropic", Boolean(existing?.agent.anthropicApiKey)),
+    connection("Codex", Boolean(existing?.agent.codexApiKey)),
     "Repositories:",
     repoLines,
     `Sandbox provider: ${draft.sandbox.provider}`,

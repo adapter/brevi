@@ -1,7 +1,7 @@
 import type { BreviConfig, Run, Ticket } from "@brevi/shared";
 import { STATUS_TONE } from "../lib/status";
 import { Button, KindChip, Plate, RepoChip, StatusDot } from "./Bits";
-import { External, Play } from "./Icons";
+import { External, Play, Sliders } from "./Icons";
 
 export function QueueRail({
   tickets,
@@ -11,6 +11,7 @@ export function QueueRail({
   unreachable,
   onRun,
   onOpenRun,
+  onOpenConnections,
 }: {
   tickets: Ticket[];
   activeByTicket: Map<string, Run>;
@@ -20,7 +21,9 @@ export function QueueRail({
   unreachable: boolean;
   onRun: (ticketId: string) => void;
   onOpenRun: (runId: string) => void;
+  onOpenConnections: () => void;
 }) {
+  const linearConnected = config === null || config.linear.apiKey !== "";
   return (
     <aside className="flex min-h-0 flex-col border-b border-ink-700 bg-ink-900/50 lg:border-r lg:border-b-0">
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-ink-700/70 px-4">
@@ -37,6 +40,8 @@ export function QueueRail({
             <p className="px-1 py-2 text-[12.5px] leading-relaxed text-haze-700">
               The queue loads once the orchestrator is running.
             </p>
+          ) : !linearConnected ? (
+            <ConnectLinearCard onOpenConnections={onOpenConnections} />
           ) : (
             <SummonCard config={config} />
           )
@@ -123,6 +128,26 @@ function TicketStrip({
         </div>
       </div>
     </article>
+  );
+}
+
+/** First-run UX: no ticket source yet — point at the Connections panel. */
+function ConnectLinearCard({ onOpenConnections }: { onOpenConnections: () => void }) {
+  return (
+    <div className="panel p-4">
+      <Plate className="text-haze-700">No ticket source</Plate>
+      <h3 className="mt-2.5 text-[15px] leading-snug text-haze-50">Connect Linear to begin</h3>
+      <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
+        brevi polls Linear for issues assigned to you. Add a Linear API key — and a GitHub token
+        plus an agent key while you&apos;re there — and the queue fills itself.
+      </p>
+      <div className="mt-3.5 border-t border-ink-700 pt-3.5">
+        <Button tone="ember" onClick={onOpenConnections}>
+          <Sliders className="size-3" />
+          Open Connections
+        </Button>
+      </div>
+    </div>
   );
 }
 

@@ -33,6 +33,7 @@ interface State {
 type Action =
   | { t: "conn"; conn: Connection }
   | { t: "hello"; runs: Run[]; tickets: Ticket[]; config: BreviConfig }
+  | { t: "config"; config: BreviConfig }
   | { t: "tickets"; tickets: Ticket[] }
   | { t: "run"; run: Run }
   | { t: "event"; event: RunEvent }
@@ -84,6 +85,8 @@ function reducer(state: State, action: Action): State {
         config: action.config,
         loaded: true,
       };
+    case "config":
+      return { ...state, config: action.config };
     case "tickets":
       return { ...state, tickets: action.tickets };
     case "run": {
@@ -188,6 +191,9 @@ export function useOrchestrator() {
         switch (msg.type) {
           case "hello":
             dispatch({ t: "hello", runs: msg.runs, tickets: msg.tickets, config: msg.config });
+            break;
+          case "config":
+            dispatch({ t: "config", config: msg.config });
             break;
           case "tickets":
             dispatch({ t: "tickets", tickets: msg.tickets });
@@ -298,6 +304,12 @@ export function useOrchestrator() {
 
   const dismissNotice = useCallback(() => dispatch({ t: "notice", notice: null }), []);
 
+  /** Adopt a redacted config returned by a settings mutation. */
+  const applyConfig = useCallback(
+    (config: BreviConfig) => dispatch({ t: "config", config }),
+    [],
+  );
+
   const selectedRun = useMemo(
     () => state.runs.find((r) => r.id === state.selectedRunId),
     [state.runs, state.selectedRunId],
@@ -311,6 +323,7 @@ export function useOrchestrator() {
     runTicket,
     cancelRun,
     dismissNotice,
+    applyConfig,
   };
 }
 

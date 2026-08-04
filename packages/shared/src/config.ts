@@ -35,14 +35,20 @@ export const firecrackerConfigSchema = z.object({
 });
 
 export const configSchema = z.object({
-  linear: z.object({
-    apiKey: z.string().min(1),
-    /** Restrict polling to these team keys (e.g. ["ENG"]). Empty = all teams. */
-    teamKeys: z.array(z.string()).default([]),
-  }),
-  github: z.object({
-    token: z.string().min(1),
-  }),
+  linear: z
+    .object({
+      /** Empty = not connected yet; set via the dashboard's Connections panel. */
+      apiKey: z.string().default(""),
+      /** Restrict polling to these team keys (e.g. ["ENG"]). Empty = all teams. */
+      teamKeys: z.array(z.string()).default([]),
+    })
+    .prefault({}),
+  github: z
+    .object({
+      /** Empty = not connected yet; set via the dashboard's Connections panel. */
+      token: z.string().default(""),
+    })
+    .prefault({}),
   /** Map of repo key -> repo config. Ticket labels or project names select the key. */
   repos: z.record(z.string(), repoConfigSchema).prefault({}),
   /** Repo key to use when a ticket doesn't match any mapping. */
@@ -53,6 +59,10 @@ export const configSchema = z.object({
       command: z.string().default("claude"),
       args: z.array(z.string()).default([]),
       model: z.string().optional(),
+      /** Passed to the sandboxed agent as ANTHROPIC_API_KEY. Empty = use host env. */
+      anthropicApiKey: z.string().default(""),
+      /** Passed to the sandboxed agent as OPENAI_API_KEY (for Codex agents). Empty = use host env. */
+      codexApiKey: z.string().default(""),
     })
     .prefault({}),
   sandbox: z
@@ -82,11 +92,21 @@ export type BreviConfig = z.infer<typeof configSchema>;
 export type RepoConfig = z.infer<typeof repoConfigSchema>;
 export type FirecrackerConfig = z.infer<typeof firecrackerConfigSchema>;
 
+/** Mask a secret when set; keep "" so clients can tell "not connected" apart. */
+function mask(secret: string): string {
+  return secret ? "***" : "";
+}
+
 /** Config with secrets stripped, safe to send to the dashboard. */
 export function redactConfig(config: BreviConfig): BreviConfig {
   return {
     ...config,
-    linear: { ...config.linear, apiKey: "***" },
-    github: { ...config.github, token: "***" },
+    linear: { ...config.linear, apiKey: mask(config.linear.apiKey) },
+    github: { ...config.github, token: mask(config.github.token) },
+    agent: {
+      ...config.agent,
+      anthropicApiKey: mask(config.agent.anthropicApiKey),
+      codexApiKey: mask(config.agent.codexApiKey),
+    },
   };
 }

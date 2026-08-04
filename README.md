@@ -28,7 +28,7 @@ brevi ui
 
 Once published, this becomes `npx @brevi/cli init` / `npx @brevi/cli ui`. After changing CLI/orchestrator code, rerun `bun run build` (the linked bin runs the built `dist/`).
 
-Then assign yourself a Linear issue and put `@brevi` in its title/description (or add the `brevi` label). Add `SPIKE` for research-only tickets. Make sure `ANTHROPIC_API_KEY` is exported so the coding agent can run.
+`init` only asks for repo mappings and a sandbox provider. Credentials — the Linear API key, GitHub token, and Anthropic/Codex agent keys — are connected from the dashboard's **Connections** panel, where each key is validated live against its provider and stored in `~/.brevi/config.json`. Then assign yourself a Linear issue and put `@brevi` in its title/description (or add the `brevi` label); add `SPIKE` for research-only tickets. (`ANTHROPIC_API_KEY` from the orchestrator's environment still works as a fallback for the agent key.)
 
 Other commands: `brevi start` (headless, no browser), `brevi status`.
 

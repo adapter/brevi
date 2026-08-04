@@ -1,6 +1,7 @@
 import type { BreviConfig, HealthResponse } from "@brevi/shared";
 import type { Connection } from "../lib/useOrchestrator";
 import { Command, Plate } from "./Bits";
+import { Sliders } from "./Icons";
 
 const CONNECTION = {
   connecting: { label: "Connecting", dot: "bg-haze-600", text: "text-haze-400", live: false },
@@ -15,6 +16,7 @@ export function Header({
   config,
   busy,
   showHint,
+  onOpenConnections,
 }: {
   conn: Connection;
   health: HealthResponse | null;
@@ -23,9 +25,12 @@ export function Header({
   busy: boolean;
   /** Suppressed when the main pane is already showing the offline card. */
   showHint: boolean;
+  onOpenConnections: () => void;
 }) {
   const c = CONNECTION[conn];
   const provider = health?.sandboxProvider ?? config?.sandbox.provider;
+  /** Nudge until the ticket source exists — nothing works without Linear. */
+  const needsSetup = config !== null && config.linear.apiKey === "";
 
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-center gap-3 border-b border-ink-700 bg-ink-900/80 px-4 backdrop-blur-md">
@@ -70,6 +75,21 @@ export function Header({
             v{health.version}
           </span>
         )}
+
+        <button
+          type="button"
+          onClick={onOpenConnections}
+          className="relative inline-flex items-center gap-2 rounded-[4px] border border-ink-600 bg-ink-800 px-2 py-1.5 text-haze-300 hover:border-ink-500 hover:bg-ink-750 hover:text-haze-50"
+        >
+          <Sliders className="size-3.5" />
+          <span className="plate hidden sm:block">Connections</span>
+          {needsSetup && (
+            <span
+              className="absolute -top-1 -right-1 size-2 rounded-full bg-ember-500 animate-beacon"
+              aria-label="Setup needed"
+            />
+          )}
+        </button>
 
         <span
           className={`inline-flex items-center gap-2 rounded-[4px] border border-ink-600 bg-ink-800 px-2 py-1.5 ${c.text}`}

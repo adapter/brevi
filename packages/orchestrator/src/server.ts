@@ -11,6 +11,7 @@ import {
   redactConfig,
   type BreviConfig,
   type ClientMessage,
+  type CredentialsUpdateRequest,
   type HealthResponse,
   type Run,
   type RunEvent,
@@ -168,6 +169,28 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig): Hono {
     }
   });
 
+  app.put("/api/settings/credentials", async (c) => {
+    let body: CredentialsUpdateRequest;
+    try {
+      body = (await c.req.json()) as CredentialsUpdateRequest;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const request: CredentialsUpdateRequest = {};
+    if (typeof body.linearApiKey === "string") request.linearApiKey = body.linearApiKey;
+    if (typeof body.githubToken === "string") request.githubToken = body.githubToken;
+    if (typeof body.anthropicApiKey === "string") request.anthropicApiKey = body.anthropicApiKey;
+    if (typeof body.codexApiKey === "string") request.codexApiKey = body.codexApiKey;
+    if (Object.keys(request).length === 0) {
+      return c.json({ error: "no credentials provided" }, 400);
+    }
+    try {
+      return c.json(await orchestrator.updateCredentials(request));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, 500);
+    }
+  });
+
   app.notFound(async (c) => {
     // Everything outside /api serves the dashboard SPA.
     const { pathname } = new URL(c.req.url);
@@ -250,6 +273,7 @@ function attachWebSockets(
   });
 
   const onTickets = (tickets: Ticket[]): void => broadcast({ type: "tickets", tickets });
+  const onConfig = (redacted: BreviConfig): void => broadcast({ type: "config", config: redacted });
   const onRunUpdated = (run: Run): void => broadcast({ type: "run-updated", run });
   const onRunEvent = (event: RunEvent): void => {
     for (const client of clients) {
@@ -258,12 +282,14 @@ function attachWebSockets(
     }
   };
   orchestrator.on("tickets", onTickets);
+  orchestrator.on("config", onConfig);
   orchestrator.store.on("run-updated", onRunUpdated);
   orchestrator.store.on("run-event", onRunEvent);
 
   return {
     close(): void {
       orchestrator.off("tickets", onTickets);
+      orchestrator.off("config", onConfig);
       orchestrator.store.off("run-updated", onRunUpdated);
       orchestrator.store.off("run-event", onRunEvent);
       server.off("upgrade", onUpgrade);
@@ -276,7 +302,7 @@ function attachWebSockets(
 
 export async function startOrchestrator(options: StartOptions = {}): Promise<OrchestratorHandle> {
   const config = options.config ?? (await loadConfig(options.configPath));
-  const orchestrator = new Orchestrator(config);
+  const orchestrator = new Orchestrator(config, undefined, options.configPath);
   await orchestrator.start();
 
   const app = buildApp(orchestrator, config);

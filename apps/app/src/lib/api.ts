@@ -1,4 +1,11 @@
-import type { HealthResponse, Run, RunEvent, Ticket } from "@brevi/shared";
+import type {
+  CredentialsUpdateRequest,
+  CredentialsUpdateResponse,
+  HealthResponse,
+  Run,
+  RunEvent,
+  Ticket,
+} from "@brevi/shared";
 
 /** Thin REST client. Everything is same-origin; Vite proxies /api to the orchestrator. */
 
@@ -23,6 +30,12 @@ export const api = {
     json<Run>(`/api/tickets/${encodeURIComponent(ticketId)}/run`, { method: "POST" }),
   cancelRun: (runId: string) =>
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
+  updateCredentials: (request: CredentialsUpdateRequest) =>
+    json<CredentialsUpdateResponse>("/api/settings/credentials", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }),
 };
 
 export function artifactUrl(runId: string, name: string): string {

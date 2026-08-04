@@ -42,6 +42,22 @@ export const Stop = (p: IconProps) => (
   </Svg>
 );
 
+/** Connections: three rules with knobs — settings, in the house style. */
+export const Sliders = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" opacity={0.4} />
+    <circle cx="6" cy="4.5" r="1.7" fill="currentColor" stroke="none" />
+    <circle cx="10.5" cy="8" r="1.7" fill="currentColor" stroke="none" />
+    <circle cx="5" cy="11.5" r="1.7" fill="currentColor" stroke="none" />
+  </Svg>
+);
+
+export const Check = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m3 8.6 3.3 3L13 4.4" />
+  </Svg>
+);
+
 export const ChevronRight = (p: IconProps) => (
   <Svg {...p}>
     <path d="m6 3.5 4.5 4.5L6 12.5" />

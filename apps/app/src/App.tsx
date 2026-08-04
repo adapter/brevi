@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { Run } from "@brevi/shared";
+import { Connections } from "./components/Connections";
 import { Header } from "./components/Header";
 import { QueueRail } from "./components/QueueRail";
 import { RunDetail } from "./components/RunDetail";
@@ -26,13 +27,10 @@ export default function App() {
     runTicket,
     cancelRun,
     dismissNotice,
+    applyConfig,
   } = useOrchestrator();
 
-  // TEMP-REVIEW
-  const h = typeof location !== "undefined" ? location.hash.slice(1) : "";
-  useMemo(() => {
-    if (h) setTimeout(() => openRun(h), 300);
-  }, [h, openRun]);
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
 
   const anyActive = useMemo(() => runs.some((r) => isActive(r.status)), [runs]);
   const now = useNow(anyActive);
@@ -63,6 +61,7 @@ export default function App() {
         config={config}
         busy={anyActive}
         showHint={!offlineCard}
+        onOpenConnections={() => setConnectionsOpen(true)}
       />
 
       {notice && (
@@ -89,6 +88,7 @@ export default function App() {
           busy={busy}
           onRun={(id) => void handleRun(id)}
           onOpenRun={openRun}
+          onOpenConnections={() => setConnectionsOpen(true)}
         />
 
         <section className="flex min-h-0 flex-col">
@@ -112,6 +112,13 @@ export default function App() {
           )}
         </section>
       </main>
+
+      <Connections
+        open={connectionsOpen}
+        config={config}
+        onClose={() => setConnectionsOpen(false)}
+        onConfig={applyConfig}
+      />
     </div>
   );
 }
