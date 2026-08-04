@@ -88,7 +88,14 @@ export default function App() {
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
-        <SiteHeader conn={conn} health={health} config={config} showHint={!offlineCard} />
+        <SiteHeader
+          conn={conn}
+          health={health}
+          config={config}
+          runs={runs}
+          tickets={tickets}
+          showHint={!offlineCard}
+        />
 
         {notice && (
           <Alert
@@ -124,7 +131,6 @@ export default function App() {
           ) : (
             <RunsDashboard
               runs={runs}
-              tickets={tickets}
               now={now}
               conn={conn}
               loaded={loaded || selectedRunId !== null}

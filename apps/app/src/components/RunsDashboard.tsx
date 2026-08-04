@@ -1,5 +1,5 @@
-import type { Run, Ticket } from "@brevi/shared";
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import type { Run } from "@brevi/shared";
+import { Card } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -16,33 +16,22 @@ import type { Connection } from "../lib/useOrchestrator";
 
 export function RunsDashboard({
   runs,
-  tickets,
   now,
   conn,
   loaded,
   onOpen,
 }: {
   runs: Run[];
-  tickets: Ticket[];
   now: number;
   conn: Connection;
   loaded: boolean;
   onOpen: (runId: string) => void;
 }) {
   const active = runs.filter((r) => isActive(r.status)).length;
-  const completed = runs.filter((r) => r.status === "completed").length;
-  const failed = runs.filter((r) => r.status === "failed").length;
   const offline = conn === "offline" && !loaded;
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <StatCard label="Active" value={active} tone={active > 0 ? "text-ember-500" : undefined} live={active > 0} />
-        <StatCard label="Queued" value={tickets.length} />
-        <StatCard label="Completed" value={completed} tone={completed > 0 ? "text-mint-400" : undefined} />
-        <StatCard label="Failed" value={failed} tone={failed > 0 ? "text-rust-400" : undefined} />
-      </div>
-
       <Card className="gap-0 py-0">
         <div className="flex h-11 shrink-0 items-center gap-2 border-b border-ink-700/70 px-4">
           <Plate className="text-haze-400">Runs</Plate>
@@ -80,36 +69,6 @@ export function RunsDashboard({
         )}
       </Card>
     </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  tone,
-  live,
-}: {
-  label: string;
-  value: number;
-  tone?: string;
-  live?: boolean;
-}) {
-  return (
-    <Card size="sm" className="gap-1">
-      <CardHeader className="gap-1">
-        <CardDescription>
-          <Plate className="text-haze-600">{label}</Plate>
-        </CardDescription>
-        <CardTitle
-          className={`flex items-baseline gap-2 font-mono text-[26px] leading-none font-semibold tabular-nums ${tone ?? "text-haze-200"}`}
-        >
-          {value}
-          {live && (
-            <span className="inline-block size-[7px] animate-beacon rounded-[1.5px] bg-ember-500 text-ember-500" />
-          )}
-        </CardTitle>
-      </CardHeader>
-    </Card>
   );
 }
 
