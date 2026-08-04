@@ -38,26 +38,23 @@ export function RunsList({
             <span className="plate">{active} active</span>
           </span>
         )}
-        <button
-          type="button"
-          onClick={onToggleConnections}
-          aria-pressed={connectionsOpen}
-          title={connectionsOpen ? "Collapse the Connections rail" : "Open the Connections rail"}
-          className={`relative ml-auto inline-flex items-center gap-1.5 rounded-[4px] border px-2 py-1 transition-colors duration-100 ${
-            connectionsOpen
-              ? "border-ink-500 bg-ink-750 text-haze-50"
-              : "border-ink-600 text-haze-400 hover:border-ink-500 hover:bg-ink-750 hover:text-haze-50"
-          }`}
-        >
-          <Sliders className="size-3" />
-          <span className="plate">Connections</span>
-          {needsSetup && !connectionsOpen && (
-            <span
-              className="absolute -top-1 -right-1 size-2 animate-beacon rounded-full bg-ember-500"
-              aria-label="Setup needed"
-            />
-          )}
-        </button>
+        {!connectionsOpen && (
+          <button
+            type="button"
+            onClick={onToggleConnections}
+            title="Open the Connections rail"
+            className="relative ml-auto inline-flex items-center gap-1.5 rounded-[4px] border border-ink-600 px-2 py-1 text-haze-400 transition-colors duration-100 hover:border-ink-500 hover:bg-ink-750 hover:text-haze-50"
+          >
+            <Sliders className="size-3" />
+            <span className="plate">Connections</span>
+            {needsSetup && (
+              <span
+                className="absolute -top-1 -right-1 size-2 animate-beacon rounded-full bg-ember-500"
+                aria-label="Setup needed"
+              />
+            )}
+          </button>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
