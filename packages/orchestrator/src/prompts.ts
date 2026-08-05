@@ -38,7 +38,7 @@ export function buildImplementationPrompt(ticket: Ticket, repo: RepoConfig): str
     "## Required outputs (all three are mandatory)",
     "1. Code changes in the working tree that implement the ticket.",
     "2. `.brevi/summary.md` — a pull-request-ready description of the change: what changed and why, how you verified it, and anything reviewers should pay attention to.",
-    "3. A demo under `.brevi/demo/` proving the change works:",
+    "3. A demo under `.brevi/demo/` proving the change works (shown in brevi's local dashboard; nothing under .brevi/ is committed or attached to the PR):",
     ...demoInstructions,
     "- Screenshots must be .png, recordings .webm, text evidence .txt. Give files short descriptive names.",
   ].join("\n");
