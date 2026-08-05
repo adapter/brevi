@@ -62,6 +62,26 @@ export class LinearService {
     }
   }
 
+  /**
+   * Best-effort: after a successful run, move the issue to a review state —
+   * the team's first "started"-type state whose name mentions review (e.g.
+   * "In Review"). Teams without one keep their current state.
+   */
+  async moveToReview(issueId: string): Promise<void> {
+    try {
+      const issue = await this.#client.issue(issueId);
+      const team = await issue.team;
+      if (!team) return;
+      const states = await team.states();
+      const review = states.nodes
+        .filter((state) => state.type === "started" && /review/i.test(state.name))
+        .sort((a, b) => a.position - b.position)[0];
+      if (review) await issue.update({ stateId: review.id });
+    } catch {
+      // best-effort by design
+    }
+  }
+
   async #toTicket(issue: Issue): Promise<Ticket | undefined> {
     const { trigger } = this.#config;
     const labels = (await issue.labels()).nodes.map((label) => label.name);

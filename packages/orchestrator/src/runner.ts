@@ -143,6 +143,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         ? await finalizeSpike({ ticket, pulledDir, artifacts, linear })
         : await finalizeImplementation({ ticket, repo, branch, pulledDir, artifacts, config, linear, log });
 
+    await linear.moveToReview(ticket.id);
     await store.setStatus(run.id, "completed", { finishedAt: new Date().toISOString(), result });
     log("system", `run completed: ${result.prUrl ?? result.commentUrl ?? "done"}`);
   } catch (error) {
