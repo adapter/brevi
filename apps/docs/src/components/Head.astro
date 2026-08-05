@@ -1,0 +1,21 @@
+---
+// Starlight Head override: the default head plus PostHog analytics.
+import Default from '@astrojs/starlight/components/Head.astro';
+---
+
+<Default />
+
+<script>
+	import posthog from 'posthog-js';
+
+	// The brevi.dev project token (phc_… — public by design). Analytics are
+	// disabled while this is empty and in dev builds.
+	const POSTHOG_TOKEN = 'phc_seRFkKUX3embkS4GScjnXx7zzDYDLn8BJT7FSnNeU6nK';
+
+	if (import.meta.env.PROD && POSTHOG_TOKEN) {
+		posthog.init(POSTHOG_TOKEN, {
+			api_host: 'https://us.i.posthog.com',
+			defaults: '2026-06-25',
+		});
+	}
+</script>

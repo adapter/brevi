@@ -12,6 +12,10 @@ export default defineConfig({
 				'A local sandbox and orchestrator for coding agents. Tag a Linear ticket, get a pull request with a demo.',
 			logo: { src: './src/assets/logo.png', alt: 'brevi' },
 			favicon: '/favicon.ico',
+			components: {
+				// Adds PostHog to every page; see src/components/Head.astro.
+				Head: './src/components/Head.astro',
+			},
 			head: [
 				{
 					tag: 'link',
