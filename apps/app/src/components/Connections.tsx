@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Sidebar, SidebarContent, SidebarHeader } from "@/components/ui/sidebar";
 import { api } from "../lib/api";
 import { Plate, RepoChip } from "./Bits";
-import { Check, ChevronRight, Close, External, Pin, Warn } from "./Icons";
+import { Check, ChevronRight, Close, External, Pin, Plus, Warn } from "./Icons";
 
 /** How the "Connect" button acquires a credential, shown as a hint. */
 type ConnectHint = string;
@@ -266,22 +266,15 @@ function ProviderRow({
     <Card size="sm" className="gap-1.5">
       <CardHeader className="gap-0">
         <div className="flex items-center gap-2">
+          <span
+            className={`inline-block size-[7px] shrink-0 rounded-full ${connected ? "bg-mint-500" : "bg-haze-700"}`}
+            role="img"
+            aria-label={connected ? "Connected" : "Not connected"}
+            title={connected ? "Connected" : "Not connected"}
+          />
           <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
             {spec.name}
           </h3>
-          <Badge
-            variant="outline"
-            className={
-              connected
-                ? "border-mint-500/30 bg-mint-500/10 text-mint-400"
-                : "text-haze-700"
-            }
-          >
-            <span
-              className={`inline-block size-[5px] rounded-full ${connected ? "bg-mint-500" : "bg-haze-700"}`}
-            />
-            {connected ? "Connected" : "Not connected"}
-          </Badge>
           <span className="ml-auto">
             {connected ? (
               <Button
@@ -440,6 +433,7 @@ function RepositoriesSection({
   const [available, setAvailable] = useState<GithubRepo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [adding, setAdding] = useState(false);
   const [pending, setPending] = useState(false);
   const [mutateError, setMutateError] = useState<string | null>(null);
   const [linearProjects, setLinearProjects] = useState<LinearProject[] | null>(null);
@@ -518,6 +512,7 @@ function RepositoriesSection({
       config.defaultRepo ?? key,
     );
     setSearch("");
+    setAdding(false);
   };
 
   const setProjects = (key: string, projects: string[]) => {
@@ -564,21 +559,11 @@ function RepositoriesSection({
                       {repo.defaultBranch}
                     </span>
                     <span className="ml-auto flex items-center gap-1.5">
-                      {config.defaultRepo === key ? (
-                        <Badge className="gap-1">
+                      {config.defaultRepo === key && (
+                        <Badge className="gap-1" title="Unmatched tickets run against this repo">
                           <Pin className="size-2.5!" />
                           Default
                         </Badge>
-                      ) : (
-                        <Button
-                          variant="outline"
-                          size="plate"
-                          onClick={() => void mutate(config.repos, key)}
-                          disabled={pending}
-                          title="Unmatched tickets run against the default repo"
-                        >
-                          Make default
-                        </Button>
                       )}
                       <Button
                         variant="ghost"
@@ -606,15 +591,41 @@ function RepositoriesSection({
           )}
 
           <div className="mt-3">
-            <Input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={available ? "Add a repository — search your account" : "Loading repositories…"}
-              disabled={!available}
-              spellCheck={false}
-              className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
-            />
+            {!adding ? (
+              <Button
+                variant="outline"
+                size="plate"
+                onClick={() => setAdding(true)}
+                className="text-haze-400"
+              >
+                <Plus className="size-3" />
+                Add repository
+              </Button>
+            ) : (
+              <>
+            <div className="flex items-center gap-1.5">
+              <Input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={available ? "Search your account" : "Loading repositories…"}
+                disabled={!available}
+                spellCheck={false}
+                autoFocus
+                className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+              />
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => {
+                  setAdding(false);
+                  setSearch("");
+                }}
+                aria-label="Stop adding"
+              >
+                <Close className="size-3" />
+              </Button>
+            </div>
             {loadError && (
               <p className="mt-2 flex items-start gap-1.5 text-[12px] text-rust-400">
                 <Warn className="mt-px size-3 shrink-0" />
@@ -645,6 +656,8 @@ function RepositoriesSection({
             )}
             {available && search.trim() !== "" && candidates.length === 0 && (
               <p className="mt-2 text-[12px] text-haze-700">No unmapped repos match.</p>
+            )}
+              </>
             )}
           </div>
 
