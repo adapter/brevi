@@ -1,5 +1,8 @@
 # brevi
 
+> [!WARNING]
+> brevi is under active development. Expect breaking changes between releases, rough edges, and APIs that move without notice — pin exact versions if you depend on it.
+
 A local sandbox and orchestrator for coding agents.
 
 Connect your machine to Linear and GitHub, tag a ticket with **@brevi** (or the `brevi` label), and brevi picks it up:
