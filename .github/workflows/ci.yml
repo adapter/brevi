@@ -121,6 +121,10 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           marker="<!-- brevi-preview-urls -->"
+          # Empty until the worker has preview URLs enabled (applied by the
+          # next production deploy after preview_urls lands in the config).
+          DOCS_URL="${DOCS_URL:-_pending — preview URLs enable on the next production deploy_}"
+          API_URL="${API_URL:-_pending — preview URLs enable on the next production deploy_}"
           body="$(printf '%s\n### Preview deployments\n\n| App | Preview URL (this commit) |\n| --- | --- |\n| docs | %s |\n| api | %s |\n\n_Version preview for %s — production traffic is unaffected._' "$marker" "$DOCS_URL" "$API_URL" "$HEAD_SHA")"
           cid=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
             --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
