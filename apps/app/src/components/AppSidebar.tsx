@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -14,7 +13,7 @@ import { duration, relative } from "../lib/format";
 import { repoDisplay } from "../lib/repo";
 import { isActive, STATUS_TONE } from "../lib/status";
 import { KindChip, Plate, RepoChip, StatusDot } from "./Bits";
-import { External, Play, Sliders } from "./Icons";
+import { External, Play } from "./Icons";
 
 export function AppSidebar({
   tickets,
@@ -26,12 +25,8 @@ export function AppSidebar({
   health,
   busy,
   unreachable,
-  connectedCount,
-  providerCount,
-  needsSetup,
   onRun,
   onOpenRun,
-  onOpenConnections,
 }: {
   tickets: Ticket[];
   runs: Run[];
@@ -43,12 +38,8 @@ export function AppSidebar({
   busy: Record<string, true | undefined>;
   /** No orchestrator has answered yet, so an empty queue means nothing. */
   unreachable: boolean;
-  connectedCount: number;
-  providerCount: number;
-  needsSetup: boolean;
   onRun: (ticketId: string) => void;
   onOpenRun: (runId: string) => void;
-  onOpenConnections: () => void;
 }) {
   const linearConnected = config === null || config.linear.apiKey !== "";
 
@@ -95,7 +86,7 @@ export function AppSidebar({
                   Runs appear once the orchestrator is running.
                 </p>
               ) : !linearConnected ? (
-                <ConnectLinearCard onOpenConnections={onOpenConnections} />
+                <ConnectLinearCard />
               ) : (
                 <SummonCard config={config} />
               )
@@ -129,27 +120,6 @@ export function AppSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-
-      <SidebarFooter className="border-t border-sidebar-border">
-        <Button
-          variant="outline"
-          size="plate"
-          onClick={onOpenConnections}
-          className="relative w-full justify-start gap-2 py-2 text-haze-400"
-        >
-          <Sliders className="size-3" />
-          Connections
-          <span className="ml-auto font-mono text-[11px] leading-none tracking-normal normal-case text-haze-700">
-            {config ? `${connectedCount}/${providerCount}` : "–"}
-          </span>
-          {needsSetup && (
-            <span
-              className="absolute -top-1 -right-1 size-2 animate-beacon rounded-full bg-ember-500"
-              aria-label="Setup needed"
-            />
-          )}
-        </Button>
-      </SidebarFooter>
     </Sidebar>
   );
 }
@@ -287,22 +257,16 @@ function RunStrip({
   );
 }
 
-/** First-run UX: no ticket source yet — point at the Connections sheet. */
-function ConnectLinearCard({ onOpenConnections }: { onOpenConnections: () => void }) {
+/** First-run UX: no ticket source yet — point at the Connections panel. */
+function ConnectLinearCard() {
   return (
     <Card size="sm" className="mx-1 block p-4">
       <Plate className="text-haze-700">No ticket source</Plate>
       <h3 className="mt-2.5 text-[15px] leading-snug text-haze-50">Connect Linear to begin</h3>
       <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
-        brevi polls Linear for issues assigned to you. Add a Linear API key — and a GitHub token
-        plus an agent key while you&apos;re there — and the queue fills itself.
+        brevi polls Linear for issues assigned to you. Connect Linear in the panel on the right —
+        and GitHub plus an agent key while you&apos;re there — and the queue fills itself.
       </p>
-      <div className="mt-3.5 border-t border-ink-700 pt-3.5">
-        <Button size="plate" onClick={onOpenConnections}>
-          <Sliders className="size-3" />
-          Open Connections
-        </Button>
-      </div>
     </Card>
   );
 }

@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { Run } from "@brevi/shared";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "./components/AppSidebar";
-import { ConnectionsSheet, PROVIDERS } from "./components/ConnectionsSheet";
+import { ConnectionsSidebar } from "./components/Connections";
 import { Overview } from "./components/Overview";
 import { RunDetail } from "./components/RunDetail";
 import { SiteHeader } from "./components/SiteHeader";
@@ -34,17 +34,6 @@ export default function App() {
     applyConfig,
   } = useOrchestrator();
 
-  // The Connections sheet. Open by default on first run; the choice sticks
-  // across sessions so a configured machine starts with it closed.
-  const [connectionsOpen, setConnectionsOpen] = useState<boolean>(() => {
-    const saved = localStorage.getItem("brevi.connections.open");
-    return saved === null ? true : saved === "1";
-  });
-  const toggleConnections = (next: boolean) => {
-    setConnectionsOpen(next);
-    localStorage.setItem("brevi.connections.open", next ? "1" : "0");
-  };
-
   const anyActive = useMemo(() => runs.some((r) => isActive(r.status)), [runs]);
   const now = useNow(anyActive);
 
@@ -60,11 +49,6 @@ export default function App() {
   /** Nothing has answered yet: the main pane explains how to start one. */
   const unreachable = conn === "offline" && !loaded;
   const offlineCard = unreachable && !selectedRun;
-
-  const connectedCount = config
-    ? PROVIDERS.filter((spec) => spec.connected(config)).length
-    : 0;
-  const needsSetup = config !== null && config.linear.apiKey === "";
 
   const handleRun = async (ticketId: string) => {
     const run = await runTicket(ticketId);
@@ -83,12 +67,8 @@ export default function App() {
         health={health}
         busy={busy}
         unreachable={unreachable}
-        connectedCount={connectedCount}
-        providerCount={PROVIDERS.length}
-        needsSetup={needsSetup}
         onRun={(id) => void handleRun(id)}
         onOpenRun={openRun}
-        onOpenConnections={() => toggleConnections(true)}
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
@@ -142,12 +122,7 @@ export default function App() {
         </div>
       </SidebarInset>
 
-      <ConnectionsSheet
-        open={connectionsOpen}
-        onOpenChange={toggleConnections}
-        config={config}
-        onConfig={applyConfig}
-      />
+      <ConnectionsSidebar config={config} onConfig={applyConfig} />
     </SidebarProvider>
   );
 }

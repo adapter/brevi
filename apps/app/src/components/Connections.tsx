@@ -18,13 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { Sidebar, SidebarContent, SidebarHeader } from "@/components/ui/sidebar";
 import { api } from "../lib/api";
 import { Plate, RepoChip } from "./Bits";
 import { Check, ChevronRight, Close, External, Pin, Warn } from "./Icons";
@@ -92,17 +86,13 @@ export const PROVIDERS: ProviderSpec[] = [
 ];
 
 /**
- * Right-side sheet to connect Linear, GitHub, and agent credentials, opened
- * from the sidebar footer (or anywhere a setup nudge points).
+ * Permanent right sidebar to connect Linear, GitHub, and agent credentials —
+ * the mirror of the runs sidebar on the left.
  */
-export function ConnectionsSheet({
-  open,
-  onOpenChange,
+export function ConnectionsSidebar({
   config,
   onConfig,
 }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
   config: BreviConfig | null;
   onConfig: (config: BreviConfig) => void;
 }) {
@@ -111,42 +101,44 @@ export function ConnectionsSheet({
     : 0;
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full gap-0 overflow-y-auto p-0 sm:max-w-md">
-        <SheetHeader className="border-b border-ink-700/70 px-4 py-3.5">
-          <SheetTitle className="flex items-center gap-2">
-            <Plate className="text-haze-400">Connections</Plate>
-            <span className="font-mono text-[11px] leading-none font-normal text-haze-700">
-              {config ? `${connectedCount}/${PROVIDERS.length}` : "–"}
-            </span>
-          </SheetTitle>
-          <SheetDescription className="text-[12px] leading-relaxed text-haze-700">
-            Credentials are validated with the provider, then stored in{" "}
-            <code className="font-mono text-[11px] text-haze-400">~/.brevi/config.json</code>. They
-            never leave this machine.
-          </SheetDescription>
-        </SheetHeader>
-
-        <div className="min-h-0 flex-1 p-3">
-          {config ? (
-            <>
-              <ul className="flex flex-col gap-2.5">
-                {PROVIDERS.map((spec) => (
-                  <li key={spec.id}>
-                    <ProviderRow spec={spec} config={config} onConfig={onConfig} />
-                  </li>
-                ))}
-              </ul>
-              <RepositoriesSection config={config} onConfig={onConfig} />
-            </>
-          ) : (
-            <p className="mt-3 px-1 text-[12.5px] leading-relaxed text-haze-700">
-              Waiting for the orchestrator — connections can be edited once it answers.
-            </p>
-          )}
+    <Sidebar
+      side="right"
+      collapsible="none"
+      className="h-svh w-[22rem] shrink-0 border-l border-sidebar-border"
+    >
+      <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
+        <div className="flex items-center gap-2">
+          <Plate className="text-haze-400">Connections</Plate>
+          <span className="font-mono text-[11px] leading-none font-normal text-haze-700">
+            {config ? `${connectedCount}/${PROVIDERS.length}` : "–"}
+          </span>
         </div>
-      </SheetContent>
-    </Sheet>
+      </SidebarHeader>
+
+      <SidebarContent className="min-h-0 flex-1 overflow-y-auto p-3">
+        {config ? (
+          <>
+            <ul className="flex flex-col gap-2.5">
+              {PROVIDERS.map((spec) => (
+                <li key={spec.id}>
+                  <ProviderRow spec={spec} config={config} onConfig={onConfig} />
+                </li>
+              ))}
+            </ul>
+            <RepositoriesSection config={config} onConfig={onConfig} />
+            <p className="mt-4 border-t border-ink-700 pt-3 text-[11.5px] leading-relaxed text-haze-700">
+              Credentials are validated with the provider, then stored in{" "}
+              <code className="font-mono text-[10.5px] text-haze-400">~/.brevi/config.json</code>.
+              They never leave this machine.
+            </p>
+          </>
+        ) : (
+          <p className="mt-3 px-1 text-[12.5px] leading-relaxed text-haze-700">
+            Waiting for the orchestrator — connections can be edited once it answers.
+          </p>
+        )}
+      </SidebarContent>
+    </Sidebar>
   );
 }
 
@@ -713,7 +705,7 @@ function ProjectsField({
           <span className={`truncate ${projects.length === 0 ? "text-haze-700" : "text-haze-200"}`}>
             {empty
               ? options === null
-                ? "Connect Linear to map projects"
+                ? "Linear projects unavailable"
                 : "No Linear projects found"
               : projects.length === 0
                 ? "Map Linear projects"
