@@ -64,8 +64,9 @@ State lives in `~/.brevi/`: `config.json`, run history + artifacts under `runs/`
 | `@brevi/orchestrator` | Linear polling, run pipeline, GitHub PRs, HTTP/WS API, serves the dashboard |
 | `@brevi/sandbox` | Sandbox providers: Firecracker microVMs (Linux + KVM) and local process fallback |
 | `@brevi/shared` | Domain types, config schema (zod), dashboard API/WebSocket protocol |
-| `@brevi/app` | The dashboard — Vite + React, live run console, tickets, artifacts |
-| `@brevi/docs` | Documentation site (Astro Starlight) |
+| `@brevi/app` | The dashboard — Vite + React, shadcn/ui on Base UI, live run console, tickets, artifacts |
+| `@brevi/docs` | Documentation site (Astro Starlight), deployed to [docs.brevi.dev](https://docs.brevi.dev) |
+| `@brevi/api` | Hosted OAuth backend (Hono on Cloudflare Workers), deployed to api.brevi.dev |
 
 ## Development
 
@@ -80,3 +81,22 @@ bun run check-types
 ```
 
 For Firecracker sandboxes you need a Linux host with `/dev/kvm`, a kernel image, and a rootfs — see `packages/sandbox/README.md` for the one-time image and network setup.
+
+## CI, deploys, and releases
+
+GitHub Actions on [Blacksmith](https://blacksmith.sh) runners (`.github/workflows/`):
+
+- **`ci.yml`** — lint, typecheck, and build on every PR and push to main, then deploy the docs and the api to Cloudflare Workers:
+  - Pull requests → the **preview** environment (`brevi-docs-preview` / `brevi-api-preview` on the account's `workers.dev` subdomain). Forked PRs skip deploys.
+  - Pushes to main → **production** ([docs.brevi.dev](https://docs.brevi.dev) and api.brevi.dev, attached as custom domains).
+- **`release.yml`** — package releases via [Changesets](https://github.com/changesets/changesets). When main has pending changesets, the workflow opens (or updates) a **Release packages** PR; merging it publishes `@brevi/{cli,orchestrator,sandbox,shared,app}` to npm in lockstep.
+
+Releasing a change:
+
+```sh
+bun changeset        # describe the change, pick a bump — commit the generated file with your PR
+```
+
+The docs site's **Changelog** page is generated at build time from the packages' `CHANGELOG.md` files (`apps/docs/scripts/build-changelog.ts`), so each release lands in the published docs on the next main deploy.
+
+Repository secrets the workflows need: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and `NPM_TOKEN`. The api's own OAuth secrets are set per Worker environment with `wrangler secret put <NAME> --env production|preview` (see `apps/api/wrangler.jsonc`).

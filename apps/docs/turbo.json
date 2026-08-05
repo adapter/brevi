@@ -1,0 +1,15 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../../packages/*/CHANGELOG.md",
+        "../app/CHANGELOG.md"
+      ],
+      "outputs": ["dist/**"]
+    }
+  }
+}

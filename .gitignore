@@ -21,6 +21,9 @@ coverage
 # Wrangler local state
 .wrangler/
 
+# Generated from the packages' CHANGELOG.md files at docs build time
+apps/docs/src/content/docs/reference/changelog.md
+
 # Vercel
 .vercel
 
