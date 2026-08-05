@@ -20,6 +20,7 @@ npm install -g @brevi/cli
 | `brevi init` | Create the config and choose a sandbox provider (`auto` / `firecracker` / `process`) |
 | `brevi start` | Start headless (no browser) |
 | `brevi status` | Show orchestrator health and recent runs |
+| `brevi update` | Update the installed CLI to the latest release on npm (`--check` to only report) |
 
 Everything else — connecting Linear, GitHub, and agent credentials, mapping repositories — happens in the dashboard's Connections panel. All state lives under `~/.brevi/`.
 

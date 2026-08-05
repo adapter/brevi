@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import { loadConfig, startOrchestrator } from "@brevi/orchestrator";
 import open from "open";
 import pc from "picocolors";
+import { updateNotice } from "./update.js";
 import { errorMessage } from "./util.js";
+import { readPackageVersion } from "./version.js";
 
 /**
  * The published CLI bundles the dashboard next to the entry file (dist/app).
@@ -47,6 +49,12 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
   }
 
   console.log(pc.dim("  Press Ctrl+C to stop."));
+
+  // Fire-and-forget: prints a "new version available" line if npm answers in
+  // time, and stays silent otherwise. Never delays or fails startup.
+  void updateNotice(readPackageVersion()).then((notice) => {
+    if (notice) console.log(notice);
+  });
 
   let shuttingDown = false;
   const shutdown = (signal: NodeJS.Signals): void => {
