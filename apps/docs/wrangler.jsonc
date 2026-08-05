@@ -2,6 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "brevi-docs",
   "compatibility_date": "2026-08-01",
+  "observability": { "enabled": true },
   // The docs site is a static Astro build served as Worker assets.
   "assets": {
     "directory": "./dist",
