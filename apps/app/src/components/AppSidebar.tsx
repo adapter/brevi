@@ -53,7 +53,7 @@ export function AppSidebar({
   );
 
   return (
-    <Sidebar collapsible="none" className="h-svh shrink-0 border-r border-sidebar-border">
+    <Sidebar collapsible="none" className="h-svh w-[22rem] shrink-0 border-r border-sidebar-border">
       <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
         <div className="flex items-center gap-2.5">
           <img src="/logo.png" alt="" className="size-[22px]" />
