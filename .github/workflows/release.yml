@@ -4,9 +4,6 @@
 # *stages* the new versions on npm (no OTP needed), and a maintainer
 # approves them with 2FA on npmjs.com → Staged Packages.
 #
-# Staging requires the package to already exist on the registry — the
-# first-ever publish happens locally via `bun run release:first`.
-#
 # Required repository secrets:
 #   NPM_TOKEN — npm token with publish rights to the @brevi scope
 #               (staging needs no 2FA bypass)

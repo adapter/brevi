@@ -98,8 +98,6 @@ bun changeset        # describe the change, pick a bump — commit the generated
 # …merge the Release packages PR when it appears, then approve the staged versions on npmjs.com
 ```
 
-The first-ever publish of a package can't be staged — bootstrap it locally with `npm login && bun run release:first`.
-
 The docs site's **Changelog** page is generated at build time from the packages' `CHANGELOG.md` files (`apps/docs/scripts/build-changelog.ts`), so each release lands in the published docs on the next main deploy.
 
 Repository secrets the workflows need: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and `NPM_TOKEN`. The api's own OAuth secrets are set per Worker environment with `wrangler secret put <NAME> --env production|preview` (see `apps/api/wrangler.jsonc`).

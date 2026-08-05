@@ -8,8 +8,8 @@
  * approves with 2FA on npmjs.com (Staged Packages) or via
  * `npm stage approve <stage-id>`.
  *
- * Staging only works for packages that already exist on the registry; the
- * first-ever publish of a package must happen locally: `bun run release:first`.
+ * Staging only works for packages that already exist on the registry; a
+ * brand-new package must be published once locally before it can be staged.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -50,7 +50,7 @@ for (const dir of DIRS) {
     npm(["view", pkg.name, "name"]);
   } catch {
     console.error(`✖ ${pkg.name} has never been published; staging requires an existing package.`);
-    console.error("  Run the first publish locally: npm login && bun run release:first");
+    console.error("  Publish it once locally first: npm publish --access public");
     failed = true;
     continue;
   }
