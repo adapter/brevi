@@ -3,7 +3,7 @@ title: CLI
 description: "Reference for the brevi command line: init, ui, start and status."
 ---
 
-The CLI is `@brevi/cli`, exposed as the `brevi` binary. Until the packages are published, run it from a clone with `bun run brevi -- <command>`, or `bun link` the package once (see [Getting started](/getting-started/)).
+The CLI is [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli), exposed as the `brevi` binary. Run it with `npx @brevi/cli <command>`, or install it globally with `npm install -g @brevi/cli` (see [Getting started](/getting-started/)).
 
 ```
 brevi [command]

@@ -1,15 +1,15 @@
 ---
 title: Getting started
-description: Install brevi from the repository, pick a sandbox provider, connect Linear, GitHub and a coding agent, and run your first ticket.
+description: Install brevi from npm, pick a sandbox provider, connect Linear, GitHub and a coding agent, and run your first ticket.
 ---
 
 import { Steps, Aside } from '@astrojs/starlight/components';
 
-brevi runs on your machine: a CLI, an orchestrator that polls Linear, and a dashboard served from the same process. This page takes you from a clone to a first pull request.
+brevi runs on your machine: a CLI, an orchestrator that polls Linear, and a dashboard served from the same process. This page takes you from install to a first pull request.
 
 ## Prerequisites
 
-- **Bun** (the repo is a Bun workspace + Turborepo) and **Node.js 18+**.
+- **Node.js 18+**.
 - **git**, and a GitHub account with access to the repositories you want brevi to work on.
 - A **Linear** account, with issues you can assign to yourself.
 - A coding agent credential brevi can find or that you can paste: a Claude Code login / Anthropic API key, or a Codex (ChatGPT or OpenAI) login.
@@ -17,31 +17,23 @@ brevi runs on your machine: a CLI, an orchestrator that polls Linear, and a dash
 
 ## Install
 
-The packages are not published to npm yet, so run the CLI from a clone of the repo:
+The CLI is published as [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli) — run it with `npx`:
 
 ```sh
-git clone https://github.com/adapter/brevi.git
-cd brevi
-bun install && bun run build
+npx @brevi/cli init
+npx @brevi/cli ui
 ```
 
-Then either call the CLI through the root script:
+…or install it globally to get the `brevi` binary:
 
 ```sh
-bun run brevi -- init
-bun run brevi -- ui
-```
-
-…or link it once and use `brevi` from anywhere:
-
-```sh
-cd packages/cli && bun link
+npm install -g @brevi/cli
 brevi init
 brevi ui
 ```
 
 <Aside type="note">
-Once the packages are published this becomes `npx @brevi/cli init` / `npx @brevi/cli ui`. After changing CLI or orchestrator code, rerun `bun run build` — the linked binary runs the built `dist/`.
+Working on brevi itself? Clone [adapter/brevi](https://github.com/adapter/brevi), then `bun install && bun run build` and use `bun run brevi -- <command>` from the repo root.
 </Aside>
 
 ## First run

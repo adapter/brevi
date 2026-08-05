@@ -11,22 +11,10 @@ Every execution runs in an isolated sandbox. On Linux with KVM, sandboxes are [F
 
 ## Quick start
 
-The packages aren't published to npm yet, so run the CLI from this repo:
-
 ```sh
-bun install && bun run build
-
-# either through the root script…
-bun run brevi -- init
-bun run brevi -- ui
-
-# …or link it once and use `brevi` anywhere
-cd packages/cli && bun link
-brevi init
-brevi ui
+npx @brevi/cli init   # pick a sandbox provider
+npx @brevi/cli ui     # start the orchestrator and open the dashboard
 ```
-
-Once published, this becomes `npx @brevi/cli init` / `npx @brevi/cli ui`. After changing CLI/orchestrator code, rerun `bun run build` (the linked bin runs the built `dist/`).
 
 `init` only picks a sandbox provider. Everything else happens in the dashboard's **Connections** panel with one-click **Connect** buttons — no copying keys:
 
@@ -80,6 +68,21 @@ bun run lint           # oxlint
 bun run check-types
 ```
 
+To run the CLI from the repo instead of the published package:
+
+```sh
+# either through the root script…
+bun run brevi -- init
+bun run brevi -- ui
+
+# …or link it once and use `brevi` anywhere
+cd packages/cli && bun link
+brevi init
+brevi ui
+```
+
+After changing CLI/orchestrator code, rerun `bun run build` — the linked bin runs the built `dist/`.
+
 For Firecracker sandboxes you need a Linux host with `/dev/kvm`, a kernel image, and a rootfs — see `packages/sandbox/README.md` for the one-time image and network setup.
 
 ## CI, deploys, and releases
@@ -97,8 +100,6 @@ Releasing a change:
 bun changeset        # describe the change, pick a bump — commit the generated file with your PR
 # …merge the Release packages PR when it appears, then approve the staged versions on npmjs.com
 ```
-
-The first-ever publish of a package can't be staged — bootstrap it locally with `npm login && bun run release:first`.
 
 The docs site's **Changelog** page is generated at build time from the packages' `CHANGELOG.md` files (`apps/docs/scripts/build-changelog.ts`), so each release lands in the published docs on the next main deploy.
 

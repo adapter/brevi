@@ -9,8 +9,7 @@
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "check-types": "turbo run check-types",
     "changeset": "changeset",
-    "release": "turbo run build && bun scripts/stage-publish.ts",
-    "release:first": "turbo run build && changeset publish"
+    "release": "turbo run build && bun scripts/stage-publish.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",
