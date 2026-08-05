@@ -2,13 +2,16 @@
   "name": "@brevi/docs",
   "type": "module",
   "version": "0.0.1",
+  "private": true,
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
     "build": "astro build",
     "lint": "oxlint --max-warnings 0",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "deploy": "wrangler deploy --env production",
+    "deploy:preview": "wrangler deploy --env preview"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.6",
@@ -16,6 +19,7 @@
     "sharp": "^0.34.5"
   },
   "devDependencies": {
-    "oxlint": "^1.22.0"
+    "oxlint": "^1.22.0",
+    "wrangler": "^4.118.0"
   }
 }

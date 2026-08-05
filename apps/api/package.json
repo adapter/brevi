@@ -9,7 +9,8 @@
     "build": "tsc --noEmit",
     "check-types": "tsc --noEmit",
     "lint": "oxlint --max-warnings 0",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy --env production",
+    "deploy:preview": "wrangler deploy --env preview"
   },
   "dependencies": {
     "hono": "^4.7.0"

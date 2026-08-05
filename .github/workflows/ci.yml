@@ -1,0 +1,126 @@
+# CI: checks on every push/PR, then Cloudflare deploys — PRs go to the
+# preview environment, main goes to production.
+#
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN   — API token with Workers Scripts:Edit (deploys)
+#   CLOUDFLARE_ACCOUNT_ID  — the Cloudflare account to deploy into
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, typecheck, build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Cache bun and turbo
+        uses: useblacksmith/cache@v6
+        with:
+          path: |
+            ~/.bun/install/cache
+            .turbo
+          key: bun-turbo-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: |
+            bun-turbo-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
+            bun-turbo-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run check-types
+      - run: bun run build
+
+  deploy-preview:
+    name: Deploy preview (docs + api)
+    # Forked PRs have no secrets; only deploy previews for same-repo branches.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: checks
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Preview URLs are account-scoped workers.dev subdomains:
+    #   https://brevi-docs-preview.<account>.workers.dev
+    #   https://brevi-api-preview.<account>.workers.dev
+    environment:
+      name: preview
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Cache bun and turbo
+        uses: useblacksmith/cache@v6
+        with:
+          path: |
+            ~/.bun/install/cache
+            .turbo
+          key: bun-turbo-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: |
+            bun-turbo-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
+            bun-turbo-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+      - run: bun run build --filter=@brevi/docs
+
+      - name: Deploy docs to preview
+        working-directory: apps/docs
+        run: bun run deploy:preview
+
+      - name: Deploy api to preview
+        working-directory: apps/api
+        run: bun run deploy:preview
+
+  deploy-production:
+    name: Deploy production (docs + api)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: checks
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    environment:
+      name: production
+      url: https://docs.brevi.dev
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Cache bun and turbo
+        uses: useblacksmith/cache@v6
+        with:
+          path: |
+            ~/.bun/install/cache
+            .turbo
+          key: bun-turbo-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: |
+            bun-turbo-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
+            bun-turbo-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+      - run: bun run build --filter=@brevi/docs
+
+      - name: Deploy docs to production
+        working-directory: apps/docs
+        run: bun run deploy
+
+      - name: Deploy api to production
+        working-directory: apps/api
+        run: bun run deploy
