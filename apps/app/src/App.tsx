@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "./components/AppSidebar";
 import { ConnectionsSheet, PROVIDERS } from "./components/ConnectionsSheet";
+import { Overview } from "./components/Overview";
 import { RunDetail } from "./components/RunDetail";
-import { RunsDashboard } from "./components/RunsDashboard";
 import { SiteHeader } from "./components/SiteHeader";
 import { Close, Warn } from "./components/Icons";
 import { isActive } from "./lib/status";
@@ -74,6 +74,9 @@ export default function App() {
     <SidebarProvider className="h-svh min-h-svh overflow-hidden">
       <AppSidebar
         tickets={tickets}
+        runs={runs}
+        now={now}
+        selectedRunId={selectedRunId}
         activeByTicket={activeByTicket}
         config={config}
         health={health}
@@ -129,12 +132,10 @@ export default function App() {
               onCancel={() => void cancelRun(selectedRun.id)}
             />
           ) : (
-            <RunsDashboard
-              runs={runs}
-              now={now}
-              conn={conn}
-              loaded={loaded || selectedRunId !== null}
-              onOpen={openRun}
+            <Overview
+              offline={unreachable}
+              hasRuns={runs.length > 0}
+              missingRun={selectedRunId !== null && loaded}
             />
           )}
         </div>

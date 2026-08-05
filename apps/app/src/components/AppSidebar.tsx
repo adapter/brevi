@@ -10,12 +10,16 @@ import {
   SidebarHeader,
 } from "@/components/ui/sidebar";
 import { Card } from "@/components/ui/card";
-import { STATUS_TONE } from "../lib/status";
+import { duration, relative } from "../lib/format";
+import { isActive, STATUS_TONE } from "../lib/status";
 import { KindChip, Plate, RepoChip, StatusDot } from "./Bits";
 import { External, Play, Sliders } from "./Icons";
 
 export function AppSidebar({
   tickets,
+  runs,
+  now,
+  selectedRunId,
   activeByTicket,
   config,
   health,
@@ -29,6 +33,9 @@ export function AppSidebar({
   onOpenConnections,
 }: {
   tickets: Ticket[];
+  runs: Run[];
+  now: number;
+  selectedRunId: string | null;
   activeByTicket: Map<string, Run>;
   config: BreviConfig | null;
   health: HealthResponse | null;
@@ -92,6 +99,35 @@ export function AppSidebar({
                       busy={busy[ticket.id] === true}
                       onRun={() => onRun(ticket.id)}
                       onOpenRun={onOpenRun}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel className="gap-2">
+            <Plate className="text-haze-400">Runs</Plate>
+            <span className="font-mono text-[11px] leading-none text-haze-700">{runs.length}</span>
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            {runs.length === 0 ? (
+              <p className="px-2 py-2 text-[12.5px] leading-relaxed text-haze-700">
+                {unreachable
+                  ? "Runs appear once the orchestrator is running."
+                  : "No runs yet. Everything brevi does shows up here."}
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-1.5 px-1 pt-1">
+                {runs.map((run) => (
+                  <li key={run.id}>
+                    <RunStrip
+                      run={run}
+                      now={now}
+                      selected={run.id === selectedRunId}
+                      onOpen={() => onOpenRun(run.id)}
                     />
                   </li>
                 ))}
@@ -186,6 +222,66 @@ function TicketStrip({
         </div>
       </div>
     </Card>
+  );
+}
+
+/**
+ * One run in the sidebar: status, ticket, and elapsed time. A real anchor to
+ * /runs/<id> — copy link and middle-click behave like any link — that hands
+ * plain left-clicks to the router.
+ */
+function RunStrip({
+  run,
+  now,
+  selected,
+  onOpen,
+}: {
+  run: Run;
+  now: number;
+  selected: boolean;
+  onOpen: () => void;
+}) {
+  const tone = STATUS_TONE[run.status];
+  const live = isActive(run.status);
+  const span = live
+    ? duration(run.startedAt ?? run.createdAt, now)
+    : run.finishedAt && run.startedAt
+      ? duration(run.startedAt, Date.parse(run.finishedAt))
+      : "—";
+
+  return (
+    <a
+      href={`/runs/${encodeURIComponent(run.id)}`}
+      onClick={(event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+        event.preventDefault();
+        onOpen();
+      }}
+      aria-current={selected ? "page" : undefined}
+      className={`flex overflow-hidden rounded-strip bg-card ring-1 transition-colors hover:bg-ink-800 ${
+        selected ? "bg-ink-800 ring-haze-600/50" : "ring-foreground/10"
+      }`}
+    >
+      <span className={`w-[3px] shrink-0 ${tone.fill}`} aria-hidden="true" />
+      <div className="min-w-0 flex-1 p-2.5">
+        <div className="flex items-center gap-1.5">
+          <StatusDot status={run.status} size={6} />
+          <span className={`plate ${tone.fg}`}>{tone.label}</span>
+          <span className="ml-auto font-mono text-[10px] tabular-nums text-haze-700">{span}</span>
+        </div>
+        <div className="mt-1.5 flex items-baseline gap-2">
+          <span className="shrink-0 font-plate text-[10px] tracking-[0.08em] text-haze-300">
+            {run.ticket.identifier}
+          </span>
+          <span className="truncate text-[12.5px] leading-snug text-haze-50">
+            {run.ticket.title}
+          </span>
+        </div>
+        <div className="mt-1 font-mono text-[10px] text-haze-700">
+          {relative(run.createdAt, now)}
+        </div>
+      </div>
+    </a>
   );
 }
 
