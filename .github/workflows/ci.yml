@@ -57,9 +57,9 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     needs: checks
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    # Preview URLs are account-scoped workers.dev subdomains:
-    #   https://brevi-docs-preview.<account>.workers.dev
-    #   https://brevi-api-preview.<account>.workers.dev
+    permissions:
+      contents: read
+      pull-requests: write # upsert the preview-URLs comment
     environment:
       name: preview
     env:
@@ -93,12 +93,41 @@ jobs:
       - run: bun run build --filter=@brevi/docs
 
       - name: Deploy docs to preview
+        id: docs
         working-directory: apps/docs
-        run: bun run deploy:preview
+        run: |
+          set -o pipefail
+          bun run deploy:preview 2>&1 | tee /tmp/deploy-docs.log
+          echo "url=$(grep -oE 'https://[^ ]+\.workers\.dev' /tmp/deploy-docs.log | tail -1)" >> "$GITHUB_OUTPUT"
 
       - name: Deploy api to preview
+        id: api
         working-directory: apps/api
-        run: bun run deploy:preview
+        run: |
+          set -o pipefail
+          bun run deploy:preview 2>&1 | tee /tmp/deploy-api.log
+          echo "url=$(grep -oE 'https://[^ ]+\.workers\.dev' /tmp/deploy-api.log | tail -1)" >> "$GITHUB_OUTPUT"
+
+      # One sticky comment per PR, updated in place on every push.
+      - name: Comment preview URLs on the PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCS_URL: ${{ steps.docs.outputs.url }}
+          API_URL: ${{ steps.api.outputs.url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          marker="<!-- brevi-preview-urls -->"
+          body="$(printf '%s\n### Preview deployments\n\n| App | URL |\n| --- | --- |\n| docs | %s |\n| api | %s |\n\n_Deployed from %s._' "$marker" "$DOCS_URL" "$API_URL" "$HEAD_SHA")"
+          cid=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+          if [ -n "$cid" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${cid}" -f body="$body" > /dev/null
+            echo "updated comment $cid"
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="$body" > /dev/null
+            echo "created comment"
+          fi
 
   deploy-production:
     name: Deploy production (docs + api)
