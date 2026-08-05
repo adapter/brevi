@@ -18,23 +18,26 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target=node --format=esm --external open && cp -R ../../apps/app/dist dist/app",
     "dev": "tsc --watch",
     "lint": "oxlint --max-warnings 0",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
+    "open": "^11.0.0"
+  },
+  "devDependencies": {
     "@brevi/orchestrator": "*",
     "@brevi/shared": "*",
     "@clack/prompts": "^1.7.0",
-    "commander": "^15.0.0",
-    "open": "^11.0.0",
-    "picocolors": "^1.1.1"
-  },
-  "devDependencies": {
     "@repo/typescript-config": "*",
     "@types/node": "^26.1.2",
+    "commander": "^15.0.0",
     "oxlint": "^1.77.0",
+    "picocolors": "^1.1.1",
     "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

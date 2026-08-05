@@ -49,9 +49,11 @@ State lives in `~/.brevi/`: `config.json`, run history + artifacts under `runs/`
 
 ## Apps and packages
 
+Only `@brevi/cli` is published — it bundles the workspace libraries into a single file and ships the dashboard's built assets. The rest are internal workspace packages.
+
 | Package | What it is |
 | --- | --- |
-| `@brevi/cli` | `brevi init` / `brevi ui` / `brevi start` / `brevi status` |
+| `@brevi/cli` | **Published.** `brevi init` / `brevi ui` / `brevi start` / `brevi status`; bundles everything below |
 | `@brevi/orchestrator` | Linear polling, run pipeline, GitHub PRs, HTTP/WS API, serves the dashboard |
 | `@brevi/sandbox` | Sandbox providers: Firecracker microVMs (Linux + KVM) and local process fallback |
 | `@brevi/shared` | Domain types, config schema (zod), dashboard API/WebSocket protocol |
@@ -95,7 +97,7 @@ GitHub Actions on [Blacksmith](https://blacksmith.sh) runners (`.github/workflow
 - **`ci.yml`** — lint, typecheck, and build on every PR and push to main, then deploy the docs and the api to Cloudflare Workers:
   - Pull requests → the **preview** environment (`brevi-docs-preview` / `brevi-api-preview` on the account's `workers.dev` subdomain). Forked PRs skip deploys.
   - Pushes to main → **production** ([brevi.dev](https://brevi.dev) and api.brevi.dev, attached as custom domains).
-- **`release.yml`** — package releases via [Changesets](https://github.com/changesets/changesets) and [npm staged publishing](https://docs.npmjs.com/staged-publishing). When main has pending changesets, the workflow opens (or updates) a **Release packages** PR; merging it **stages** the new lockstep versions of `@brevi/{cli,orchestrator,sandbox,shared,app}` on npm. Nothing goes live until a maintainer approves the staged versions with 2FA (npmjs.com → **Staged Packages**, or `npm stage approve <stage-id>`).
+- **`release.yml`** — releases `@brevi/cli` via [Changesets](https://github.com/changesets/changesets) and [npm staged publishing](https://docs.npmjs.com/staged-publishing). When main has pending changesets, the workflow opens (or updates) a **Release packages** PR; merging it **stages** the new version on npm. Nothing goes live until a maintainer approves the staged version with 2FA (npmjs.com → **Staged Packages**, or `npm stage approve <stage-id>`).
 
 Releasing a change:
 
