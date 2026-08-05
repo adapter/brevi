@@ -6,6 +6,7 @@ import type {
   DevicePollResponse,
   GithubRepo,
   HealthResponse,
+  LinearProject,
   ReposUpdateRequest,
   ReposUpdateResponse,
   Run,
@@ -47,6 +48,7 @@ export const api = {
   pollGithubDevice: () =>
     json<DevicePollResponse>("/api/connect/github/poll", { method: "POST" }),
   githubRepos: () => json<GithubRepo[]>("/api/github/repos"),
+  linearProjects: () => json<LinearProject[]>("/api/linear/projects"),
   updateRepos: (request: ReposUpdateRequest) =>
     json<ReposUpdateResponse>("/api/settings/repos", {
       method: "PUT",

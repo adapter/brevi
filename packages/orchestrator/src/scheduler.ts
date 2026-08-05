@@ -11,6 +11,7 @@ import {
   type CredentialsUpdateResponse,
   type DevicePollResponse,
   type GithubRepo,
+  type LinearProject,
   type RepoConfig,
   type ReposUpdateRequest,
   type ReposUpdateResponse,
@@ -435,6 +436,14 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       throw new OrchestratorError("invalid", "GitHub is not connected");
     }
     return listRepos(this.config.github.token);
+  }
+
+  /** Linear projects, for the dashboard's project-to-repo mapping picker. */
+  async listLinearProjects(): Promise<LinearProject[]> {
+    if (!this.#linear) {
+      throw new OrchestratorError("invalid", "Linear is not connected");
+    }
+    return this.#linear.listProjects();
   }
 
   /** Replace the repo mappings from the dashboard and re-resolve tickets. */

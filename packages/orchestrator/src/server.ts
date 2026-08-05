@@ -249,6 +249,14 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
     }
   });
 
+  app.get("/api/linear/projects", async (c) => {
+    try {
+      return c.json(await orchestrator.listLinearProjects());
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
   app.put("/api/settings/repos", async (c) => {
     let body: ReposUpdateRequest;
     try {

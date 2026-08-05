@@ -1,5 +1,5 @@
 import { LinearClient, type Issue, type LinearDocument } from "@linear/sdk";
-import type { BreviConfig, Ticket, TicketKind } from "@brevi/shared";
+import type { BreviConfig, LinearProject, Ticket, TicketKind } from "@brevi/shared";
 
 /**
  * Linear integration: polls for eligible tickets, posts result comments, and
@@ -37,6 +37,14 @@ export class LinearService {
       if (ticket) tickets.push(ticket);
     }
     return tickets;
+  }
+
+  /** Projects visible to the credential, for the dashboard's repo-mapping picker. */
+  async listProjects(): Promise<LinearProject[]> {
+    const connection = await this.#client.projects({ first: 250 });
+    return connection.nodes
+      .map((project) => ({ id: project.id, name: project.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** Post a markdown comment on an issue; returns the comment url when available. */

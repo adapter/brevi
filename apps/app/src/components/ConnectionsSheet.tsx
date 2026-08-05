@@ -5,11 +5,18 @@ import type {
   CredentialResult,
   CredentialsUpdateRequest,
   GithubRepo,
+  LinearProject,
   RepoConfig,
 } from "@brevi/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Sheet,
@@ -20,7 +27,7 @@ import {
 } from "@/components/ui/sheet";
 import { api } from "../lib/api";
 import { Plate, RepoChip } from "./Bits";
-import { Check, Close, External, Pin, Warn } from "./Icons";
+import { Check, ChevronRight, Close, External, Pin, Warn } from "./Icons";
 
 /** How the "Connect" button acquires a credential, shown as a hint. */
 type ConnectHint = string;
@@ -435,6 +442,7 @@ function RepositoriesSection({
   onConfig: (config: BreviConfig) => void;
 }) {
   const githubConnected = config.github.token !== "";
+  const linearConnected = config.linear.apiKey !== "";
   const mapped = Object.entries(config.repos);
 
   const [available, setAvailable] = useState<GithubRepo[] | null>(null);
@@ -442,6 +450,27 @@ function RepositoriesSection({
   const [search, setSearch] = useState("");
   const [pending, setPending] = useState(false);
   const [mutateError, setMutateError] = useState<string | null>(null);
+  const [linearProjects, setLinearProjects] = useState<LinearProject[] | null>(null);
+
+  useEffect(() => {
+    if (!linearConnected) {
+      setLinearProjects(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .linearProjects()
+      .then((projects) => {
+        if (!cancelled) setLinearProjects(projects);
+      })
+      .catch(() => {
+        // The picker degrades to showing configured names; no need to shout.
+        if (!cancelled) setLinearProjects(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [linearConnected, config.linear.apiKey]);
 
   useEffect(() => {
     if (!githubConnected) {
@@ -575,6 +604,7 @@ function RepositoriesSection({
                     // A running orchestrator from before this field may serve
                     // configs without it; never let that take the app down.
                     projects={repo.projects ?? []}
+                    options={linearProjects}
                     pending={pending}
                     onCommit={(projects) => setProjects(key, projects)}
                   />
@@ -639,51 +669,71 @@ function RepositoriesSection({
 }
 
 /**
- * Comma-separated Linear project names that route tickets to a repo.
- * Commits on blur or Enter; a project name can contain spaces, so commas
- * are the only separator.
+ * Multi-select of Linear projects that route tickets to a repo. Options come
+ * from the orchestrator's project list; names already configured but no longer
+ * returned by Linear stay selectable so they can be unmapped.
  */
 function ProjectsField({
   projects,
+  options,
   pending,
   onCommit,
 }: {
   projects: string[];
+  options: LinearProject[] | null;
   pending: boolean;
   onCommit: (projects: string[]) => void;
 }) {
-  const [text, setText] = useState(projects.join(", "));
-  const saved = projects.join(", ");
+  const names = useMemo(() => {
+    const set = new Set<string>(options?.map((project) => project.name) ?? []);
+    for (const name of projects) set.add(name);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [options, projects]);
 
-  // Adopt external changes (another row's save refreshed the config).
-  useEffect(() => {
-    setText(saved);
-  }, [saved]);
-
-  const commit = () => {
-    const next = text
-      .split(",")
-      .map((name) => name.trim())
-      .filter(Boolean);
-    if (next.join("\n") !== projects.join("\n")) onCommit(next);
+  const toggle = (name: string, checked: boolean) => {
+    onCommit(checked ? [...projects, name] : projects.filter((p) => p !== name));
   };
 
+  const empty = names.length === 0;
+
   return (
-    <label className="flex items-center gap-2">
+    <div className="flex min-w-0 items-center gap-2">
       <Plate className="shrink-0 text-haze-700">Projects</Plate>
-      <Input
-        type="text"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-        }}
-        disabled={pending}
-        placeholder="Linear projects, comma-separated"
-        spellCheck={false}
-        className="h-7 rounded-[4px] bg-ink-950/70 font-mono text-[11px] text-haze-200 placeholder:text-haze-700 md:text-[11px]"
-      />
-    </label>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="outline"
+              size="plate"
+              disabled={pending || empty}
+              className="min-w-0 flex-1 justify-start font-mono text-[11px] tracking-normal normal-case"
+            />
+          }
+        >
+          <span className={`truncate ${projects.length === 0 ? "text-haze-700" : "text-haze-200"}`}>
+            {empty
+              ? options === null
+                ? "Connect Linear to map projects"
+                : "No Linear projects found"
+              : projects.length === 0
+                ? "Map Linear projects"
+                : projects.join(", ")}
+          </span>
+          <ChevronRight className="ml-auto size-3 rotate-90 text-haze-700" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="max-h-64 min-w-52 overflow-y-auto">
+          {names.map((name) => (
+            <DropdownMenuCheckboxItem
+              key={name}
+              checked={projects.includes(name)}
+              onCheckedChange={(checked) => toggle(name, checked === true)}
+              closeOnClick={false}
+            >
+              {name}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
