@@ -29,7 +29,7 @@ export function Overview({
           page reconnects on its own.
         </p>
         <div className="mt-3.5">
-          <Command text="npx @brevi/cli ui" />
+          <Command text="npx @brevi/cli" />
         </div>
       </Centered>
     );

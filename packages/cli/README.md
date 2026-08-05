@@ -3,8 +3,7 @@
 The brevi command line — a local sandbox and orchestrator for coding agents. Add the `brevi` label to a Linear ticket, get back a pull request.
 
 ```sh
-npx @brevi/cli init   # create ~/.brevi/config.json, pick a sandbox provider
-npx @brevi/cli ui     # start the orchestrator and open the dashboard
+npx @brevi/cli   # first run: pick a sandbox provider, then the dashboard opens
 ```
 
 Or install globally for the `brevi` binary:
@@ -17,8 +16,8 @@ npm install -g @brevi/cli
 
 | Command | What it does |
 | --- | --- |
+| `brevi` | Start the orchestrator and open the dashboard; runs init first on a fresh machine |
 | `brevi init` | Create the config and choose a sandbox provider (`auto` / `firecracker` / `process`) |
-| `brevi ui` | Start the orchestrator and open the dashboard in your browser |
 | `brevi start` | Start headless (no browser) |
 | `brevi status` | Show orchestrator health and recent runs |
 

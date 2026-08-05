@@ -21,7 +21,7 @@ export interface RunServerOptions {
   openBrowser: boolean;
 }
 
-/** Shared implementation behind `brevi ui` and `brevi start`. */
+/** Shared implementation behind the bare `brevi` invocation and `brevi start`. */
 export async function runServer({ openBrowser }: RunServerOptions): Promise<void> {
   const config = await loadConfig().catch((err: unknown) => {
     console.error(pc.red(`✖ ${errorMessage(err)}`));
