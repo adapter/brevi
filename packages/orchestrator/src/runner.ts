@@ -92,7 +92,9 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     // ---- running ---------------------------------------------------------
     await store.setStatus(run.id, "running");
     const prompt =
-      ticket.kind === "spike" ? buildSpikePrompt(ticket) : buildImplementationPrompt(ticket, repo);
+      ticket.kind === "spike"
+        ? buildSpikePrompt(ticket)
+        : buildImplementationPrompt(ticket, repo, config.github.prDescription);
     const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"];
     if (config.agent.model) args.push("--model", config.agent.model);
     args.push(...config.agent.args);

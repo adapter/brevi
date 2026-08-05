@@ -47,6 +47,8 @@ export const configSchema = z.object({
     .object({
       /** Empty = not connected yet; set via the dashboard's Connections panel. */
       token: z.string().default(""),
+      /** How the agent is told to write the PR description (.brevi/summary.md). */
+      prDescription: z.enum(["concise", "detailed"]).default("concise"),
     })
     .prefault({}),
   /** Map of repo key -> repo config. Ticket labels or project names select the key. */
