@@ -3,6 +3,13 @@
   "version": "0.1.1",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adapter/brevi.git",
+    "directory": "packages/shared"
+  },
+  "homepage": "https://brevi.dev",
+  "bugs": "https://github.com/adapter/brevi/issues",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

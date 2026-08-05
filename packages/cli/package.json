@@ -3,6 +3,13 @@
   "version": "0.1.1",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adapter/brevi.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://brevi.dev",
+  "bugs": "https://github.com/adapter/brevi/issues",
   "description": "Local sandbox and orchestrator for coding agents. Connects Linear + GitHub, runs @brevi-tagged tickets in Firecracker microVMs, and opens PRs with demos.",
   "bin": {
     "brevi": "./dist/index.js"
