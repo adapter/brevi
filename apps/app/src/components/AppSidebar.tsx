@@ -312,30 +312,14 @@ function SummonCard({ config }: { config: BreviConfig | null }) {
   const spike = config?.trigger.spikeMarker ?? "SPIKE";
   const poll = config?.pollIntervalSeconds ?? 60;
 
-  const rules: [string, string][] = [
-    ["Assignee", "The issue is assigned to you."],
-    ["Trigger", `${tag} appears in the title or description, or the ${label} label is on it.`],
-    ["Research", `Start the title with ${spike} to get a written answer instead of a PR.`],
-  ];
-
   return (
     <Card size="sm" className="mx-1 block p-4">
       <Plate className="text-haze-700">Nothing queued</Plate>
-      <h3 className="mt-2.5 text-[15px] leading-snug text-haze-50">How to summon brevi</h3>
-      <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
-        brevi watches Linear and picks up issues that match all of these.
+      <p className="mt-2 text-[12.5px] leading-relaxed text-haze-400">
+        Assign yourself a Linear issue and put {tag} in its title or description (or add the{" "}
+        {label} label). Start the title with {spike} for a written answer instead of a PR.
       </p>
-
-      <dl className="mt-3.5 flex flex-col">
-        {rules.map(([key, description]) => (
-          <div key={key} className="border-t border-ink-700 py-3">
-            <dt className="plate text-haze-700">{key}</dt>
-            <dd className="mt-1.5 text-[12.5px] leading-relaxed text-haze-300">{description}</dd>
-          </div>
-        ))}
-      </dl>
-
-      <p className="border-t border-ink-700 pt-3 font-mono text-[11px] text-haze-700">
+      <p className="mt-3 border-t border-ink-700 pt-3 font-mono text-[11px] text-haze-700">
         Checking Linear every {poll}s
       </p>
     </Card>

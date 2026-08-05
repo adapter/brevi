@@ -6,7 +6,7 @@ import { isActive } from "../lib/status";
 import { Artifacts } from "./Artifacts";
 import { KindChip, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
-import { ArrowLeft, External, Stop } from "./Icons";
+import { External, Stop } from "./Icons";
 import { PhaseSpine } from "./PhaseSpine";
 import { ResultCard } from "./ResultCard";
 
@@ -15,14 +15,12 @@ export function RunDetail({
   events,
   now,
   busy,
-  onBack,
   onCancel,
 }: {
   run: Run;
   events: RunEvent[];
   now: number;
   busy: boolean;
-  onBack: () => void;
   onCancel: () => void;
 }) {
   const live = isActive(run.status);
@@ -31,11 +29,6 @@ export function RunDetail({
   return (
     <div className="flex flex-col">
       <div className="sticky top-0 z-10 flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/70 bg-ink-900/90 px-4 py-2 backdrop-blur-md">
-        <Button variant="outline" size="plate" onClick={onBack} className="text-haze-400">
-          <ArrowLeft className="size-3" />
-          Overview
-        </Button>
-
         <a
           href={run.ticket.url}
           target="_blank"

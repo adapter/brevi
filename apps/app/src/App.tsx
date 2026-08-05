@@ -128,7 +128,6 @@ export default function App() {
               events={events[selectedRun.id] ?? []}
               now={now}
               busy={busy[selectedRun.id] === true}
-              onBack={() => openRun(null)}
               onCancel={() => void cancelRun(selectedRun.id)}
             />
           ) : (
