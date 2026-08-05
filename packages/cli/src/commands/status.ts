@@ -2,7 +2,9 @@ import type { HealthResponse } from "@brevi/shared";
 import { loadConfig } from "@brevi/orchestrator";
 import type { Command } from "commander";
 import pc from "picocolors";
+import { updateNotice } from "../lib/update.js";
 import { errorMessage } from "../lib/util.js";
+import { readPackageVersion } from "../lib/version.js";
 
 const HEALTH_TIMEOUT_MS = 2000;
 
@@ -11,6 +13,10 @@ export function registerStatusCommand(program: Command): void {
     .command("status")
     .description("Check whether the brevi orchestrator is running")
     .action(async () => {
+      // Checked in parallel with the health request; prints nothing when up
+      // to date or when npm can't be reached in time.
+      const notice = updateNotice(readPackageVersion());
+
       const config = await loadConfig().catch((err: unknown) => {
         console.error(pc.red(`✖ ${errorMessage(err)}`));
         console.error(pc.dim("  Run `npx @brevi/cli init` to create one."));
@@ -29,12 +35,19 @@ export function registerStatusCommand(program: Command): void {
         console.log(pc.green(`✔ brevi is running on port ${pc.bold(String(port))}`));
         console.log(pc.dim(`  version: ${health.version}`));
         console.log(pc.dim(`  sandbox provider: ${health.sandboxProvider}`));
+        await printNotice(notice);
       } catch {
         console.log(pc.yellow(`✖ brevi is not running on port ${port}`));
         console.log(pc.dim("  Start it with `npx @brevi/cli` or `npx @brevi/cli start`."));
+        await printNotice(notice);
         process.exit(1);
       } finally {
         clearTimeout(timer);
       }
     });
+}
+
+async function printNotice(notice: Promise<string | null>): Promise<void> {
+  const message = await notice;
+  if (message) console.log(message);
 }

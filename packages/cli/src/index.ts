@@ -5,6 +5,7 @@ import { registerInitCommand } from "./commands/init.js";
 import { registerStartCommand } from "./commands/start.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { registerUiCommand } from "./commands/ui.js";
+import { registerUpdateCommand } from "./commands/update.js";
 import { readPackageVersion } from "./lib/version.js";
 
 const program = new Command();
@@ -21,5 +22,6 @@ registerInitCommand(program);
 registerUiCommand(program);
 registerStartCommand(program);
 registerStatusCommand(program);
+registerUpdateCommand(program);
 
 await program.parseAsync(process.argv);

@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: "Reference for the brevi command line: the default invocation, init, start and status."
+description: "Reference for the brevi command line: the default invocation, init, start, status and update."
 ---
 
 The CLI is [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli), exposed as the `brevi` binary. Run it with `npx @brevi/cli [command]`, or install it globally with `npm install -g @brevi/cli` (see [Getting started](/getting-started/)).
@@ -13,6 +13,7 @@ brevi [command]
   init      Create the brevi config and choose a sandbox provider
   start     Start the orchestrator headlessly, without opening a browser
   status    Check whether the brevi orchestrator is running
+  update    Update @brevi/cli to the latest version published on npm
 
   -V, --version   Print the version
   -h, --help      Print help
@@ -64,3 +65,26 @@ $ brevi status
 ```
 
 Exits `0` when the orchestrator answers, and `1` when it doesn't (or when there is no config).
+
+## `brevi update`
+
+Also available as `brevi upgrade`. Asks the npm registry for the latest published `@brevi/cli` and compares it to the running version.
+
+```sh
+$ brevi update
+! Update available: 0.1.1 → 0.2.0
+  What changed: https://brevi.dev/reference/changelog/
+
+Detected a global npm install; running npm install -g @brevi/cli@0.2.0
+
+✔ Updated @brevi/cli 0.1.1 → 0.2.0
+  Changelog: https://brevi.dev/reference/changelog/
+```
+
+When an update is available it is installed in place, using the package manager the CLI was installed with — global installs via npm, bun, pnpm and yarn are detected from the path the CLI is running from. When running through `npx` (or `bunx` / `pnpm dlx`) there is nothing installed to update; the command says so and points at `npx @brevi/cli@latest`.
+
+brevi is under active development and releases can contain breaking changes, so the [changelog](/reference/changelog/) is always linked before anything is installed.
+
+With `--check`, only reports — nothing is installed. Exit codes: `0` when up to date (or after a successful update), `1` when `--check` found a newer version, when npm is unreachable, or when the install failed.
+
+The bare `brevi` invocation, `brevi start`, and `brevi status` also print a non-blocking one-line notice when a newer version is on npm; the check never delays them and stays silent when npm doesn't answer quickly.
