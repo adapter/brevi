@@ -9,6 +9,7 @@ import { Overview } from "./components/Overview";
 import { RunDetail } from "./components/RunDetail";
 import { SiteHeader } from "./components/SiteHeader";
 import { Close, Warn } from "./components/Icons";
+import { repoDisplay } from "./lib/repo";
 import { isActive } from "./lib/status";
 import { useNow } from "./lib/useNow";
 import { useOrchestrator } from "./lib/useOrchestrator";
@@ -125,6 +126,7 @@ export default function App() {
           {selectedRun ? (
             <RunDetail
               run={selectedRun}
+              repoName={repoDisplay(config, selectedRun.ticket.repo)}
               events={events[selectedRun.id] ?? []}
               now={now}
               busy={busy[selectedRun.id] === true}

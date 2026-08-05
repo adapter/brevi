@@ -12,12 +12,15 @@ import { ResultCard } from "./ResultCard";
 
 export function RunDetail({
   run,
+  repoName,
   events,
   now,
   busy,
   onCancel,
 }: {
   run: Run;
+  /** owner/name of the mapped repo, resolved from config. */
+  repoName: string | undefined;
   events: RunEvent[];
   now: number;
   busy: boolean;
@@ -62,7 +65,7 @@ export function RunDetail({
               {run.ticket.title}
             </h2>
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <RepoChip repo={run.ticket.repo} />
+              <RepoChip repo={repoName} />
               <Badge variant="secondary">
                 <span className="text-haze-700">State</span>
                 <span className="font-mono text-[11px] leading-none tracking-normal normal-case text-haze-300">

@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Card } from "@/components/ui/card";
 import { duration, relative } from "../lib/format";
+import { repoDisplay } from "../lib/repo";
 import { isActive, STATUS_TONE } from "../lib/status";
 import { KindChip, Plate, RepoChip, StatusDot } from "./Bits";
 import { External, Play, Sliders } from "./Icons";
@@ -104,6 +105,7 @@ export function AppSidebar({
                   <li key={`ticket-${ticket.id}`}>
                     <TicketStrip
                       ticket={ticket}
+                      repoName={repoDisplay(config, ticket.repo)}
                       active={activeByTicket.get(ticket.id)}
                       busy={busy[ticket.id] === true}
                       onRun={() => onRun(ticket.id)}
@@ -115,6 +117,7 @@ export function AppSidebar({
                   <li key={run.id}>
                     <RunStrip
                       run={run}
+                      repoName={repoDisplay(config, run.ticket.repo)}
                       now={now}
                       selected={run.id === selectedRunId}
                       onOpen={() => onOpenRun(run.id)}
@@ -153,12 +156,15 @@ export function AppSidebar({
 
 function TicketStrip({
   ticket,
+  repoName,
   active,
   busy,
   onRun,
   onOpenRun,
 }: {
   ticket: Ticket;
+  /** owner/name of the mapped repo, resolved from config. */
+  repoName: string | undefined;
   active?: Run;
   busy: boolean;
   onRun: () => void;
@@ -193,7 +199,7 @@ function TicketStrip({
         <h3 className="mt-2 line-clamp-2 text-[13px] leading-snug text-haze-50">{ticket.title}</h3>
 
         <div className="mt-2.5 flex flex-wrap items-center gap-2">
-          <RepoChip repo={ticket.repo} />
+          <RepoChip repo={repoName} />
           <span className="ml-auto">
             {active ? (
               <Button variant="outline" size="plate" onClick={() => onOpenRun(active.id)}>
@@ -222,11 +228,14 @@ function TicketStrip({
  */
 function RunStrip({
   run,
+  repoName,
   now,
   selected,
   onOpen,
 }: {
   run: Run;
+  /** owner/name of the mapped repo, resolved from config. */
+  repoName: string | undefined;
   now: number;
   selected: boolean;
   onOpen: () => void;
@@ -268,7 +277,7 @@ function RunStrip({
           </span>
         </div>
         <div className="mt-1.5 flex items-center gap-2">
-          <RepoChip repo={run.ticket.repo} />
+          <RepoChip repo={repoName} />
           <span className="ml-auto font-mono text-[10px] text-haze-700">
             {relative(run.createdAt, now)}
           </span>
