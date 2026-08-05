@@ -10,7 +10,7 @@
     "check-types": "tsc --noEmit",
     "lint": "oxlint --max-warnings 0",
     "deploy": "wrangler deploy --env production",
-    "deploy:preview": "wrangler deploy --env preview"
+    "deploy:preview": "wrangler versions upload --env production"
   },
   "dependencies": {
     "hono": "^4.13.0"

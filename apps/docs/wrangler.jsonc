@@ -8,11 +8,11 @@
     "directory": "./dist",
     "not_found_handling": "404-page"
   },
+  // Per-commit previews: CI uploads unreleased versions of the production
+  // worker (`wrangler versions upload`), each reachable on its own
+  // <version>-brevi-docs.<account>.workers.dev URL without shifting traffic.
+  "preview_urls": true,
   "env": {
-    "preview": {
-      "name": "brevi-docs-preview",
-      "workers_dev": true
-    },
     "production": {
       "name": "brevi-docs",
       "routes": [{ "pattern": "brevi.dev", "custom_domain": true }]
