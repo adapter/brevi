@@ -40,8 +40,11 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      # Staged publishing needs npm >= 11.15, newer than Node 24's bundled npm.
-      - run: npm install -g npm@latest
+      # Staged publishing needs npm >= 11.15, newer than Node 24's bundled
+      # npm. Pinned exactly — this binary handles NPM_TOKEN, so it must not
+      # float to whatever the registry serves as latest. Dependabot won't see
+      # this; bump it deliberately.
+      - run: npm install -g npm@11.19.0
 
       - run: bun install --frozen-lockfile
 
