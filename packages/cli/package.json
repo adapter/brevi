@@ -1,13 +1,15 @@
 {
   "name": "@brevi/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "license": "MIT",
   "description": "Local sandbox and orchestrator for coding agents. Connects Linear + GitHub, runs @brevi-tagged tickets in Firecracker microVMs, and opens PRs with demos.",
   "bin": {
     "brevi": "./dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
