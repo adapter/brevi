@@ -18,7 +18,7 @@ export default defineConfig({
 					attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
 				},
 			],
-			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/adapterlabs/brevi' }],
+			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/adapter/brevi' }],
 			sidebar: [
 				{ label: 'Getting started', slug: 'getting-started' },
 				{
