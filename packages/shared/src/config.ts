@@ -99,9 +99,7 @@ export const configSchema = z.object({
     .prefault({}),
   trigger: z
     .object({
-      /** Mention that opts a ticket in, searched in title/description/labels. */
-      tag: z.string().default("@brevi"),
-      /** Label name that also opts a ticket in. */
+      /** Label name that opts a ticket in. */
       label: z.string().default("brevi"),
       /** Label or title prefix marking a ticket as research-only. */
       spikeMarker: z.string().default("SPIKE"),

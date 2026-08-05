@@ -5,7 +5,7 @@
 
 A local sandbox and orchestrator for coding agents.
 
-Connect your machine to Linear and GitHub, tag a ticket with **@brevi** (or the `brevi` label), and brevi picks it up:
+Connect your machine to Linear and GitHub, add the **`brevi`** label to a ticket, and brevi picks it up:
 
 - **SPIKE tickets** → runs a coding agent to research the question and posts the findings back to the Linear issue as a comment.
 - **Implementation tickets** → runs a coding agent on a checkout of the mapped repo, pushes a branch, and opens a GitHub PR. A demo (screenshots or a screen recording) captured by the agent is kept with the run in the local dashboard.
@@ -26,14 +26,14 @@ npx @brevi/cli ui     # start the orchestrator and open the dashboard
 - **Codex** — found on this machine: `OPENAI_API_KEY` or the Codex CLI login (`~/.codex/auth.json`).
 - **Linear** — browser OAuth (with `connect.linearClientId`/`Secret` configured), else a pasted API key.
 
-Every credential is verified live before saving — agent keys with a 1-token probe on the provider's cheapest model (`claude-haiku-4-5` / `gpt-5-nano`) — and stored in `~/.brevi/config.json`. All brevi state lives under `~/.brevi/`; the orchestrator reads no environment variables. Manual key entry remains as a fallback on every provider. Then pick repositories straight from your GitHub account, assign yourself a Linear issue, and put `@brevi` in its title/description (or add the `brevi` label); add `SPIKE` for research-only tickets.
+Every credential is verified live before saving — agent keys with a 1-token probe on the provider's cheapest model (`claude-haiku-4-5` / `gpt-5-nano`) — and stored in `~/.brevi/config.json`. All brevi state lives under `~/.brevi/`; the orchestrator reads no environment variables. Manual key entry remains as a fallback on every provider. Then pick repositories straight from your GitHub account, assign yourself a Linear issue, and add the `brevi` label; add `SPIKE` for research-only tickets.
 
 Other commands: `brevi start` (headless, no browser), `brevi status`.
 
 ## How it works
 
 ```
-Linear (assigned issues tagged @brevi)
+Linear (assigned issues with the brevi label)
    │  poll
    ▼
 orchestrator ──► classify: SPIKE │ implementation

@@ -1,6 +1,6 @@
 # @brevi/cli
 
-The brevi command line — a local sandbox and orchestrator for coding agents. Tag a Linear ticket with `@brevi`, get back a pull request with a demo.
+The brevi command line — a local sandbox and orchestrator for coding agents. Add the `brevi` label to a Linear ticket, get back a pull request.
 
 ```sh
 npx @brevi/cli init   # create ~/.brevi/config.json, pick a sandbox provider

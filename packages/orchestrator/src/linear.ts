@@ -20,7 +20,7 @@ export class LinearService {
 
   /**
    * Issues assigned to the connected user in unstarted/backlog states that opt
-   * in via the trigger label or tag, mapped to the shared Ticket shape.
+   * in via the trigger label, mapped to the shared Ticket shape.
    */
   async fetchEligibleTickets(): Promise<Ticket[]> {
     const filter: LinearDocument.IssueFilter = {
@@ -69,9 +69,7 @@ export class LinearService {
     const description = issue.description ?? "";
 
     const hasLabel = labels.some((l) => l.toLowerCase() === trigger.label.toLowerCase());
-    const hasTag =
-      trigger.tag.length > 0 && (title.includes(trigger.tag) || description.includes(trigger.tag));
-    if (!hasLabel && !hasTag) return undefined;
+    if (!hasLabel) return undefined;
 
     const marker = trigger.spikeMarker.toLowerCase();
     const isSpike =

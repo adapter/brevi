@@ -41,7 +41,7 @@ A freshly initialised config, with every default filled in:
     "linearClientId": "",
     "linearClientSecret": ""
   },
-  "trigger": { "tag": "@brevi", "label": "brevi", "spikeMarker": "SPIKE" },
+  "trigger": { "label": "brevi", "spikeMarker": "SPIKE" },
   "server": { "port": 4400 },
   "pollIntervalSeconds": 60
 }
@@ -152,8 +152,7 @@ A self-hosted Linear OAuth app must register the redirect URI `http://localhost:
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `tag` | string | `"@brevi"` | Opts a ticket in when present in the title or description. Case-sensitive. Set to `""` to disable tag matching. |
-| `label` | string | `"brevi"` | Label that also opts a ticket in. Matched case-insensitively. |
+| `label` | string | `"brevi"` | Label that opts a ticket in. Matched case-insensitively. |
 | `spikeMarker` | string | `"SPIKE"` | Marks a ticket as research-only when it appears in the title or in a label. Case-insensitive. |
 
 ## `server`

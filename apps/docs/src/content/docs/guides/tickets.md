@@ -12,15 +12,9 @@ An issue is eligible when **all** of these hold:
 1. It is **assigned to you** — the user the connected Linear credential belongs to.
 2. Its state type is **`unstarted` or `backlog`**. Issues already started, done, or cancelled are ignored.
 3. It is in one of `linear.teamKeys`, if you set that list. Empty means all teams.
-4. It **opts in**, by either:
-   - carrying the trigger label — `brevi` by default, matched case-insensitively; or
-   - containing the trigger tag — `@brevi` by default — in its **title or description**. This match is case-sensitive.
+4. It **opts in** by carrying the trigger label — `brevi` by default, matched case-insensitively.
 
-Both the label and the tag are configurable under `trigger` in the config.
-
-:::note
-The tag is searched in the title and description only, not in comments. Adding `@brevi` in a comment will not start a run.
-:::
+The label name is configurable under `trigger` in the config.
 
 ## SPIKE versus implementation
 
