@@ -490,10 +490,19 @@ function RepositoriesSection({
     const name = repo.fullName.split("/")[1] ?? repo.fullName;
     const key = config.repos[name] ? repo.fullName.replace("/", "-") : name;
     void mutate(
-      { ...config.repos, [key]: { remote: repo.fullName, defaultBranch: repo.defaultBranch } },
+      {
+        ...config.repos,
+        [key]: { remote: repo.fullName, defaultBranch: repo.defaultBranch, projects: [] },
+      },
       config.defaultRepo ?? key,
     );
     setSearch("");
+  };
+
+  const setProjects = (key: string, projects: string[]) => {
+    const repo = config.repos[key];
+    if (!repo) return;
+    void mutate({ ...config.repos, [key]: { ...repo, projects } }, config.defaultRepo);
   };
 
   const remove = (key: string) => {
@@ -511,7 +520,8 @@ function RepositoriesSection({
       </div>
       <p className="mt-1.5 text-[12px] leading-relaxed text-haze-400">
         Tickets run against these checkouts. A <code className="font-mono text-[11px]">repo:&lt;key&gt;</code>{" "}
-        label or matching project name picks one; everything else uses the default.
+        label, a mapped Linear project, or a matching project name picks one; everything else uses
+        the default.
       </p>
 
       {!githubConnected ? (
@@ -523,43 +533,51 @@ function RepositoriesSection({
           {mapped.length > 0 && (
             <ul className="mt-3 flex flex-col gap-2">
               {mapped.map(([key, repo]) => (
-                <li
-                  key={key}
-                  className="strip flex items-center gap-2 px-2.5 py-2"
-                >
-                  <RepoChip repo={key} />
-                  <span className="min-w-0 truncate font-mono text-[11px] text-haze-400">
-                    {repo.remote}
-                  </span>
-                  <span className="font-mono text-[10px] text-haze-700">{repo.defaultBranch}</span>
-                  <span className="ml-auto flex items-center gap-1.5">
-                    {config.defaultRepo === key ? (
-                      <Badge className="gap-1">
-                        <Pin className="size-2.5!" />
-                        Default
-                      </Badge>
-                    ) : (
+                <li key={key} className="strip flex flex-col gap-2 px-2.5 py-2">
+                  <div className="flex items-center gap-2">
+                    <RepoChip repo={key} />
+                    <span className="min-w-0 truncate font-mono text-[11px] text-haze-400">
+                      {repo.remote}
+                    </span>
+                    <span className="font-mono text-[10px] text-haze-700">
+                      {repo.defaultBranch}
+                    </span>
+                    <span className="ml-auto flex items-center gap-1.5">
+                      {config.defaultRepo === key ? (
+                        <Badge className="gap-1">
+                          <Pin className="size-2.5!" />
+                          Default
+                        </Badge>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="plate"
+                          onClick={() => void mutate(config.repos, key)}
+                          disabled={pending}
+                          title="Unmatched tickets run against the default repo"
+                        >
+                          Make default
+                        </Button>
+                      )}
                       <Button
-                        variant="outline"
-                        size="plate"
-                        onClick={() => void mutate(config.repos, key)}
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={() => remove(key)}
                         disabled={pending}
-                        title="Unmatched tickets run against the default repo"
+                        aria-label={`Remove ${key}`}
+                        className="hover:text-rust-400"
                       >
-                        Make default
+                        <Close className="size-3" />
                       </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      onClick={() => remove(key)}
-                      disabled={pending}
-                      aria-label={`Remove ${key}`}
-                      className="hover:text-rust-400"
-                    >
-                      <Close className="size-3" />
-                    </Button>
-                  </span>
+                    </span>
+                  </div>
+                  <ProjectsField
+                    // A running orchestrator from before this field may serve
+                    // configs without it; never let that take the app down.
+                    projects={repo.projects ?? []}
+                    pending={pending}
+                    onCommit={(projects) => setProjects(key, projects)}
+                  />
                 </li>
               ))}
             </ul>
@@ -617,5 +635,55 @@ function RepositoriesSection({
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * Comma-separated Linear project names that route tickets to a repo.
+ * Commits on blur or Enter; a project name can contain spaces, so commas
+ * are the only separator.
+ */
+function ProjectsField({
+  projects,
+  pending,
+  onCommit,
+}: {
+  projects: string[];
+  pending: boolean;
+  onCommit: (projects: string[]) => void;
+}) {
+  const [text, setText] = useState(projects.join(", "));
+  const saved = projects.join(", ");
+
+  // Adopt external changes (another row's save refreshed the config).
+  useEffect(() => {
+    setText(saved);
+  }, [saved]);
+
+  const commit = () => {
+    const next = text
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean);
+    if (next.join("\n") !== projects.join("\n")) onCommit(next);
+  };
+
+  return (
+    <label className="flex items-center gap-2">
+      <Plate className="shrink-0 text-haze-700">Projects</Plate>
+      <Input
+        type="text"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
+        disabled={pending}
+        placeholder="Linear projects, comma-separated"
+        spellCheck={false}
+        className="h-7 rounded-[4px] bg-ink-950/70 font-mono text-[11px] text-haze-200 placeholder:text-haze-700 md:text-[11px]"
+      />
+    </label>
   );
 }

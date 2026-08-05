@@ -116,7 +116,8 @@ export class LinearService {
 
   /**
    * Repo resolution order: a `repo:<key>` label, a label exactly matching a
-   * repo key, the issue's project name matching a key, then config.defaultRepo.
+   * repo key, the issue's project among a repo's configured `projects`, the
+   * project name matching a key, then config.defaultRepo.
    */
   async #resolveRepo(issue: Issue, labels: string[]): Promise<string | undefined> {
     const repoKeys = Object.keys(this.#config.repos);
@@ -136,6 +137,10 @@ export class LinearService {
     try {
       const project = await issue.project;
       if (project) {
+        const name = project.name.toLowerCase();
+        for (const [key, repo] of Object.entries(this.#config.repos)) {
+          if (repo.projects.some((p) => p.toLowerCase() === name)) return key;
+        }
         const key = byKey(project.name);
         if (key) return key;
       }

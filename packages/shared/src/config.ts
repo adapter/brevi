@@ -15,6 +15,8 @@ export const repoConfigSchema = z.object({
   /** Git remote in "owner/name" form. */
   remote: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'expected "owner/name"'),
   defaultBranch: z.string().default("main"),
+  /** Linear project names whose tickets run against this repo (case-insensitive). */
+  projects: z.array(z.string()).default([]),
   /** Optional local checkout to clone from instead of the network. */
   path: z.string().optional(),
   /** Command that produces a runnable dev server, used for demo capture. */

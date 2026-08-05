@@ -76,7 +76,8 @@ Implementation tickets will not run without it. SPIKEs will.
   "repos": {
     "brevi": {
       "remote": "adapter/brevi",
-      "defaultBranch": "main"
+      "defaultBranch": "main",
+      "projects": ["Brevi"]
     },
     "web": {
       "remote": "adapter/web",
@@ -94,6 +95,7 @@ Implementation tickets will not run without it. SPIKEs will.
 | --- | --- | --- | --- |
 | `remote` | string | required | `"owner/name"`. Validated against that shape. |
 | `defaultBranch` | string | `"main"` | Cloned from, and the base branch of the PR. |
+| `projects` | string[] | `[]` | Linear project names whose tickets run against this repo. Matched case-insensitively; editable per repo in the dashboard's Connections panel. |
 | `path` | string | – | Local checkout to clone from instead of the network. |
 | `devCommand` | string | – | Command that starts a dev server; makes the agent capture Playwright screenshots for the demo. |
 | `devUrl` | string | – | URL the dev server listens on, so the agent knows when it's up and what to screenshot. |
