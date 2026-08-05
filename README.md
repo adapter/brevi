@@ -89,13 +89,16 @@ GitHub Actions on [Blacksmith](https://blacksmith.sh) runners (`.github/workflow
 - **`ci.yml`** — lint, typecheck, and build on every PR and push to main, then deploy the docs and the api to Cloudflare Workers:
   - Pull requests → the **preview** environment (`brevi-docs-preview` / `brevi-api-preview` on the account's `workers.dev` subdomain). Forked PRs skip deploys.
   - Pushes to main → **production** ([brevi.dev](https://brevi.dev) and api.brevi.dev, attached as custom domains).
-- **`release.yml`** — package releases via [Changesets](https://github.com/changesets/changesets). When main has pending changesets, the workflow opens (or updates) a **Release packages** PR; merging it publishes `@brevi/{cli,orchestrator,sandbox,shared,app}` to npm in lockstep.
+- **`release.yml`** — package releases via [Changesets](https://github.com/changesets/changesets) and [npm staged publishing](https://docs.npmjs.com/staged-publishing). When main has pending changesets, the workflow opens (or updates) a **Release packages** PR; merging it **stages** the new lockstep versions of `@brevi/{cli,orchestrator,sandbox,shared,app}` on npm. Nothing goes live until a maintainer approves the staged versions with 2FA (npmjs.com → **Staged Packages**, or `npm stage approve <stage-id>`).
 
 Releasing a change:
 
 ```sh
 bun changeset        # describe the change, pick a bump — commit the generated file with your PR
+# …merge the Release packages PR when it appears, then approve the staged versions on npmjs.com
 ```
+
+The first-ever publish of a package can't be staged — bootstrap it locally with `npm login && bun run release:first`.
 
 The docs site's **Changelog** page is generated at build time from the packages' `CHANGELOG.md` files (`apps/docs/scripts/build-changelog.ts`), so each release lands in the published docs on the next main deploy.
 
