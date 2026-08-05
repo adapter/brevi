@@ -27,7 +27,7 @@ On a fresh machine this runs the init flow (one question — the sandbox provide
 
 Every credential is verified live before saving — agent keys with a 1-token probe on the provider's cheapest model (`claude-haiku-4-5` / `gpt-5-nano`) — and stored in `~/.brevi/config.json`. All brevi state lives under `~/.brevi/`; the orchestrator reads no environment variables. Manual key entry remains as a fallback on every provider. Then pick repositories straight from your GitHub account, assign yourself a Linear issue, and add the `brevi` label; add `SPIKE` for research-only tickets.
 
-Other commands: `brevi start` (headless, no browser), `brevi status`, `brevi update` (update an installed CLI to the latest release on npm), and `brevi init` (rerun the sandbox provider pick any time).
+Other commands: `brevi start` (headless, no browser), `brevi stop` (shut down a running instance), `brevi status`, `brevi update` (update an installed CLI to the latest release on npm), and `brevi init` (rerun the sandbox provider pick any time).
 
 ## How it works
 
@@ -52,7 +52,7 @@ Only `@brevi/cli` is published — it bundles the workspace libraries into a sin
 
 | Package | What it is |
 | --- | --- |
-| `@brevi/cli` | **Published.** `brevi` / `brevi init` / `brevi start` / `brevi status`; bundles everything below |
+| `@brevi/cli` | **Published.** `brevi` / `brevi init` / `brevi start` / `brevi stop` / `brevi status`; bundles everything below |
 | `@brevi/orchestrator` | Linear polling, run pipeline, GitHub PRs, HTTP/WS API, serves the dashboard |
 | `@brevi/sandbox` | Sandbox providers: Firecracker microVMs (Linux + KVM) and local process fallback |
 | `@brevi/shared` | Domain types, config schema (zod), dashboard API/WebSocket protocol |

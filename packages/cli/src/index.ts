@@ -4,6 +4,7 @@ import { registerDefaultCommand } from "./commands/default.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerStartCommand } from "./commands/start.js";
 import { registerStatusCommand } from "./commands/status.js";
+import { registerStopCommand } from "./commands/stop.js";
 import { registerUiCommand } from "./commands/ui.js";
 import { registerUpdateCommand } from "./commands/update.js";
 import { readPackageVersion } from "./lib/version.js";
@@ -21,6 +22,7 @@ registerDefaultCommand(program);
 registerInitCommand(program);
 registerUiCommand(program);
 registerStartCommand(program);
+registerStopCommand(program);
 registerStatusCommand(program);
 registerUpdateCommand(program);
 

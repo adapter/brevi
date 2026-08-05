@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig, startOrchestrator } from "@brevi/orchestrator";
 import open from "open";
 import pc from "picocolors";
+import { removePidFile, writePidFile } from "./pid.js";
 import { updateNotice } from "./update.js";
 import { errorMessage } from "./util.js";
 import { readPackageVersion } from "./version.js";
@@ -35,6 +36,11 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
     console.error(pc.red(`✖ Failed to start the orchestrator: ${errorMessage(err)}`));
     process.exit(1);
   });
+
+  // Record our pid so `brevi stop` can find this process. Removed on exit;
+  // a stale file left by a hard kill is detected and cleaned up by `stop`.
+  writePidFile();
+  process.on("exit", removePidFile);
 
   console.log(pc.green(`✔ brevi is running at ${pc.bold(pc.cyan(handle.url))}`));
 
