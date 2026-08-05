@@ -14,7 +14,7 @@
     },
     "production": {
       "name": "brevi-docs",
-      "routes": [{ "pattern": "docs.brevi.dev", "custom_domain": true }]
+      "routes": [{ "pattern": "brevi.dev", "custom_domain": true }]
     }
   }
 }

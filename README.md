@@ -65,7 +65,7 @@ State lives in `~/.brevi/`: `config.json`, run history + artifacts under `runs/`
 | `@brevi/sandbox` | Sandbox providers: Firecracker microVMs (Linux + KVM) and local process fallback |
 | `@brevi/shared` | Domain types, config schema (zod), dashboard API/WebSocket protocol |
 | `@brevi/app` | The dashboard — Vite + React, shadcn/ui on Base UI, live run console, tickets, artifacts |
-| `@brevi/docs` | Documentation site (Astro Starlight), deployed to [docs.brevi.dev](https://docs.brevi.dev) |
+| `@brevi/docs` | Documentation site (Astro Starlight), deployed to [brevi.dev](https://brevi.dev) |
 | `@brevi/api` | Hosted OAuth backend (Hono on Cloudflare Workers), deployed to api.brevi.dev |
 
 ## Development
@@ -88,7 +88,7 @@ GitHub Actions on [Blacksmith](https://blacksmith.sh) runners (`.github/workflow
 
 - **`ci.yml`** — lint, typecheck, and build on every PR and push to main, then deploy the docs and the api to Cloudflare Workers:
   - Pull requests → the **preview** environment (`brevi-docs-preview` / `brevi-api-preview` on the account's `workers.dev` subdomain). Forked PRs skip deploys.
-  - Pushes to main → **production** ([docs.brevi.dev](https://docs.brevi.dev) and api.brevi.dev, attached as custom domains).
+  - Pushes to main → **production** ([brevi.dev](https://brevi.dev) and api.brevi.dev, attached as custom domains).
 - **`release.yml`** — package releases via [Changesets](https://github.com/changesets/changesets). When main has pending changesets, the workflow opens (or updates) a **Release packages** PR; merging it publishes `@brevi/{cli,orchestrator,sandbox,shared,app}` to npm in lockstep.
 
 Releasing a change:
