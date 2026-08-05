@@ -8,7 +8,6 @@ import type {
   LinearProject,
   RepoConfig,
 } from "@brevi/shared";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
@@ -21,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Sidebar, SidebarContent, SidebarHeader } from "@/components/ui/sidebar";
 import { api } from "../lib/api";
 import { Plate, RepoChip } from "./Bits";
-import { Check, ChevronRight, Close, External, Pin, Plus, Warn } from "./Icons";
+import { Check, ChevronRight, Close, External, Plus, Warn } from "./Icons";
 
 /** How the "Connect" button acquires a credential, shown as a hint. */
 type ConnectHint = string;
@@ -559,12 +558,6 @@ function RepositoriesSection({
                       {repo.defaultBranch}
                     </span>
                     <span className="ml-auto flex items-center gap-1.5">
-                      {config.defaultRepo === key && (
-                        <Badge className="gap-1" title="Unmatched tickets run against this repo">
-                          <Pin className="size-2.5!" />
-                          Default
-                        </Badge>
-                      )}
                       <Button
                         variant="ghost"
                         size="icon-xs"
