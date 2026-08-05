@@ -1,14 +1,15 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { Run } from "@brevi/shared";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "./components/AppSidebar";
-import { ConnectionsSheet, PROVIDERS } from "./components/ConnectionsSheet";
+import { ConnectionsSidebar } from "./components/Connections";
+import { Overview } from "./components/Overview";
 import { RunDetail } from "./components/RunDetail";
-import { RunsDashboard } from "./components/RunsDashboard";
 import { SiteHeader } from "./components/SiteHeader";
 import { Close, Warn } from "./components/Icons";
+import { repoDisplay } from "./lib/repo";
 import { isActive } from "./lib/status";
 import { useNow } from "./lib/useNow";
 import { useOrchestrator } from "./lib/useOrchestrator";
@@ -33,17 +34,6 @@ export default function App() {
     applyConfig,
   } = useOrchestrator();
 
-  // The Connections sheet. Open by default on first run; the choice sticks
-  // across sessions so a configured machine starts with it closed.
-  const [connectionsOpen, setConnectionsOpen] = useState<boolean>(() => {
-    const saved = localStorage.getItem("brevi.connections.open");
-    return saved === null ? true : saved === "1";
-  });
-  const toggleConnections = (next: boolean) => {
-    setConnectionsOpen(next);
-    localStorage.setItem("brevi.connections.open", next ? "1" : "0");
-  };
-
   const anyActive = useMemo(() => runs.some((r) => isActive(r.status)), [runs]);
   const now = useNow(anyActive);
 
@@ -60,11 +50,6 @@ export default function App() {
   const unreachable = conn === "offline" && !loaded;
   const offlineCard = unreachable && !selectedRun;
 
-  const connectedCount = config
-    ? PROVIDERS.filter((spec) => spec.connected(config)).length
-    : 0;
-  const needsSetup = config !== null && config.linear.apiKey === "";
-
   const handleRun = async (ticketId: string) => {
     const run = await runTicket(ticketId);
     if (run) openRun(run.id);
@@ -74,17 +59,16 @@ export default function App() {
     <SidebarProvider className="h-svh min-h-svh overflow-hidden">
       <AppSidebar
         tickets={tickets}
+        runs={runs}
+        now={now}
+        selectedRunId={selectedRunId}
         activeByTicket={activeByTicket}
         config={config}
         health={health}
         busy={busy}
         unreachable={unreachable}
-        connectedCount={connectedCount}
-        providerCount={PROVIDERS.length}
-        needsSetup={needsSetup}
         onRun={(id) => void handleRun(id)}
         onOpenRun={openRun}
-        onOpenConnections={() => toggleConnections(true)}
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
@@ -122,30 +106,23 @@ export default function App() {
           {selectedRun ? (
             <RunDetail
               run={selectedRun}
+              repoName={repoDisplay(config, selectedRun.ticket.repo)}
               events={events[selectedRun.id] ?? []}
               now={now}
               busy={busy[selectedRun.id] === true}
-              onBack={() => openRun(null)}
               onCancel={() => void cancelRun(selectedRun.id)}
             />
           ) : (
-            <RunsDashboard
-              runs={runs}
-              now={now}
-              conn={conn}
-              loaded={loaded || selectedRunId !== null}
-              onOpen={openRun}
+            <Overview
+              offline={unreachable}
+              hasRuns={runs.length > 0}
+              missingRun={selectedRunId !== null && loaded}
             />
           )}
         </div>
       </SidebarInset>
 
-      <ConnectionsSheet
-        open={connectionsOpen}
-        onOpenChange={toggleConnections}
-        config={config}
-        onConfig={applyConfig}
-      />
+      <ConnectionsSidebar config={config} onConfig={applyConfig} />
     </SidebarProvider>
   );
 }

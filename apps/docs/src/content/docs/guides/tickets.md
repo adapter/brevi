@@ -12,15 +12,9 @@ An issue is eligible when **all** of these hold:
 1. It is **assigned to you** — the user the connected Linear credential belongs to.
 2. Its state type is **`unstarted` or `backlog`**. Issues already started, done, or cancelled are ignored.
 3. It is in one of `linear.teamKeys`, if you set that list. Empty means all teams.
-4. It **opts in**, by either:
-   - carrying the trigger label — `brevi` by default, matched case-insensitively; or
-   - containing the trigger tag — `@brevi` by default — in its **title or description**. This match is case-sensitive.
+4. It **opts in** by carrying the trigger label — `brevi` by default, matched case-insensitively.
 
-Both the label and the tag are configurable under `trigger` in the config.
-
-:::note
-The tag is searched in the title and description only, not in comments. Adding `@brevi` in a comment will not start a run.
-:::
+The label name is configurable under `trigger` in the config.
 
 ## SPIKE versus implementation
 
@@ -41,8 +35,9 @@ Repository mappings live in `config.repos` as *key → repo* entries; the dashbo
 
 1. A label of the form **`repo:<key>`** (case-insensitive).
 2. A label that **exactly matches a repo key**.
-3. The issue's **project name** matching a repo key.
-4. **`config.defaultRepo`**, if it names a real entry in `config.repos`.
+3. The issue's project appearing in a repo's **`projects` list** (the Linear-project mapping edited in the dashboard's Connections panel).
+4. The issue's **project name** matching a repo key.
+5. **`config.defaultRepo`**, if it names a real entry in `config.repos`.
 
 A ticket that resolves to nothing is still shown in the dashboard queue, but it is never auto-queued; the orchestrator logs a warning once, telling you to add a `repo:<key>` label, rename the project, or set a default. The same is true for implementation tickets while GitHub is disconnected.
 
@@ -58,12 +53,14 @@ Runs execute serially — one at a time, FIFO — and move through the statuses 
 
 Then, depending on the kind:
 
-- **Implementation** — brevi removes the mounted Codex login, stages everything, and fails with `agent made no changes` if the tree is clean. Otherwise it commits `<ID>: <title>`, force-pushes `brevi/<ticket-id>`, and opens a pull request against the repo's default branch. The PR body is the agent's `summary.md`, a **Demo** section, `Fixes <ID>`, and a brevi footer. Screenshots are embedded inline from `raw.githubusercontent.com`; recordings and text evidence are linked. Finally brevi comments on the Linear issue with the PR link (a failure here does not fail the run).
+- **Implementation** — brevi removes everything under `.brevi/` (agent outputs stay with the run's artifacts; the mounted Codex login must never leak), stages the rest, and fails with `agent made no changes` if the tree is clean. Otherwise it commits `<ID>: <title>`, force-pushes `brevi/<ticket-id>`, and opens a pull request against the repo's default branch. The PR body is the agent's `summary.md`, `Fixes <ID>`, and a brevi footer. Finally brevi comments on the Linear issue with the PR link (a failure here does not fail the run).
 - **SPIKE** — brevi reads `.brevi/research.md` and posts it as a Linear comment. If the file is missing, the run fails. Comments longer than 60 KB are truncated with a pointer to the full document in the run's artifacts.
+
+When a run completes successfully, brevi also moves the Linear issue to a review state — the team's first `started`-type state whose name mentions "review" (e.g. **In Review**). Best effort: teams without such a state keep the issue where it is.
 
 ### Demos
 
-The implementation prompt makes a demo mandatory. If the repo config sets `devCommand` (and optionally `devUrl`), the agent is told to start that dev server and capture real screenshots with Playwright. Otherwise it captures the best available evidence: screenshots, else a `.webm` recording, else test output or a CLI transcript as `.txt`. Files go in `.brevi/demo/` and are committed with the change, which is what lets GitHub render them in the PR.
+The implementation prompt makes a demo mandatory. If the repo config sets `devCommand` (and optionally `devUrl`), the agent is told to start that dev server and capture real screenshots with Playwright. Otherwise it captures the best available evidence: screenshots, else a `.webm` recording, else test output or a CLI transcript as `.txt`. Files go in `.brevi/demo/` and are collected as run artifacts, viewable on the run's page in the dashboard — they are not committed to the branch or attached to the PR.
 
 ## Reruns
 

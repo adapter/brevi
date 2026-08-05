@@ -103,6 +103,12 @@ export type DevicePollResponse =
   | { status: "connected"; detail: string; config: BreviConfig }
   | { status: "error"; detail: string };
 
+/** A Linear project visible to the connected credential, for the repo mapping picker. */
+export interface LinearProject {
+  id: string;
+  name: string;
+}
+
 /** A repository visible to the connected GitHub token. */
 export interface GithubRepo {
   /** "owner/name". */

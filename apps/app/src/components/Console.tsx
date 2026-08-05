@@ -24,19 +24,25 @@ export function Console({
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [stick, setStick] = useState(true);
+  // A finished run's console starts (and, on completion, becomes) a collapsed
+  // bar; the operator expands it on demand. Live consoles are always open.
+  const [open, setOpen] = useState(live);
+  const expanded = live || open;
 
-  // Reset the viewport when the operator opens a different run.
+  // Reset the viewport when the operator opens a different run, and collapse
+  // or reopen as the run's liveness changes.
   useEffect(() => {
     setStick(true);
+    setOpen(live);
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [runId]);
+  }, [runId, live]);
 
   useLayoutEffect(() => {
     if (!stick) return;
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [events.length, stick]);
+  }, [events.length, stick, expanded]);
 
   const onScroll = () => {
     const el = scroller.current;
@@ -46,49 +52,73 @@ export function Console({
   };
 
   return (
-    <Card className="flex max-h-[clamp(320px,52vh,680px)] min-h-[180px] flex-col gap-0 overflow-hidden py-0">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
-        <Plate className="text-haze-400">Console</Plate>
-        <span className="font-mono text-[11px] leading-none text-haze-700">{events.length}</span>
-        {live && (
+    <Card
+      className={`flex flex-col gap-0 overflow-hidden py-0 ${
+        expanded ? "max-h-[clamp(320px,52vh,680px)] min-h-[180px]" : ""
+      }`}
+    >
+      {live ? (
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
+          <Plate className="text-haze-400">Console</Plate>
+          <span className="font-mono text-[11px] leading-none text-haze-700">{events.length}</span>
           <span className="inline-flex items-center gap-1.5 text-ember-500">
             <span className="inline-block size-[6px] animate-beacon rounded-[1.5px] bg-ember-500 text-ember-500" />
             <span className="plate">Streaming</span>
           </span>
-        )}
-        <Button
-          size="plate"
-          variant={stick ? "outline" : "default"}
-          onClick={() => {
-            setStick(true);
-            const el = scroller.current;
-            if (el) el.scrollTop = el.scrollHeight;
-          }}
-          aria-pressed={stick}
-          className={stick ? "ml-auto bg-ink-750" : "ml-auto"}
+          <Button
+            size="plate"
+            variant={stick ? "outline" : "default"}
+            onClick={() => {
+              setStick(true);
+              const el = scroller.current;
+              if (el) el.scrollTop = el.scrollHeight;
+            }}
+            aria-pressed={stick}
+            className={stick ? "ml-auto bg-ink-750" : "ml-auto"}
+          >
+            <Pin className="size-3" />
+            {stick ? "Following" : "Jump to latest"}
+          </Button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className={`flex h-10 shrink-0 cursor-pointer items-center gap-2 bg-ink-800/60 px-3 text-left transition-colors hover:bg-ink-800 ${
+            open ? "border-b border-ink-700" : ""
+          }`}
         >
-          <Pin className="size-3" />
-          {stick ? "Following" : "Jump to latest"}
-        </Button>
-      </div>
+          <span
+            className={`w-2.5 shrink-0 text-center font-mono text-[9px] text-haze-700 transition-transform ${open ? "rotate-90" : ""}`}
+          >
+            ▸
+          </span>
+          <Plate className="text-haze-400">Console</Plate>
+          <span className="font-mono text-[11px] leading-none text-haze-700">{events.length}</span>
+          <span className="ml-auto plate text-haze-700">{open ? "Collapse" : "Expand"}</span>
+        </button>
+      )}
 
-      <div
-        ref={scroller}
-        onScroll={onScroll}
-        className="min-h-0 flex-1 overflow-y-auto scroll-smooth px-3 py-2.5"
-      >
-        {events.length === 0 ? (
-          <p className="px-1 py-6 text-center font-mono text-[11.5px] text-haze-700">
-            {live ? "Waiting for the sandbox to say something…" : "No output was recorded."}
-          </p>
-        ) : (
-          <div className="flex flex-col">
-            {events.map((event, i) => (
-              <Row key={`${event.ts}-${i}`} event={event} />
-            ))}
-          </div>
-        )}
-      </div>
+      {expanded && (
+        <div
+          ref={scroller}
+          onScroll={onScroll}
+          className="min-h-0 flex-1 overflow-y-auto scroll-smooth px-3 py-2.5"
+        >
+          {events.length === 0 ? (
+            <p className="px-1 py-6 text-center font-mono text-[11.5px] text-haze-700">
+              {live ? "Waiting for the sandbox to say something…" : "No output was recorded."}
+            </p>
+          ) : (
+            <div className="flex flex-col">
+              {events.map((event, i) => (
+                <Row key={`${event.ts}-${i}`} event={event} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </Card>
   );
 }

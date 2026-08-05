@@ -133,6 +133,12 @@ export const Comment = (p: IconProps) => (
   </Svg>
 );
 
+export const Plus = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M8 3.2v9.6M3.2 8h9.6" />
+  </Svg>
+);
+
 export const Close = (p: IconProps) => (
   <Svg {...p}>
     <path d="m4 4 8 8M12 4l-8 8" />

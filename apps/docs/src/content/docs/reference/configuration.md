@@ -14,7 +14,7 @@ A freshly initialised config, with every default filled in:
 ```json
 {
   "linear": { "apiKey": "", "teamKeys": [] },
-  "github": { "token": "" },
+  "github": { "token": "", "prDescription": "concise" },
   "repos": {},
   "agent": {
     "command": "claude",
@@ -41,7 +41,7 @@ A freshly initialised config, with every default filled in:
     "linearClientId": "",
     "linearClientSecret": ""
   },
-  "trigger": { "tag": "@brevi", "label": "brevi", "spikeMarker": "SPIKE" },
+  "trigger": { "label": "brevi", "spikeMarker": "SPIKE" },
   "server": { "port": 4400 },
   "pollIntervalSeconds": 60
 }
@@ -63,6 +63,7 @@ Keys beginning with `lin_api_` are sent as a raw `Authorization` header; anythin
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `token` | string | `""` | Token with the `repo` scope. Used to list repos, clone, push, and open PRs. Empty means not connected. |
+| `prDescription` | `"concise"` \| `"detailed"` | `"concise"` | How the agent is told to write the PR description: `concise` asks for a couple of sentences plus a few bullets, `detailed` allows a full write-up. |
 
 Implementation tickets will not run without it. SPIKEs will.
 
@@ -75,7 +76,8 @@ Implementation tickets will not run without it. SPIKEs will.
   "repos": {
     "brevi": {
       "remote": "adapter/brevi",
-      "defaultBranch": "main"
+      "defaultBranch": "main",
+      "projects": ["Brevi"]
     },
     "web": {
       "remote": "adapter/web",
@@ -93,6 +95,7 @@ Implementation tickets will not run without it. SPIKEs will.
 | --- | --- | --- | --- |
 | `remote` | string | required | `"owner/name"`. Validated against that shape. |
 | `defaultBranch` | string | `"main"` | Cloned from, and the base branch of the PR. |
+| `projects` | string[] | `[]` | Linear project names whose tickets run against this repo. Matched case-insensitively; editable per repo in the dashboard's Connections panel. |
 | `path` | string | – | Local checkout to clone from instead of the network. |
 | `devCommand` | string | – | Command that starts a dev server; makes the agent capture Playwright screenshots for the demo. |
 | `devUrl` | string | – | URL the dev server listens on, so the agent knows when it's up and what to screenshot. |
@@ -152,8 +155,7 @@ A self-hosted Linear OAuth app must register the redirect URI `http://localhost:
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `tag` | string | `"@brevi"` | Opts a ticket in when present in the title or description. Case-sensitive. Set to `""` to disable tag matching. |
-| `label` | string | `"brevi"` | Label that also opts a ticket in. Matched case-insensitively. |
+| `label` | string | `"brevi"` | Label that opts a ticket in. Matched case-insensitively. |
 | `spikeMarker` | string | `"SPIKE"` | Marks a ticket as research-only when it appears in the title or in a label. Case-insensitive. |
 
 ## `server`

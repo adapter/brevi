@@ -5,22 +5,22 @@ import type {
   CredentialResult,
   CredentialsUpdateRequest,
   GithubRepo,
+  LinearProject,
   RepoConfig,
 } from "@brevi/shared";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Sidebar, SidebarContent, SidebarHeader } from "@/components/ui/sidebar";
 import { api } from "../lib/api";
 import { Plate, RepoChip } from "./Bits";
-import { Check, Close, External, Pin, Warn } from "./Icons";
+import { Check, ChevronRight, Close, External, Plus, Warn } from "./Icons";
 
 /** How the "Connect" button acquires a credential, shown as a hint. */
 type ConnectHint = string;
@@ -85,17 +85,13 @@ export const PROVIDERS: ProviderSpec[] = [
 ];
 
 /**
- * Right-side sheet to connect Linear, GitHub, and agent credentials, opened
- * from the sidebar footer (or anywhere a setup nudge points).
+ * Permanent right sidebar to connect Linear, GitHub, and agent credentials —
+ * the mirror of the runs sidebar on the left.
  */
-export function ConnectionsSheet({
-  open,
-  onOpenChange,
+export function ConnectionsSidebar({
   config,
   onConfig,
 }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
   config: BreviConfig | null;
   onConfig: (config: BreviConfig) => void;
 }) {
@@ -104,42 +100,44 @@ export function ConnectionsSheet({
     : 0;
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full gap-0 overflow-y-auto p-0 sm:max-w-md">
-        <SheetHeader className="border-b border-ink-700/70 px-4 py-3.5">
-          <SheetTitle className="flex items-center gap-2">
-            <Plate className="text-haze-400">Connections</Plate>
-            <span className="font-mono text-[11px] leading-none font-normal text-haze-700">
-              {config ? `${connectedCount}/${PROVIDERS.length}` : "–"}
-            </span>
-          </SheetTitle>
-          <SheetDescription className="text-[12px] leading-relaxed text-haze-700">
-            Credentials are validated with the provider, then stored in{" "}
-            <code className="font-mono text-[11px] text-haze-400">~/.brevi/config.json</code>. They
-            never leave this machine.
-          </SheetDescription>
-        </SheetHeader>
-
-        <div className="min-h-0 flex-1 p-3">
-          {config ? (
-            <>
-              <ul className="flex flex-col gap-2.5">
-                {PROVIDERS.map((spec) => (
-                  <li key={spec.id}>
-                    <ProviderRow spec={spec} config={config} onConfig={onConfig} />
-                  </li>
-                ))}
-              </ul>
-              <RepositoriesSection config={config} onConfig={onConfig} />
-            </>
-          ) : (
-            <p className="mt-3 px-1 text-[12.5px] leading-relaxed text-haze-700">
-              Waiting for the orchestrator — connections can be edited once it answers.
-            </p>
-          )}
+    <Sidebar
+      side="right"
+      collapsible="none"
+      className="h-svh w-[22rem] shrink-0 border-l border-sidebar-border"
+    >
+      <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
+        <div className="flex items-center gap-2">
+          <Plate className="text-haze-400">Connections</Plate>
+          <span className="font-mono text-[11px] leading-none font-normal text-haze-700">
+            {config ? `${connectedCount}/${PROVIDERS.length}` : "–"}
+          </span>
         </div>
-      </SheetContent>
-    </Sheet>
+      </SidebarHeader>
+
+      <SidebarContent className="min-h-0 flex-1 overflow-y-auto p-3">
+        {config ? (
+          <>
+            <ul className="flex flex-col gap-2.5">
+              {PROVIDERS.map((spec) => (
+                <li key={spec.id}>
+                  <ProviderRow spec={spec} config={config} onConfig={onConfig} />
+                </li>
+              ))}
+            </ul>
+            <RepositoriesSection config={config} onConfig={onConfig} />
+            <p className="mt-4 border-t border-ink-700 pt-3 text-[11.5px] leading-relaxed text-haze-700">
+              Credentials are validated with the provider, then stored in{" "}
+              <code className="font-mono text-[10.5px] text-haze-400">~/.brevi/config.json</code>.
+              They never leave this machine.
+            </p>
+          </>
+        ) : (
+          <p className="mt-3 px-1 text-[12.5px] leading-relaxed text-haze-700">
+            Waiting for the orchestrator — connections can be edited once it answers.
+          </p>
+        )}
+      </SidebarContent>
+    </Sidebar>
   );
 }
 
@@ -267,22 +265,15 @@ function ProviderRow({
     <Card size="sm" className="gap-1.5">
       <CardHeader className="gap-0">
         <div className="flex items-center gap-2">
+          <span
+            className={`inline-block size-[7px] shrink-0 rounded-full ${connected ? "bg-mint-500" : "bg-haze-700"}`}
+            role="img"
+            aria-label={connected ? "Connected" : "Not connected"}
+            title={connected ? "Connected" : "Not connected"}
+          />
           <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
             {spec.name}
           </h3>
-          <Badge
-            variant="outline"
-            className={
-              connected
-                ? "border-mint-500/30 bg-mint-500/10 text-mint-400"
-                : "text-haze-700"
-            }
-          >
-            <span
-              className={`inline-block size-[5px] rounded-full ${connected ? "bg-mint-500" : "bg-haze-700"}`}
-            />
-            {connected ? "Connected" : "Not connected"}
-          </Badge>
           <span className="ml-auto">
             {connected ? (
               <Button
@@ -435,13 +426,36 @@ function RepositoriesSection({
   onConfig: (config: BreviConfig) => void;
 }) {
   const githubConnected = config.github.token !== "";
+  const linearConnected = config.linear.apiKey !== "";
   const mapped = Object.entries(config.repos);
 
   const [available, setAvailable] = useState<GithubRepo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [adding, setAdding] = useState(false);
   const [pending, setPending] = useState(false);
   const [mutateError, setMutateError] = useState<string | null>(null);
+  const [linearProjects, setLinearProjects] = useState<LinearProject[] | null>(null);
+
+  useEffect(() => {
+    if (!linearConnected) {
+      setLinearProjects(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .linearProjects()
+      .then((projects) => {
+        if (!cancelled) setLinearProjects(projects);
+      })
+      .catch(() => {
+        // The picker degrades to showing configured names; no need to shout.
+        if (!cancelled) setLinearProjects(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [linearConnected, config.linear.apiKey]);
 
   useEffect(() => {
     if (!githubConnected) {
@@ -490,10 +504,20 @@ function RepositoriesSection({
     const name = repo.fullName.split("/")[1] ?? repo.fullName;
     const key = config.repos[name] ? repo.fullName.replace("/", "-") : name;
     void mutate(
-      { ...config.repos, [key]: { remote: repo.fullName, defaultBranch: repo.defaultBranch } },
+      {
+        ...config.repos,
+        [key]: { remote: repo.fullName, defaultBranch: repo.defaultBranch, projects: [] },
+      },
       config.defaultRepo ?? key,
     );
     setSearch("");
+    setAdding(false);
+  };
+
+  const setProjects = (key: string, projects: string[]) => {
+    const repo = config.repos[key];
+    if (!repo) return;
+    void mutate({ ...config.repos, [key]: { ...repo, projects } }, config.defaultRepo);
   };
 
   const remove = (key: string) => {
@@ -511,7 +535,8 @@ function RepositoriesSection({
       </div>
       <p className="mt-1.5 text-[12px] leading-relaxed text-haze-400">
         Tickets run against these checkouts. A <code className="font-mono text-[11px]">repo:&lt;key&gt;</code>{" "}
-        label or matching project name picks one; everything else uses the default.
+        label, a mapped Linear project, or a matching project name picks one; everything else uses
+        the default.
       </p>
 
       {!githubConnected ? (
@@ -523,58 +548,77 @@ function RepositoriesSection({
           {mapped.length > 0 && (
             <ul className="mt-3 flex flex-col gap-2">
               {mapped.map(([key, repo]) => (
-                <li
-                  key={key}
-                  className="strip flex items-center gap-2 px-2.5 py-2"
-                >
-                  <RepoChip repo={key} />
-                  <span className="min-w-0 truncate font-mono text-[11px] text-haze-400">
-                    {repo.remote}
-                  </span>
-                  <span className="font-mono text-[10px] text-haze-700">{repo.defaultBranch}</span>
-                  <span className="ml-auto flex items-center gap-1.5">
-                    {config.defaultRepo === key ? (
-                      <Badge className="gap-1">
-                        <Pin className="size-2.5!" />
-                        Default
-                      </Badge>
-                    ) : (
+                <li key={key} className="strip flex flex-col gap-2 px-2.5 py-2">
+                  <div className="flex items-center gap-2">
+                    <RepoChip repo={key} />
+                    <span className="min-w-0 truncate font-mono text-[11px] text-haze-400">
+                      {repo.remote}
+                    </span>
+                    <span className="font-mono text-[10px] text-haze-700">
+                      {repo.defaultBranch}
+                    </span>
+                    <span className="ml-auto flex items-center gap-1.5">
                       <Button
-                        variant="outline"
-                        size="plate"
-                        onClick={() => void mutate(config.repos, key)}
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={() => remove(key)}
                         disabled={pending}
-                        title="Unmatched tickets run against the default repo"
+                        aria-label={`Remove ${key}`}
+                        className="hover:text-rust-400"
                       >
-                        Make default
+                        <Close className="size-3" />
                       </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      onClick={() => remove(key)}
-                      disabled={pending}
-                      aria-label={`Remove ${key}`}
-                      className="hover:text-rust-400"
-                    >
-                      <Close className="size-3" />
-                    </Button>
-                  </span>
+                    </span>
+                  </div>
+                  <ProjectsField
+                    // A running orchestrator from before this field may serve
+                    // configs without it; never let that take the app down.
+                    projects={repo.projects ?? []}
+                    options={linearProjects}
+                    pending={pending}
+                    onCommit={(projects) => setProjects(key, projects)}
+                  />
                 </li>
               ))}
             </ul>
           )}
 
           <div className="mt-3">
-            <Input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={available ? "Add a repository — search your account" : "Loading repositories…"}
-              disabled={!available}
-              spellCheck={false}
-              className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
-            />
+            {!adding ? (
+              <Button
+                variant="outline"
+                size="plate"
+                onClick={() => setAdding(true)}
+                className="text-haze-400"
+              >
+                <Plus className="size-3" />
+                Add repository
+              </Button>
+            ) : (
+              <>
+            <div className="flex items-center gap-1.5">
+              <Input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={available ? "Search your account" : "Loading repositories…"}
+                disabled={!available}
+                spellCheck={false}
+                autoFocus
+                className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+              />
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => {
+                  setAdding(false);
+                  setSearch("");
+                }}
+                aria-label="Stop adding"
+              >
+                <Close className="size-3" />
+              </Button>
+            </div>
             {loadError && (
               <p className="mt-2 flex items-start gap-1.5 text-[12px] text-rust-400">
                 <Warn className="mt-px size-3 shrink-0" />
@@ -606,6 +650,8 @@ function RepositoriesSection({
             {available && search.trim() !== "" && candidates.length === 0 && (
               <p className="mt-2 text-[12px] text-haze-700">No unmapped repos match.</p>
             )}
+              </>
+            )}
           </div>
 
           {mutateError && (
@@ -617,5 +663,75 @@ function RepositoriesSection({
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * Multi-select of Linear projects that route tickets to a repo. Options come
+ * from the orchestrator's project list; names already configured but no longer
+ * returned by Linear stay selectable so they can be unmapped.
+ */
+function ProjectsField({
+  projects,
+  options,
+  pending,
+  onCommit,
+}: {
+  projects: string[];
+  options: LinearProject[] | null;
+  pending: boolean;
+  onCommit: (projects: string[]) => void;
+}) {
+  const names = useMemo(() => {
+    const set = new Set<string>(options?.map((project) => project.name) ?? []);
+    for (const name of projects) set.add(name);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [options, projects]);
+
+  const toggle = (name: string, checked: boolean) => {
+    onCommit(checked ? [...projects, name] : projects.filter((p) => p !== name));
+  };
+
+  const empty = names.length === 0;
+
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <Plate className="shrink-0 text-haze-700">Projects</Plate>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="outline"
+              size="plate"
+              disabled={pending || empty}
+              className="min-w-0 flex-1 justify-start font-mono text-[11px] tracking-normal normal-case"
+            />
+          }
+        >
+          <span className={`truncate ${projects.length === 0 ? "text-haze-700" : "text-haze-200"}`}>
+            {empty
+              ? options === null
+                ? "Linear projects unavailable"
+                : "No Linear projects found"
+              : projects.length === 0
+                ? "Map Linear projects"
+                : projects.join(", ")}
+          </span>
+          <ChevronRight className="ml-auto size-3 rotate-90 text-haze-700" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="max-h-64 min-w-52 overflow-y-auto">
+          {names.map((name) => (
+            <DropdownMenuCheckboxItem
+              key={name}
+              checked={projects.includes(name)}
+              onCheckedChange={(checked) => toggle(name, checked === true)}
+              closeOnClick={false}
+            >
+              {name}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }

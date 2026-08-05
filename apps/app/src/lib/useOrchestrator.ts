@@ -57,6 +57,16 @@ const initial: State = {
   loaded: false,
 };
 
+/** Runs live at /runs/<id> so any run view can be linked to directly. */
+function runIdFromPath(pathname: string): string | null {
+  const match = /^\/runs\/([^/]+)\/?$/.exec(pathname);
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
+function pathForRun(runId: string | null): string {
+  return runId ? `/runs/${encodeURIComponent(runId)}` : "/";
+}
+
 function byNewest(a: Run, b: Run): number {
   return Date.parse(b.createdAt) - Date.parse(a.createdAt);
 }
@@ -150,7 +160,10 @@ function message(raw: string): ServerMessage | null {
 }
 
 export function useOrchestrator() {
-  const [state, dispatch] = useReducer(reducer, initial);
+  const [state, dispatch] = useReducer(reducer, initial, (base) => ({
+    ...base,
+    selectedRunId: runIdFromPath(window.location.pathname),
+  }));
   const socket = useRef<WebSocket | null>(null);
   const selected = useRef<string | null>(null);
   selected.current = state.selectedRunId;
@@ -257,7 +270,7 @@ export function useOrchestrator() {
   }, [degraded, refresh]);
 
   // --- Actions ---------------------------------------------------------------
-  const openRun = useCallback(
+  const selectRun = useCallback(
     (runId: string | null) => {
       const previous = selected.current;
       if (previous && previous !== runId) send({ type: "unsubscribe", runId: previous });
@@ -271,6 +284,34 @@ export function useOrchestrator() {
     },
     [send],
   );
+
+  /** Select a run and record it in the URL so the view can be shared. */
+  const openRun = useCallback(
+    (runId: string | null) => {
+      const path = pathForRun(runId);
+      if (window.location.pathname !== path) window.history.pushState(null, "", path);
+      selectRun(runId);
+    },
+    [selectRun],
+  );
+
+  // Deep link: a run opened by URL needs its console history like any other open.
+  useEffect(() => {
+    const runId = selected.current;
+    if (!runId) return;
+    api
+      .events(runId)
+      .then((events) => dispatch({ t: "history", runId, events }))
+      .catch(() => dispatch({ t: "history", runId, events: [] }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only
+  }, []);
+
+  // Browser back/forward moves between runs without reloading.
+  useEffect(() => {
+    const onPop = () => selectRun(runIdFromPath(window.location.pathname));
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [selectRun]);
 
   const runTicket = useCallback(
     async (ticketId: string) => {

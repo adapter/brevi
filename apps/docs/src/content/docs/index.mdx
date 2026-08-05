@@ -1,6 +1,6 @@
 ---
 title: brevi
-description: A local sandbox and orchestrator for coding agents — tag a Linear ticket with @brevi and get back a pull request with a demo.
+description: A local sandbox and orchestrator for coding agents — add the brevi label to a Linear ticket and get back a pull request.
 template: splash
 hero:
   tagline: A local sandbox and orchestrator for coding agents. Linear tickets in, pull requests with demos out — all executed on your own machine.
@@ -21,9 +21,9 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 ## What brevi does
 
-You connect your machine to Linear and GitHub, then tag a ticket with **`@brevi`** (or add the `brevi` label) and assign it to yourself. brevi polls Linear, picks the ticket up, and runs a coding agent against a checkout of the mapped repository inside a sandbox:
+You connect your machine to Linear and GitHub, then add the **`brevi`** label to a ticket and assign it to yourself. brevi polls Linear, picks the ticket up, and runs a coding agent against a checkout of the mapped repository inside a sandbox:
 
-- **Implementation tickets** → a branch `brevi/<ticket-id>` is force-pushed and a pull request is opened, including a **Demo** section with screenshots or a recording the agent captured.
+- **Implementation tickets** → a branch `brevi/<ticket-id>` is force-pushed and a pull request is opened; the demo the agent captured (screenshots or a recording) stays with the run in the dashboard.
 - **SPIKE tickets** → no code changes; the research is posted back to the Linear issue as a comment.
 
 Everything runs locally. All state lives under `~/.brevi/` — config, run history, artifacts, and VM images.

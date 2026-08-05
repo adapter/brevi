@@ -3,7 +3,7 @@ import { join, sep } from "node:path";
 import { execa, type Result as ExecaResult } from "execa";
 import { WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type RepoConfig, type RunResult, type Ticket } from "@brevi/shared";
 import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
-import { authenticatedRemote, createPullRequest, parseRemote, plainRemote } from "./github.js";
+import { authenticatedRemote, createPullRequest, plainRemote } from "./github.js";
 import { LinearService } from "./linear.js";
 import { buildImplementationPrompt, buildSpikePrompt } from "./prompts.js";
 import type { RunStore } from "./state.js";
@@ -25,12 +25,6 @@ export interface RunContext {
   provider: SandboxProvider;
   linear: LinearService;
   signal: AbortSignal;
-}
-
-interface CollectedArtifact {
-  ref: ArtifactRef;
-  /** Path relative to the repo root for files that live in the checkout (e.g. ".brevi/demo/x.png"). */
-  repoPath?: string;
 }
 
 /**
@@ -98,7 +92,9 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     // ---- running ---------------------------------------------------------
     await store.setStatus(run.id, "running");
     const prompt =
-      ticket.kind === "spike" ? buildSpikePrompt(ticket) : buildImplementationPrompt(ticket, repo);
+      ticket.kind === "spike"
+        ? buildSpikePrompt(ticket)
+        : buildImplementationPrompt(ticket, repo, config.github.prDescription);
     const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"];
     if (config.agent.model) args.push("--model", config.agent.model);
     args.push(...config.agent.args);
@@ -139,7 +135,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
 
     const artifacts = await collectArtifacts(store, run.id, pulledDir);
     for (const artifact of artifacts) {
-      await store.addArtifact(run.id, artifact.ref);
+      await store.addArtifact(run.id, artifact);
     }
 
     const result =
@@ -147,6 +143,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         ? await finalizeSpike({ ticket, pulledDir, artifacts, linear })
         : await finalizeImplementation({ ticket, repo, branch, pulledDir, artifacts, config, linear, log });
 
+    await linear.moveToReview(ticket.id);
     await store.setStatus(run.id, "completed", { finishedAt: new Date().toISOString(), result });
     log("system", `run completed: ${result.prUrl ?? result.commentUrl ?? "done"}`);
   } catch (error) {
@@ -272,16 +269,16 @@ async function collectArtifacts(
   store: RunStore,
   runId: string,
   pulledDir: string,
-): Promise<CollectedArtifact[]> {
+): Promise<ArtifactRef[]> {
   const artifactsDir = store.artifactsDir(runId);
   await mkdir(artifactsDir, { recursive: true });
-  const collected: CollectedArtifact[] = [];
+  const collected: ArtifactRef[] = [];
 
-  const add = async (sourcePath: string, name: string, repoPath?: string): Promise<void> => {
+  const add = async (sourcePath: string, name: string): Promise<void> => {
     const dest = join(artifactsDir, name);
     await copyFile(sourcePath, dest);
     const { size } = await stat(dest);
-    collected.push({ ref: { name, type: classifyArtifact(name), size }, repoPath });
+    collected.push({ name, type: classifyArtifact(name), size });
   };
 
   const demoDir = join(pulledDir, ".brevi", "demo");
@@ -290,9 +287,7 @@ async function collectArtifacts(
     for (const entry of entries) {
       if (!entry.isFile()) continue;
       const relative = join(entry.parentPath, entry.name).slice(demoDir.length + 1);
-      const flatName = relative.split(sep).join("__");
-      const repoPath = [".brevi", "demo", ...relative.split(sep)].join("/");
-      await add(join(demoDir, relative), flatName, repoPath);
+      await add(join(demoDir, relative), relative.split(sep).join("__"));
     }
   } catch {
     // no demo directory
@@ -305,7 +300,7 @@ async function collectArtifacts(
     } catch {
       continue;
     }
-    await add(source, doc, `.brevi/${doc}`);
+    await add(source, doc);
   }
 
   return collected;
@@ -314,7 +309,7 @@ async function collectArtifacts(
 interface SpikeFinalizeOptions {
   ticket: Ticket;
   pulledDir: string;
-  artifacts: CollectedArtifact[];
+  artifacts: ArtifactRef[];
   linear: LinearService;
 }
 
@@ -338,7 +333,7 @@ async function finalizeSpike(options: SpikeFinalizeOptions): Promise<RunResult> 
     kind: "spike",
     commentUrl,
     summary: body,
-    artifacts: artifacts.map((a) => a.ref),
+    artifacts,
   };
 }
 
@@ -347,7 +342,7 @@ interface ImplementationFinalizeOptions {
   repo: RepoConfig;
   branch: string;
   pulledDir: string;
-  artifacts: CollectedArtifact[];
+  artifacts: ArtifactRef[];
   config: BreviConfig;
   linear: LinearService;
   log: (stream: "stdout" | "stderr" | "system", text: string) => void;
@@ -361,8 +356,9 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
     .then((text) => text.trim())
     .catch(() => `Automated change for ${ticket.identifier}: ${ticket.title}`);
 
-  // Never let the mounted Codex login reach the branch.
-  await rm(join(pulledDir, CODEX_HOME_DIR), { recursive: true, force: true });
+  // Agent outputs (summary, demos) live with the run's artifacts, and the
+  // mounted Codex login must never leak: nothing under .brevi reaches the branch.
+  await rm(join(pulledDir, ".brevi"), { recursive: true, force: true });
   await git(["add", "-A"], pulledDir, token);
   const status = await git(["status", "--porcelain"], pulledDir, token);
   if (!String(status.stdout).trim()) {
@@ -381,7 +377,7 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
   );
 
   const title = `${ticket.identifier}: ${ticket.title}`;
-  const body = buildPrBody({ summary, ticket, repo, branch, artifacts });
+  const body = buildPrBody({ summary, ticket });
   log("system", "opening pull request");
   const prUrl = await createPullRequest({
     remote: repo.remote,
@@ -408,37 +404,14 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
     commentUrl,
     branch,
     summary,
-    artifacts: artifacts.map((a) => a.ref),
+    artifacts,
   };
 }
 
-function buildPrBody(options: {
-  summary: string;
-  ticket: Ticket;
-  repo: RepoConfig;
-  branch: string;
-  artifacts: CollectedArtifact[];
-}): string {
-  const { summary, ticket, repo, branch, artifacts } = options;
-  const { owner, name } = parseRemote(repo.remote);
-  const demo = artifacts.filter((a) => a.repoPath?.startsWith(".brevi/demo/"));
-
-  const sections = [summary];
-  if (demo.length > 0) {
-    const lines = demo.map((artifact) => {
-      const repoPath = artifact.repoPath ?? artifact.ref.name;
-      const blobUrl = `https://github.com/${owner}/${name}/blob/${branch}/${encodeURI(repoPath)}`;
-      if (artifact.ref.type === "screenshot") {
-        const rawUrl = `https://raw.githubusercontent.com/${owner}/${name}/${branch}/${encodeURI(repoPath)}`;
-        return `![${artifact.ref.name}](${rawUrl})\n[${artifact.ref.name}](${blobUrl})`;
-      }
-      return `- [${artifact.ref.name}](${blobUrl})`;
-    });
-    sections.push(`### Demo\n\n${lines.join("\n")}`);
-  }
-  sections.push(`Fixes ${ticket.identifier}`);
-  sections.push(`---\n${BREVI_FOOTER}`);
-  return sections.join("\n\n");
+/** Demo evidence stays with the local run's artifacts — the PR carries only the summary. */
+function buildPrBody(options: { summary: string; ticket: Ticket }): string {
+  const { summary, ticket } = options;
+  return [summary, `Fixes ${ticket.identifier}`, `---\n${BREVI_FOOTER}`].join("\n\n");
 }
 
 /** Truncate a string to at most maxBytes of utf8 without splitting surrogates. */

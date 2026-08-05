@@ -12,7 +12,15 @@ function ticketSection(ticket: Ticket): string {
 }
 
 /** Prompt for implementation tickets: code + summary + demo evidence. */
-export function buildImplementationPrompt(ticket: Ticket, repo: RepoConfig): string {
+export function buildImplementationPrompt(
+  ticket: Ticket,
+  repo: RepoConfig,
+  prDescription: "concise" | "detailed" = "concise",
+): string {
+  const summaryInstruction =
+    prDescription === "concise"
+      ? "2. `.brevi/summary.md` — a very concise pull-request description: one or two sentences on what changed and why, then at most five short bullets covering how you verified it and anything reviewers must not miss. No headings, no restating the ticket."
+      : "2. `.brevi/summary.md` — a pull-request-ready description of the change: what changed and why, how you verified it, and anything reviewers should pay attention to.";
   const demoInstructions = repo.devCommand
     ? [
         `- This repo has a dev server. Start it with \`${repo.devCommand}\`${
@@ -37,8 +45,8 @@ export function buildImplementationPrompt(ticket: Ticket, repo: RepoConfig): str
     "",
     "## Required outputs (all three are mandatory)",
     "1. Code changes in the working tree that implement the ticket.",
-    "2. `.brevi/summary.md` — a pull-request-ready description of the change: what changed and why, how you verified it, and anything reviewers should pay attention to.",
-    "3. A demo under `.brevi/demo/` proving the change works:",
+    summaryInstruction,
+    "3. A demo under `.brevi/demo/` proving the change works (shown in brevi's local dashboard; nothing under .brevi/ is committed or attached to the PR):",
     ...demoInstructions,
     "- Screenshots must be .png, recordings .webm, text evidence .txt. Give files short descriptive names.",
   ].join("\n");

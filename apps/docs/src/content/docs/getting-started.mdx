@@ -69,20 +69,20 @@ Working on brevi itself? Clone [adapter/brevi](https://github.com/adapter/brevi)
 
    Once GitHub is connected, the **Repositories** section lists the repos your token can see, most recently pushed first. Add the ones brevi may work on. Each becomes a repo *key* (the repo name) mapped to `owner/name` and its default branch. One repo is the default — unmatched tickets run against it.
 
-5. **Tag a Linear ticket**
+5. **Label a Linear ticket**
 
-   Assign an issue to yourself, leave it in an unstarted/backlog state, and either put `@brevi` in the title or description or add the `brevi` label. Add `SPIKE` to the title (or as a label) for research-only tickets.
+   Assign an issue to yourself, leave it in an unstarted/backlog state, and add the `brevi` label. Add `SPIKE` to the title (or as a label) for research-only tickets.
 
 6. **Watch the run**
 
-   brevi polls Linear every 60 seconds, queues eligible tickets, and runs them one at a time. The dashboard streams the agent's output live; when the run finishes you get a pull request with a **Demo** section, or a research comment on the issue for a SPIKE.
+   brevi polls Linear every 60 seconds, queues eligible tickets, and runs them one at a time. The dashboard streams the agent's output live; when the run finishes you get a pull request (with the agent's demo kept on the run's page), or a research comment on the issue for a SPIKE.
 
 </Steps>
 
 ## What just happened
 
 ```
-Linear (issues assigned to you, tagged @brevi)
+Linear (issues assigned to you with the brevi label)
    │  poll every pollIntervalSeconds
    ▼
 orchestrator ──► classify: SPIKE │ implementation

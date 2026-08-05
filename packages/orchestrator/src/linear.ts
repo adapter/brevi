@@ -1,5 +1,5 @@
 import { LinearClient, type Issue, type LinearDocument } from "@linear/sdk";
-import type { BreviConfig, Ticket, TicketKind } from "@brevi/shared";
+import type { BreviConfig, LinearProject, Ticket, TicketKind } from "@brevi/shared";
 
 /**
  * Linear integration: polls for eligible tickets, posts result comments, and
@@ -20,7 +20,7 @@ export class LinearService {
 
   /**
    * Issues assigned to the connected user in unstarted/backlog states that opt
-   * in via the trigger label or tag, mapped to the shared Ticket shape.
+   * in via the trigger label, mapped to the shared Ticket shape.
    */
   async fetchEligibleTickets(): Promise<Ticket[]> {
     const filter: LinearDocument.IssueFilter = {
@@ -37,6 +37,14 @@ export class LinearService {
       if (ticket) tickets.push(ticket);
     }
     return tickets;
+  }
+
+  /** Projects visible to the credential, for the dashboard's repo-mapping picker. */
+  async listProjects(): Promise<LinearProject[]> {
+    const connection = await this.#client.projects({ first: 250 });
+    return connection.nodes
+      .map((project) => ({ id: project.id, name: project.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** Post a markdown comment on an issue; returns the comment url when available. */
@@ -62,6 +70,26 @@ export class LinearService {
     }
   }
 
+  /**
+   * Best-effort: after a successful run, move the issue to a review state —
+   * the team's first "started"-type state whose name mentions review (e.g.
+   * "In Review"). Teams without one keep their current state.
+   */
+  async moveToReview(issueId: string): Promise<void> {
+    try {
+      const issue = await this.#client.issue(issueId);
+      const team = await issue.team;
+      if (!team) return;
+      const states = await team.states();
+      const review = states.nodes
+        .filter((state) => state.type === "started" && /review/i.test(state.name))
+        .sort((a, b) => a.position - b.position)[0];
+      if (review) await issue.update({ stateId: review.id });
+    } catch {
+      // best-effort by design
+    }
+  }
+
   async #toTicket(issue: Issue): Promise<Ticket | undefined> {
     const { trigger } = this.#config;
     const labels = (await issue.labels()).nodes.map((label) => label.name);
@@ -69,9 +97,7 @@ export class LinearService {
     const description = issue.description ?? "";
 
     const hasLabel = labels.some((l) => l.toLowerCase() === trigger.label.toLowerCase());
-    const hasTag =
-      trigger.tag.length > 0 && (title.includes(trigger.tag) || description.includes(trigger.tag));
-    if (!hasLabel && !hasTag) return undefined;
+    if (!hasLabel) return undefined;
 
     const marker = trigger.spikeMarker.toLowerCase();
     const isSpike =
@@ -98,7 +124,8 @@ export class LinearService {
 
   /**
    * Repo resolution order: a `repo:<key>` label, a label exactly matching a
-   * repo key, the issue's project name matching a key, then config.defaultRepo.
+   * repo key, the issue's project among a repo's configured `projects`, the
+   * project name matching a key, then config.defaultRepo.
    */
   async #resolveRepo(issue: Issue, labels: string[]): Promise<string | undefined> {
     const repoKeys = Object.keys(this.#config.repos);
@@ -118,6 +145,10 @@ export class LinearService {
     try {
       const project = await issue.project;
       if (project) {
+        const name = project.name.toLowerCase();
+        for (const [key, repo] of Object.entries(this.#config.repos)) {
+          if (repo.projects.some((p) => p.toLowerCase() === name)) return key;
+        }
         const key = byKey(project.name);
         if (key) return key;
       }

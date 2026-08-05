@@ -15,6 +15,8 @@ export const repoConfigSchema = z.object({
   /** Git remote in "owner/name" form. */
   remote: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'expected "owner/name"'),
   defaultBranch: z.string().default("main"),
+  /** Linear project names whose tickets run against this repo (case-insensitive). */
+  projects: z.array(z.string()).default([]),
   /** Optional local checkout to clone from instead of the network. */
   path: z.string().optional(),
   /** Command that produces a runnable dev server, used for demo capture. */
@@ -47,6 +49,8 @@ export const configSchema = z.object({
     .object({
       /** Empty = not connected yet; set via the dashboard's Connections panel. */
       token: z.string().default(""),
+      /** How the agent is told to write the PR description (.brevi/summary.md). */
+      prDescription: z.enum(["concise", "detailed"]).default("concise"),
     })
     .prefault({}),
   /** Map of repo key -> repo config. Ticket labels or project names select the key. */
@@ -99,9 +103,7 @@ export const configSchema = z.object({
     .prefault({}),
   trigger: z
     .object({
-      /** Mention that opts a ticket in, searched in title/description/labels. */
-      tag: z.string().default("@brevi"),
-      /** Label name that also opts a ticket in. */
+      /** Label name that opts a ticket in. */
       label: z.string().default("brevi"),
       /** Label or title prefix marking a ticket as research-only. */
       spikeMarker: z.string().default("SPIKE"),
