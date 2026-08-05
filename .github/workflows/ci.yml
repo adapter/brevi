@@ -53,7 +53,10 @@ jobs:
 
   deploy-preview:
     name: Deploy preview (docs + api)
-    # Forked PRs have no secrets; only deploy previews for same-repo branches.
+    # Uploads per-commit *versions* of the production workers (no traffic
+    # shift); each gets its own <version>-<worker>.workers.dev preview URL.
+    # Note: preview versions run with the production worker's secrets, which
+    # is why this stays same-repo only (forked PRs also have no secrets).
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     needs: checks
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -118,7 +121,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           marker="<!-- brevi-preview-urls -->"
-          body="$(printf '%s\n### Preview deployments\n\n| App | URL |\n| --- | --- |\n| docs | %s |\n| api | %s |\n\n_Deployed from %s._' "$marker" "$DOCS_URL" "$API_URL" "$HEAD_SHA")"
+          body="$(printf '%s\n### Preview deployments\n\n| App | Preview URL (this commit) |\n| --- | --- |\n| docs | %s |\n| api | %s |\n\n_Version preview for %s — production traffic is unaffected._' "$marker" "$DOCS_URL" "$API_URL" "$HEAD_SHA")"
           cid=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
             --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
           if [ -n "$cid" ]; then

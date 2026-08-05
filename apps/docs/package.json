@@ -11,7 +11,7 @@
     "preview": "astro preview",
     "astro": "astro",
     "deploy": "wrangler deploy --env production",
-    "deploy:preview": "wrangler deploy --env preview"
+    "deploy:preview": "wrangler versions upload --env production"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.6",
