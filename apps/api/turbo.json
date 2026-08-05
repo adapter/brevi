@@ -1,0 +1,10 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      // The build is a typecheck only (wrangler bundles at deploy time).
+      "outputs": []
+    }
+  }
+}
