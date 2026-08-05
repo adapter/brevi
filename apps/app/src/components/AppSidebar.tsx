@@ -51,6 +51,15 @@ export function AppSidebar({
 }) {
   const linearConnected = config === null || config.linear.apiKey !== "";
 
+  /**
+   * Runs that still need to happen: tickets with no run for their current
+   * revision — the same (id, updatedAt) rule the scheduler queues by.
+   */
+  const pending = tickets.filter(
+    (ticket) =>
+      !runs.some((r) => r.ticket.id === ticket.id && r.ticket.updatedAt === ticket.updatedAt),
+  );
+
   return (
     <Sidebar collapsible="none" className="h-svh shrink-0 border-r border-sidebar-border">
       <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
@@ -70,19 +79,19 @@ export function AppSidebar({
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupLabel className="gap-2">
-            <Plate className="text-haze-400">Queue</Plate>
+            <Plate className="text-haze-400">Runs</Plate>
             <span className="font-mono text-[11px] leading-none text-haze-700">
-              {tickets.length}
+              {pending.length + runs.length}
             </span>
             <span className="ml-auto">
               <Plate className="text-haze-700">Linear</Plate>
             </span>
           </SidebarGroupLabel>
           <SidebarGroupContent>
-            {tickets.length === 0 ? (
+            {pending.length === 0 && runs.length === 0 ? (
               unreachable ? (
                 <p className="px-2 py-2 text-[12.5px] leading-relaxed text-haze-700">
-                  The queue loads once the orchestrator is running.
+                  Runs appear once the orchestrator is running.
                 </p>
               ) : !linearConnected ? (
                 <ConnectLinearCard onOpenConnections={onOpenConnections} />
@@ -91,8 +100,8 @@ export function AppSidebar({
               )
             ) : (
               <ul className="flex flex-col gap-2 px-1 pt-1">
-                {tickets.map((ticket) => (
-                  <li key={ticket.id}>
+                {pending.map((ticket) => (
+                  <li key={`ticket-${ticket.id}`}>
                     <TicketStrip
                       ticket={ticket}
                       active={activeByTicket.get(ticket.id)}
@@ -102,25 +111,6 @@ export function AppSidebar({
                     />
                   </li>
                 ))}
-              </ul>
-            )}
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarGroup>
-          <SidebarGroupLabel className="gap-2">
-            <Plate className="text-haze-400">Runs</Plate>
-            <span className="font-mono text-[11px] leading-none text-haze-700">{runs.length}</span>
-          </SidebarGroupLabel>
-          <SidebarGroupContent>
-            {runs.length === 0 ? (
-              <p className="px-2 py-2 text-[12.5px] leading-relaxed text-haze-700">
-                {unreachable
-                  ? "Runs appear once the orchestrator is running."
-                  : "No runs yet. Everything brevi does shows up here."}
-              </p>
-            ) : (
-              <ul className="flex flex-col gap-1.5 px-1 pt-1">
                 {runs.map((run) => (
                   <li key={run.id}>
                     <RunStrip
@@ -277,8 +267,11 @@ function RunStrip({
             {run.ticket.title}
           </span>
         </div>
-        <div className="mt-1 font-mono text-[10px] text-haze-700">
-          {relative(run.createdAt, now)}
+        <div className="mt-1.5 flex items-center gap-2">
+          <RepoChip repo={run.ticket.repo} />
+          <span className="ml-auto font-mono text-[10px] text-haze-700">
+            {relative(run.createdAt, now)}
+          </span>
         </div>
       </div>
     </a>
@@ -307,7 +300,6 @@ function ConnectLinearCard({ onOpenConnections }: { onOpenConnections: () => voi
 
 /** First-run UX: the queue is empty because brevi has not been summoned yet. */
 function SummonCard({ config }: { config: BreviConfig | null }) {
-  const tag = config?.trigger.tag ?? "@brevi";
   const label = config?.trigger.label ?? "brevi";
   const spike = config?.trigger.spikeMarker ?? "SPIKE";
   const poll = config?.pollIntervalSeconds ?? 60;
@@ -316,8 +308,8 @@ function SummonCard({ config }: { config: BreviConfig | null }) {
     <Card size="sm" className="mx-1 block p-4">
       <Plate className="text-haze-700">Nothing queued</Plate>
       <p className="mt-2 text-[12.5px] leading-relaxed text-haze-400">
-        Assign yourself a Linear issue and put {tag} in its title or description (or add the{" "}
-        {label} label). Start the title with {spike} for a written answer instead of a PR.
+        Assign yourself a Linear issue and add the {label} label. Start the title with {spike} for
+        a written answer instead of a PR.
       </p>
       <p className="mt-3 border-t border-ink-700 pt-3 font-mono text-[11px] text-haze-700">
         Checking Linear every {poll}s
