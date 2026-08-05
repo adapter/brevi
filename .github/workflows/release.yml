@@ -23,7 +23,9 @@ permissions:
 jobs:
   release:
     name: Version or publish
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # GitHub-hosted on purpose: npm rejects provenance attestations from
+    # self-hosted runners (Blacksmith counts as self-hosted in OIDC claims).
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
