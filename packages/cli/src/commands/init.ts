@@ -22,8 +22,22 @@ export function registerInitCommand(program: Command): void {
     });
 }
 
-async function runInit(): Promise<void> {
-  intro(pc.bgCyan(pc.black(" brevi init ")));
+export interface RunInitOptions {
+  /**
+   * Set when init runs automatically because `brevi` was launched without a
+   * config. Adjusts the copy: explains why the prompt appeared and skips the
+   * "run brevi" next steps, since the dashboard is about to open.
+   */
+  firstRun?: boolean;
+}
+
+/** Runs the init flow. Resolves to true when a config was saved. */
+export async function runInit({ firstRun = false }: RunInitOptions = {}): Promise<boolean> {
+  intro(pc.bgCyan(pc.black(firstRun ? " brevi " : " brevi init ")));
+
+  if (firstRun) {
+    log.info(`No config found at ${pc.dim(CONFIG_PATH)} — running first-time setup.`);
+  }
 
   const existing = await loadExisting();
   if (existsSync(CONFIG_PATH)) {
@@ -37,7 +51,7 @@ async function runInit(): Promise<void> {
     );
     if (!proceed) {
       outro("Nothing changed.");
-      return;
+      return false;
     }
   }
 
@@ -57,7 +71,7 @@ async function runInit(): Promise<void> {
   );
   if (!confirmed) {
     outro("Nothing saved.");
-    return;
+    return false;
   }
 
   const s = spinner();
@@ -76,13 +90,16 @@ async function runInit(): Promise<void> {
   s.stop(`Saved to ${CONFIG_PATH}`);
 
   outro(
-    [
-      "Next steps:",
-      `  1. Run ${pc.cyan("npx @brevi/cli ui")} to start brevi and open the dashboard.`,
-      "  2. In the Connections panel: connect Linear, GitHub, an agent key, and pick repositories.",
-      `  3. Tag a Linear ticket with "@brevi" (or add the "brevi" label).`,
-    ].join("\n"),
+    firstRun
+      ? "Setup complete — starting brevi..."
+      : [
+          "Next steps:",
+          `  1. Run ${pc.cyan("npx @brevi/cli")} to start brevi and open the dashboard.`,
+          "  2. In the Connections panel: connect Linear, GitHub, an agent key, and pick repositories.",
+          `  3. Add the "brevi" label to a Linear ticket assigned to you.`,
+        ].join("\n"),
   );
+  return true;
 }
 
 async function loadExisting(): Promise<BreviConfig | undefined> {

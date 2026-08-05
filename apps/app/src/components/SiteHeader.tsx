@@ -55,7 +55,7 @@ export function SiteHeader({
         {conn === "offline" && showHint && (
           <div className="hidden items-center gap-2 lg:flex">
             <Plate className="text-haze-700">Start it with</Plate>
-            <Command text="npx @brevi/cli ui" />
+            <Command text="npx @brevi/cli" />
           </div>
         )}
 

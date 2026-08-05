@@ -31,7 +31,7 @@ export function registerStatusCommand(program: Command): void {
         console.log(pc.dim(`  sandbox provider: ${health.sandboxProvider}`));
       } catch {
         console.log(pc.yellow(`✖ brevi is not running on port ${port}`));
-        console.log(pc.dim("  Start it with `npx @brevi/cli ui` or `npx @brevi/cli start`."));
+        console.log(pc.dim("  Start it with `npx @brevi/cli` or `npx @brevi/cli start`."));
         process.exit(1);
       } finally {
         clearTimeout(timer);

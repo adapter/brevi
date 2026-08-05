@@ -20,16 +20,14 @@ brevi runs on your machine: a CLI, an orchestrator that polls Linear, and a dash
 The CLI is published as [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli) — run it with `npx`:
 
 ```sh
-npx @brevi/cli init
-npx @brevi/cli ui
+npx @brevi/cli
 ```
 
 …or install it globally to get the `brevi` binary:
 
 ```sh
 npm install -g @brevi/cli
-brevi init
-brevi ui
+brevi
 ```
 
 <Aside type="note">
@@ -40,21 +38,17 @@ Working on brevi itself? Clone [adapter/brevi](https://github.com/adapter/brevi)
 
 <Steps>
 
-1. **Pick a sandbox provider — `brevi init`**
+1. **Run `brevi`**
 
-   `init` is deliberately small: it creates `~/.brevi/config.json` and asks one question, the sandbox provider.
+   The first launch (no `~/.brevi/config.json` yet) starts with the init flow, which asks one question — the sandbox provider:
 
    - `auto` (recommended) — Firecracker on Linux with KVM, the process sandbox everywhere else.
    - `firecracker` — fails fast at startup if the host isn't ready.
    - `process` — no isolation, development only.
 
-   Re-running `init` keeps everything else in the config (credentials, repositories) untouched.
+   The orchestrator then binds `http://localhost:4400`, serves the dashboard, and opens it in your browser. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up. To change the sandbox provider later, run `brevi init` — it keeps everything else in the config (credentials, repositories) untouched.
 
-2. **Start the orchestrator — `brevi ui`**
-
-   The orchestrator binds `http://localhost:4400`, serves the dashboard, and opens it in your browser. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up.
-
-3. **Open the Connections rail**
+2. **Open the Connections rail**
 
    The dashboard's **Connections** panel is where every credential is set. Each provider has a **Connect** button that tries automatic strategies first and only falls back to a manual key input:
 
@@ -65,15 +59,15 @@ Working on brevi itself? Clone [adapter/brevi](https://github.com/adapter/brevi)
 
    Every credential is verified against its provider before it is saved, so "Connected" means the agent can actually run. Details in [Connections](/guides/connections/).
 
-4. **Pick repositories**
+3. **Pick repositories**
 
    Once GitHub is connected, the **Repositories** section lists the repos your token can see, most recently pushed first. Add the ones brevi may work on. Each becomes a repo *key* (the repo name) mapped to `owner/name` and its default branch. One repo is the default — unmatched tickets run against it.
 
-5. **Label a Linear ticket**
+4. **Label a Linear ticket**
 
    Assign an issue to yourself, leave it in an unstarted/backlog state, and add the `brevi` label. Add `SPIKE` to the title (or as a label) for research-only tickets.
 
-6. **Watch the run**
+5. **Watch the run**
 
    brevi polls Linear every 60 seconds, queues eligible tickets, and runs them one at a time. The dashboard streams the agent's output live; when the run finishes you get a pull request (with the agent's demo kept on the run's page), or a research comment on the issue for a SPIKE.
 

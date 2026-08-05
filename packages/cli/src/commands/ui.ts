@@ -1,11 +1,20 @@
 import type { Command } from "commander";
-import { runServer } from "../lib/serve.js";
+import pc from "picocolors";
+import { runDefaultFlow } from "./default.js";
 
+/** Hidden, deprecated alias for the bare `brevi` invocation. */
 export function registerUiCommand(program: Command): void {
   program
-    .command("ui")
-    .description("Start the orchestrator and open the dashboard in your browser")
+    .command("ui", { hidden: true })
+    .description(
+      "(deprecated) Start the orchestrator and open the dashboard — run `brevi` instead",
+    )
     .action(async () => {
-      await runServer({ openBrowser: true });
+      console.error(
+        pc.yellow(
+          "`brevi ui` is deprecated and will be removed — running `brevi` with no arguments does the same thing.",
+        ),
+      );
+      await runDefaultFlow();
     });
 }
