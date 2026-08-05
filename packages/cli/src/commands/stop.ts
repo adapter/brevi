@@ -1,4 +1,5 @@
 import { loadConfig } from "@brevi/orchestrator";
+import { isHealthResponse } from "@brevi/shared";
 import type { Command } from "commander";
 import pc from "picocolors";
 import { pidListeningOnPort, readPidFile, removePidFile } from "../lib/pid.js";
@@ -54,8 +55,9 @@ export function registerStopCommand(program: Command): void {
 
 /**
  * Fallback for servers started before pid files existed: if the health
- * endpoint on the configured port answers (so the listener really is brevi),
- * return the pid listening there.
+ * endpoint on the configured port answers with a brevi health payload (so the
+ * listener really is brevi, not an unrelated service that happens to serve
+ * /api/health), return the pid listening there.
  */
 async function pidFromConfiguredPort(): Promise<number | null> {
   const config = await loadConfig().catch(() => null);
@@ -67,6 +69,8 @@ async function pidFromConfiguredPort(): Promise<number | null> {
   try {
     const res = await fetch(`http://localhost:${port}/api/health`, { signal: controller.signal });
     if (!res.ok) return null;
+    const body: unknown = await res.json();
+    if (!isHealthResponse(body)) return null;
     return await pidListeningOnPort(port);
   } catch {
     return null;

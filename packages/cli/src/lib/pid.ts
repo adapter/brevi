@@ -1,15 +1,30 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { BREVI_HOME } from "@brevi/shared";
 
-/** Written by the server process on startup so `brevi stop` can find it. */
+/**
+ * Written by the server process on startup so `brevi stop` can find it.
+ * Alongside the pid it records the process start time, so a pid the OS has
+ * recycled for an unrelated process (after a hard kill or a reboot) is never
+ * mistaken for the server.
+ */
 const PID_PATH = join(BREVI_HOME, "server.pid");
+
+interface PidFileRecord {
+  pid: number;
+  /** `ps -o lstart=` output at write time; empty where unavailable (win32). */
+  startedAt: string;
+}
 
 export function writePidFile(): void {
   mkdirSync(BREVI_HOME, { recursive: true });
-  writeFileSync(PID_PATH, `${process.pid}\n`);
+  const record: PidFileRecord = {
+    pid: process.pid,
+    startedAt: processStartTime(process.pid) ?? "",
+  };
+  writeFileSync(PID_PATH, `${JSON.stringify(record)}\n`);
 }
 
 export function removePidFile(): void {
@@ -17,8 +32,10 @@ export function removePidFile(): void {
 }
 
 /**
- * Pid recorded in the pid file, or null when there is no file or the process
- * is no longer alive (a stale file, e.g. after a SIGKILL, is removed).
+ * Pid recorded in the pid file, or null when there is no file or the pid no
+ * longer refers to the server that wrote it — the process is dead, or the OS
+ * has reused the pid and its start time no longer matches the recorded one.
+ * Stale files are removed on read.
  */
 export function readPidFile(): number | null {
   let raw: string;
@@ -27,12 +44,48 @@ export function readPidFile(): number | null {
   } catch {
     return null;
   }
-  const pid = Number.parseInt(raw.trim(), 10);
-  if (!Number.isInteger(pid) || pid <= 0 || !isProcessAlive(pid)) {
+  const record = parsePidFile(raw);
+  if (!record || !isProcessAlive(record.pid) || isRecycledPid(record)) {
     removePidFile();
     return null;
   }
-  return pid;
+  return record.pid;
+}
+
+function parsePidFile(raw: string): PidFileRecord | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const { pid, startedAt } = value as Record<string, unknown>;
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return null;
+  if (typeof startedAt !== "string") return null;
+  return { pid, startedAt };
+}
+
+/** True when the pid now belongs to a different process than the one recorded. */
+function isRecycledPid({ pid, startedAt }: PidFileRecord): boolean {
+  if (!startedAt) return false;
+  const current = processStartTime(pid);
+  return current !== null && current !== startedAt;
+}
+
+/**
+ * Process start time as reported by `ps` (e.g. "Tue Aug  5 09:14:02 2026").
+ * Null where ps is unavailable (win32) or the query fails; callers then fall
+ * back to plain aliveness checking.
+ */
+function processStartTime(pid: number): string | null {
+  if (process.platform === "win32") return null;
+  try {
+    const out = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
 }
 
 function isProcessAlive(pid: number): boolean {
