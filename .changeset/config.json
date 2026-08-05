@@ -5,8 +5,5 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "fixed": [
-    ["@brevi/cli", "@brevi/orchestrator", "@brevi/sandbox", "@brevi/shared", "@brevi/app"]
-  ],
   "ignore": []
 }

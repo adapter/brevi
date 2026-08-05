@@ -1,7 +1,20 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig, startOrchestrator } from "@brevi/orchestrator";
 import open from "open";
 import pc from "picocolors";
 import { errorMessage } from "./util.js";
+
+/**
+ * The published CLI bundles the dashboard next to the entry file (dist/app).
+ * In-repo builds don't have it; the orchestrator then falls back to
+ * resolving the @brevi/app workspace package.
+ */
+function bundledAppDist(): string | undefined {
+  const dist = join(dirname(fileURLToPath(import.meta.url)), "app");
+  return existsSync(join(dist, "index.html")) ? dist : undefined;
+}
 
 export interface RunServerOptions {
   /** Open the dashboard URL in the default browser once it's up. */
@@ -16,7 +29,7 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
     process.exit(1);
   });
 
-  const handle = await startOrchestrator({ config }).catch((err: unknown) => {
+  const handle = await startOrchestrator({ config, appDist: bundledAppDist() }).catch((err: unknown) => {
     console.error(pc.red(`✖ Failed to start the orchestrator: ${errorMessage(err)}`));
     process.exit(1);
   });

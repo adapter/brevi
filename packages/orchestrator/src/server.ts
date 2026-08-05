@@ -26,6 +26,12 @@ export interface StartOptions {
   /** Pre-loaded config; when omitted, loaded from configPath. */
   config?: BreviConfig;
   configPath?: string;
+  /**
+   * Directory of the built dashboard to serve. When omitted, resolved from
+   * the @brevi/app workspace package (the in-repo dev setup). The published
+   * CLI bundles the dashboard and passes its own path here.
+   */
+  appDist?: string;
 }
 
 export interface OrchestratorHandle {
@@ -118,7 +124,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function buildApp(orchestrator: Orchestrator, config: BreviConfig): Hono {
+function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: string): Hono {
   const app = new Hono();
 
   app.get("/api/health", (c) => {
@@ -266,7 +272,7 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig): Hono {
     if (c.req.method !== "GET" || pathname.startsWith("/api/")) {
       return c.json({ error: "not found" }, 404);
     }
-    const dist = resolveAppDist();
+    const dist = appDist ?? resolveAppDist();
     if (!dist) return c.html(PLACEHOLDER_HTML);
 
     const requested = resolve(dist, `.${decodeURIComponent(pathname)}`);
@@ -374,7 +380,7 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
   const orchestrator = new Orchestrator(config, undefined, options.configPath);
   await orchestrator.start();
 
-  const app = buildApp(orchestrator, config);
+  const app = buildApp(orchestrator, config, options.appDist);
   const server = await new Promise<HttpServer>((resolvePromise, rejectPromise) => {
     const instance = serve(
       { fetch: app.fetch, port: config.server.port, hostname: "127.0.0.1" },

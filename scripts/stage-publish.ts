@@ -15,13 +15,9 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const DIRS = [
-  "packages/shared",
-  "packages/sandbox",
-  "apps/app",
-  "packages/orchestrator",
-  "packages/cli",
-];
+// The CLI is the only published package: it bundles the workspace libraries
+// and ships the dashboard's built assets inside its own dist.
+const DIRS = ["packages/cli"];
 
 const npm = (args: string[], cwd?: string) =>
   execFileSync("npm", args, { cwd, stdio: ["ignore", "pipe", "pipe"] }).toString();
