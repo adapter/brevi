@@ -18,13 +18,13 @@
   },
   "dependencies": {
     "@brevi/shared": "*",
-    "execa": "^9.6.0",
-    "undici": "^7.16.0"
+    "execa": "^10.0.1",
+    "undici": "^8.10.0"
   },
   "devDependencies": {
     "@repo/typescript-config": "*",
-    "@types/node": "^22.15.3",
-    "oxlint": "^1.22.0",
-    "typescript": "5.9.2"
+    "@types/node": "^26.1.2",
+    "oxlint": "^1.77.0",
+    "typescript": "^7.0.2"
   }
 }

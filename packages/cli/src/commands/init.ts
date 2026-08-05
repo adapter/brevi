@@ -65,7 +65,7 @@ async function runInit(): Promise<void> {
   try {
     await saveConfig(draft);
   } catch (err) {
-    s.stop("Failed to save configuration", 1);
+    s.error("Failed to save configuration");
     if (isZodLikeError(err)) {
       for (const line of formatZodIssues(err)) log.error(line);
     } else {

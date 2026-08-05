@@ -17,12 +17,12 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
-    "zod": "^4.1.12"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@repo/typescript-config": "*",
-    "@types/node": "^22.15.3",
-    "oxlint": "^1.22.0",
-    "typescript": "5.9.2"
+    "@types/node": "^26.1.2",
+    "oxlint": "^1.77.0",
+    "typescript": "^7.0.2"
   }
 }

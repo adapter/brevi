@@ -14,6 +14,9 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true,
-    "target": "ES2022"
+    "target": "ES2022",
+    // TypeScript 7's resolver doesn't auto-include @types from bun's
+    // workspace layout; declare it. Browser/worker packages override this.
+    "types": ["node"]
   }
 }

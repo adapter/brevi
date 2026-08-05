@@ -45,7 +45,7 @@ function parseChangelog(text: string) {
       .trimEnd()
       .replace(/^- [0-9a-f]{7,40}: /, "- ");
     entry = [];
-    if (/^- Updated dependencies/.test(joined)) return;
+    if (joined.startsWith("- Updated dependencies")) return;
 
     const byBump = versions.get(version) ?? new Map<Bump, string[]>();
     versions.set(version, byBump);
