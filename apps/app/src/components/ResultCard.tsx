@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Plate } from "./Bits";
 import { Branch, Comment, External, Merge } from "./Icons";
+import { Markdown } from "./Markdown";
 
 export function ResultCard({ run }: { run: Run }) {
   const result = run.result;
@@ -21,9 +22,9 @@ export function ResultCard({ run }: { run: Run }) {
         <Separator className="flex-1" />
       </div>
 
-      <p className="mt-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap text-haze-100">
-        {result.summary}
-      </p>
+      <div className="mt-2.5">
+        <Markdown>{result.summary}</Markdown>
+      </div>
 
       <div className="mt-3.5 flex flex-wrap items-center gap-2">
         {result.prUrl && (
