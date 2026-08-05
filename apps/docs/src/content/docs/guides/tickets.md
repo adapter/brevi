@@ -58,12 +58,12 @@ Runs execute serially — one at a time, FIFO — and move through the statuses 
 
 Then, depending on the kind:
 
-- **Implementation** — brevi removes the mounted Codex login, stages everything, and fails with `agent made no changes` if the tree is clean. Otherwise it commits `<ID>: <title>`, force-pushes `brevi/<ticket-id>`, and opens a pull request against the repo's default branch. The PR body is the agent's `summary.md`, a **Demo** section, `Fixes <ID>`, and a brevi footer. Screenshots are embedded inline from `raw.githubusercontent.com`; recordings and text evidence are linked. Finally brevi comments on the Linear issue with the PR link (a failure here does not fail the run).
+- **Implementation** — brevi removes everything under `.brevi/` (agent outputs stay with the run's artifacts; the mounted Codex login must never leak), stages the rest, and fails with `agent made no changes` if the tree is clean. Otherwise it commits `<ID>: <title>`, force-pushes `brevi/<ticket-id>`, and opens a pull request against the repo's default branch. The PR body is the agent's `summary.md`, `Fixes <ID>`, and a brevi footer. Finally brevi comments on the Linear issue with the PR link (a failure here does not fail the run).
 - **SPIKE** — brevi reads `.brevi/research.md` and posts it as a Linear comment. If the file is missing, the run fails. Comments longer than 60 KB are truncated with a pointer to the full document in the run's artifacts.
 
 ### Demos
 
-The implementation prompt makes a demo mandatory. If the repo config sets `devCommand` (and optionally `devUrl`), the agent is told to start that dev server and capture real screenshots with Playwright. Otherwise it captures the best available evidence: screenshots, else a `.webm` recording, else test output or a CLI transcript as `.txt`. Files go in `.brevi/demo/` and are committed with the change, which is what lets GitHub render them in the PR.
+The implementation prompt makes a demo mandatory. If the repo config sets `devCommand` (and optionally `devUrl`), the agent is told to start that dev server and capture real screenshots with Playwright. Otherwise it captures the best available evidence: screenshots, else a `.webm` recording, else test output or a CLI transcript as `.txt`. Files go in `.brevi/demo/` and are collected as run artifacts, viewable on the run's page in the dashboard — they are not committed to the branch or attached to the PR.
 
 ## Reruns
 

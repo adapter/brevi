@@ -8,7 +8,7 @@ A local sandbox and orchestrator for coding agents.
 Connect your machine to Linear and GitHub, tag a ticket with **@brevi** (or the `brevi` label), and brevi picks it up:
 
 - **SPIKE tickets** → runs a coding agent to research the question and posts the findings back to the Linear issue as a comment.
-- **Implementation tickets** → runs a coding agent on a checkout of the mapped repo, pushes a branch, and opens a GitHub PR that includes a demo (screenshots or a screen recording) captured by the agent.
+- **Implementation tickets** → runs a coding agent on a checkout of the mapped repo, pushes a branch, and opens a GitHub PR. A demo (screenshots or a screen recording) captured by the agent is kept with the run in the local dashboard.
 
 Every execution runs in an isolated sandbox. On Linux with KVM, sandboxes are [Firecracker](https://firecracker-microvm.github.io/) microVMs; elsewhere a local process sandbox is used for development.
 
@@ -42,7 +42,7 @@ orchestrator ──► classify: SPIKE │ implementation
 sandbox (Firecracker microVM / process)
    │  git checkout of the mapped repo + coding agent (Claude Code, headless)
    ▼
-implementation → branch + PR with demo artifacts      SPIKE → research comment on the issue
+implementation → branch + PR (demo stays local)       SPIKE → research comment on the issue
 ```
 
 State lives in `~/.brevi/`: `config.json`, run history + artifacts under `runs/`, VM images under `images/`.
