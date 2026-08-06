@@ -427,6 +427,12 @@ const R2_POLL_INTERVAL_MS = 3000;
  * Cloudflare R2 evidence connector. Unlike the credential providers above,
  * "connected" is a live probe of the host's wrangler CLI, not a stored
  * secret, so this is a dedicated card rather than a ProviderSpec entry.
+ *
+ * One click covers the happy path: Connect triggers a `wrangler login` when
+ * logged out, then (once the login poll sees it complete) automatically
+ * provisions the evidence bucket. Manual bucket/URL entry is a fallback,
+ * reached via "Edit" or "Enter bucket details manually instead", for custom
+ * domains or anyone who wants to point at an existing bucket.
  */
 function R2Row({
   config,
@@ -439,9 +445,17 @@ function R2Row({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [connectDetail, setConnectDetail] = useState<string | null>(null);
+  const [connectError, setConnectError] = useState<string | null>(null);
   const [unavailableReason, setUnavailableReason] = useState<string | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards the auto-provision call below: armed (set false) only when a
+  // Connect click starts a login, and disarmed after one follow-up
+  // connect(). Merely loading the page while wrangler happens to be logged
+  // in must never provision, and a provisioning failure must not loop; the
+  // user retries via the button instead.
+  const autoProvisioned = useRef(true);
 
+  const [editing, setEditing] = useState(false);
   const [bucket, setBucket] = useState(config.r2.bucket);
   const [publicBaseUrl, setPublicBaseUrl] = useState(config.r2.publicBaseUrl);
   const [settingsPending, setSettingsPending] = useState(false);
@@ -503,29 +517,31 @@ function R2Row({
     }, R2_POLL_INTERVAL_MS);
   };
 
-  // The login happens in a host browser tab; once polling sees loggedIn flip
-  // we're done.
-  useEffect(() => {
-    if (status?.loggedIn) {
-      setConnectDetail(null);
-      stopPolling();
-    }
-  }, [status?.loggedIn]);
-
   const connect = async () => {
     setPending(true);
     setLoadError(null);
     setConnectDetail(null);
+    setConnectError(null);
     setUnavailableReason(null);
     try {
       const response = await api.connectR2();
       switch (response.status) {
         case "connected":
           setStatus(response.r2);
+          // Also sync the manual-edit fields from the response: the config
+          // broadcast that would do it can lag or drop, and Edit opening on
+          // stale values could save them over the freshly provisioned ones.
+          setBucket(response.r2.bucket);
+          setPublicBaseUrl(response.r2.publicBaseUrl);
           break;
         case "login-started":
+          autoProvisioned.current = false;
           setConnectDetail(response.detail);
           pollStatus(Date.now() + R2_POLL_TIMEOUT_MS);
+          break;
+        case "provision-failed":
+          setStatus(response.r2);
+          setConnectError(response.reason);
           break;
         case "unavailable":
           setUnavailableReason(response.reason);
@@ -538,6 +554,29 @@ function R2Row({
     }
   };
 
+  // The login happens in a host browser tab; once polling sees loggedIn flip
+  // we're done with that step. If the bucket still isn't provisioned, finish
+  // the one-click flow by connecting again, which now provisions instead of
+  // asking to log in.
+  useEffect(() => {
+    if (!status?.loggedIn) return;
+    setConnectDetail(null);
+    stopPolling();
+    if (!status.ready && !autoProvisioned.current) {
+      autoProvisioned.current = true;
+      void connect();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status?.loggedIn, status?.ready]);
+
+  const cancelEdit = () => {
+    // Live status is fresher than the config prop when the WS broadcast lags.
+    setBucket(status?.bucket ?? config.r2.bucket);
+    setPublicBaseUrl(status?.publicBaseUrl ?? config.r2.publicBaseUrl);
+    setSettingsResult(null);
+    setEditing(false);
+  };
+
   const saveSettings = async () => {
     setSettingsPending(true);
     setSettingsResult(null);
@@ -546,6 +585,7 @@ function R2Row({
       onConfig(response.config);
       setStatus(response.r2);
       setSettingsResult({ ok: true, detail: "Saved." });
+      setEditing(false);
     } catch (err) {
       setSettingsResult({
         ok: false,
@@ -557,7 +597,9 @@ function R2Row({
   };
 
   const ready = status?.ready ?? false;
-  const showConnect = status !== null && status.installed && !status.loggedIn;
+  const configured = status !== null && status.bucket !== "" && status.publicBaseUrl !== "";
+  const showConnect = status !== null && status.installed && !ready;
+  const showManualEntry = status?.loggedIn === true && !configured && !editing;
 
   return (
     <Card size="sm" className="gap-1.5">
@@ -578,7 +620,7 @@ function R2Row({
                 size="plate"
                 onClick={() => void connect()}
                 disabled={pending || connectDetail !== null}
-                title="Authenticate wrangler with your Cloudflare account"
+                title="Authenticate wrangler with your Cloudflare account and provision the evidence bucket"
               >
                 {pending ? "Connecting" : "Connect"}
               </Button>
@@ -629,45 +671,95 @@ function R2Row({
           </>
         )}
 
-        <div className="mt-3 flex flex-col gap-2">
-          <Input
-            type="text"
-            value={bucket}
-            onChange={(e) => {
-              setBucket(e.target.value);
-              setSettingsResult(null);
-            }}
-            placeholder="Bucket name"
-            autoComplete="off"
-            spellCheck={false}
-            className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
-          />
-          <Input
-            type="text"
-            value={publicBaseUrl}
-            onChange={(e) => {
-              setPublicBaseUrl(e.target.value);
-              setSettingsResult(null);
-            }}
-            placeholder="https://pub-xxxx.r2.dev"
-            autoComplete="off"
-            spellCheck={false}
-            className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
-          />
-          <Button
-            size="plate"
-            onClick={() => void saveSettings()}
-            disabled={settingsPending}
-            className="self-start"
-          >
-            {settingsPending ? "Saving" : "Save"}
-          </Button>
-        </div>
-
-        {status?.loggedIn && (bucket.trim() === "" || publicBaseUrl.trim() === "") && (
-          <p className="mt-2.5 text-[12px] leading-relaxed text-haze-700">
-            Set a bucket and its public URL to activate uploads.
+        {connectError && (
+          <p className="mt-2.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-rust-400">
+            <Warn className="mt-px size-3 shrink-0" />
+            {connectError}
           </p>
+        )}
+
+        {configured && !editing && (
+          <div className="mt-2.5 flex flex-col gap-1">
+            <div className="flex items-baseline gap-1.5">
+              <span className="w-14 shrink-0 text-[11px] text-haze-700">Bucket</span>
+              <span className="min-w-0 truncate font-mono text-[12px] text-haze-200">
+                {status.bucket}
+              </span>
+            </div>
+            <div className="flex items-baseline gap-1.5">
+              <span className="w-14 shrink-0 text-[11px] text-haze-700">Public URL</span>
+              <span className="min-w-0 truncate font-mono text-[12px] text-haze-200">
+                {status.publicBaseUrl}
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="plate"
+              onClick={() => setEditing(true)}
+              className="mt-1 -ml-2 self-start hover:bg-transparent hover:text-haze-300"
+            >
+              Edit
+            </Button>
+          </div>
+        )}
+
+        {showManualEntry && (
+          <Button
+            variant="ghost"
+            size="plate"
+            onClick={() => setEditing(true)}
+            className="mt-2.5 -ml-2 hover:bg-transparent hover:text-haze-300"
+          >
+            Enter bucket details manually instead
+          </Button>
+        )}
+
+        {editing && (
+          <div className="mt-3 flex flex-col gap-2">
+            <Input
+              type="text"
+              value={bucket}
+              onChange={(e) => {
+                setBucket(e.target.value);
+                setSettingsResult(null);
+              }}
+              placeholder="Bucket name"
+              autoComplete="off"
+              spellCheck={false}
+              className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+            />
+            <Input
+              type="text"
+              value={publicBaseUrl}
+              onChange={(e) => {
+                setPublicBaseUrl(e.target.value);
+                setSettingsResult(null);
+              }}
+              placeholder="https://pub-xxxx.r2.dev"
+              autoComplete="off"
+              spellCheck={false}
+              className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                size="plate"
+                onClick={() => void saveSettings()}
+                disabled={settingsPending}
+                className="self-start"
+              >
+                {settingsPending ? "Saving" : "Save"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="plate"
+                onClick={cancelEdit}
+                disabled={settingsPending}
+                className="self-start hover:bg-transparent hover:text-haze-300"
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
         )}
 
         <p className="mt-2 text-[11px] leading-relaxed text-haze-700">

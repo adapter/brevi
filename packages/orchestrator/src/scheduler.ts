@@ -57,7 +57,7 @@ import {
 import { listRepos } from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
 import { LinearService } from "./linear.js";
-import { checkWrangler, startWranglerLogin } from "./r2.js";
+import { checkWrangler, DEFAULT_EVIDENCE_BUCKET, provisionBucket, startWranglerLogin } from "./r2.js";
 import { buildResumeScript } from "./resume.js";
 import { collectAgentEnv, executeRun, playwrightBrowsersPath } from "./runner.js";
 import { ACTIVE_STATUSES, RunStore, isTerminal } from "./state.js";
@@ -553,7 +553,13 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     };
   }
 
-  /** One-click R2 connect: start `wrangler login` on the host, or report it's already done. */
+  /**
+   * One-click R2 connect: start `wrangler login` on the host if not yet
+   * authenticated, or, once logged in, provision the evidence bucket
+   * automatically (create or reuse it, enable its r2.dev public URL) and
+   * persist the result. A bucket and URL already configured is a no-op that
+   * just reports connected.
+   */
   async connectR2(): Promise<R2ConnectResponse> {
     const wrangler = await checkWrangler();
     if (!wrangler.installed) {
@@ -564,6 +570,17 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       };
     }
     if (wrangler.loggedIn) {
+      if (this.config.r2.bucket !== "" && this.config.r2.publicBaseUrl !== "") {
+        return { status: "connected", r2: await this.r2Status() };
+      }
+      const provisioned = await provisionBucket(this.config.r2.bucket || DEFAULT_EVIDENCE_BUCKET);
+      if (!provisioned.ok) {
+        return { status: "provision-failed", reason: provisioned.reason, r2: await this.r2Status() };
+      }
+      this.config.r2.bucket = provisioned.bucket;
+      this.config.r2.publicBaseUrl = provisioned.publicBaseUrl;
+      await saveConfig(this.config, this.#configPath);
+      this.emit("config", redactConfig(this.config));
       return { status: "connected", r2: await this.r2Status() };
     }
     if (!this.#r2Login) {
