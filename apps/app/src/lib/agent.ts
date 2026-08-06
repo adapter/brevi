@@ -146,10 +146,12 @@ export function toAgentBlocks(event: unknown): AgentBlock[] {
     });
   } else if (typeof event["text"] === "string") {
     out.push({ kind: "text", text: event["text"] });
-  } else if (type) {
-    out.push({ kind: "note", text: type });
+  } else if (!type) {
+    // Only shapeless payloads get dumped for debugging; anything carrying an
+    // unrecognized `type` is a newer low-signal event (status lines, token
+    // progress) and renders nothing rather than a bare type name.
+    out.push({ kind: "note", text: pretty(event) });
   }
 
-  if (out.length === 0) out.push({ kind: "note", text: pretty(event) });
   return out;
 }

@@ -13,6 +13,15 @@ import { STATUS_TONE } from "../lib/status";
 import { Plate } from "./Bits";
 import { Pin } from "./Icons";
 
+/**
+ * Consecutive "thinking" events collapse into one row: a spell that streams as
+ * several start/stop pairs (or duplicated boundaries) reads as a single
+ * spinner, then a single summed duration line.
+ */
+type ConsoleRow =
+  | { kind: "thinking"; ts: string; durationMs: number; pending: boolean }
+  | { kind: "event"; event: Exclude<RunEvent, { type: "thinking" }> };
+
 export function Console({
   runId,
   events,
@@ -51,16 +60,40 @@ export function Console({
     setStick(atBottom);
   };
 
-  // The one "thinking started" event with no "finished" after it: the agent is
-  // mid-thought, so its row gets the spinner. Only meaningful while live.
+  const rows = useMemo(() => {
+    const out: ConsoleRow[] = [];
+    for (const event of events) {
+      if (event.type !== "thinking") {
+        out.push({ kind: "event", event });
+        continue;
+      }
+      const last = out[out.length - 1];
+      const finished = event.phase === "finished";
+      if (last?.kind === "thinking") {
+        if (finished) last.durationMs += event.durationMs ?? 0;
+        last.pending = !finished;
+      } else {
+        out.push({
+          kind: "thinking",
+          ts: event.ts,
+          durationMs: finished ? (event.durationMs ?? 0) : 0,
+          pending: !finished,
+        });
+      }
+    }
+    return out;
+  }, [events]);
+
+  // The last thinking row still awaiting its finish: the agent is mid-thought,
+  // so that row gets the spinner. Only meaningful while live.
   const spinnerIndex = useMemo(() => {
     if (!live) return -1;
     let pending = -1;
-    events.forEach((event, i) => {
-      if (event.type === "thinking") pending = event.phase === "started" ? i : -1;
+    rows.forEach((row, i) => {
+      if (row.kind === "thinking") pending = row.pending ? i : -1;
     });
     return pending;
-  }, [events, live]);
+  }, [rows, live]);
 
   return (
     <Card
@@ -123,8 +156,12 @@ export function Console({
             </p>
           ) : (
             <div className="flex flex-col">
-              {events.map((event, i) => (
-                <Row key={`${event.ts}-${i}`} event={event} thinking={i === spinnerIndex} />
+              {rows.map((row, i) => (
+                <Row
+                  key={`${row.kind === "event" ? row.event.ts : row.ts}-${i}`}
+                  row={row}
+                  thinking={i === spinnerIndex}
+                />
               ))}
             </div>
           )}
@@ -134,32 +171,33 @@ export function Console({
   );
 }
 
-function Row({ event, thinking }: { event: RunEvent; thinking?: boolean }) {
-  if (event.type === "thinking") {
-    if (event.phase === "finished") {
+function Row({ row, thinking }: { row: ConsoleRow; thinking?: boolean }) {
+  if (row.kind === "thinking") {
+    // The spinner runs while the coalesced spell is still open; once it closes
+    // (or the run ends), the single summed duration line is the whole story.
+    if (thinking) {
       return (
         <div className="flex gap-2.5 py-[2px]">
-          <Gutter ts={event.ts} />
-          <p className="min-w-0 font-mono text-[11.5px] text-haze-600 italic">
-            Thought for {elapsed(Math.max(1000, event.durationMs ?? 0))}
-          </p>
+          <Gutter ts={row.ts} />
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="size-3 shrink-0 animate-spin rounded-full border border-haze-600 border-t-transparent" />
+            <span className="font-mono text-[11.5px] text-haze-500 italic">Thinking…</span>
+          </span>
         </div>
       );
     }
-    // A "started" event draws the spinner only while the agent is still in that
-    // thought; once the matching "finished" line lands (or the run ends), the
-    // duration line is the whole story.
-    if (!thinking) return null;
+    if (row.pending && row.durationMs === 0) return null;
     return (
       <div className="flex gap-2.5 py-[2px]">
-        <Gutter ts={event.ts} />
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="size-3 shrink-0 animate-spin rounded-full border border-haze-600 border-t-transparent" />
-          <span className="font-mono text-[11.5px] text-haze-500 italic">Thinking…</span>
-        </span>
+        <Gutter ts={row.ts} />
+        <p className="min-w-0 font-mono text-[11.5px] text-haze-600 italic">
+          Thought for {elapsed(Math.max(1000, row.durationMs))}
+        </p>
       </div>
     );
   }
+
+  const event = row.event;
 
   if (event.type === "status") {
     const tone = STATUS_TONE[event.status];
