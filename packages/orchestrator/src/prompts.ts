@@ -41,35 +41,14 @@ function repoMapSection(repoMap: RepoMap): string {
   ].join("\n");
 }
 
-/**
- * Prompt for the planning phase of implementation runs: explore and produce
- * `.brevi/plan.md` for a separate implementation agent, no code changes.
- */
-export function buildPlanPrompt(ticket: Ticket, repoMap?: RepoMap): string {
-  return [
-    "You are the planning agent of an automated two-phase run. Explore the repository checked out in the current directory and write an implementation plan for the ticket below. Do NOT implement anything: a separate implementation agent will execute your plan in this same checkout, with no context beyond the plan itself.",
-    "",
-    ticketSection(ticket),
-    ...(repoMap ? ["", repoMapSection(repoMap)] : []),
-    "",
-    "## Required output",
-    "Write the plan to `.brevi/plan.md`, the only file you may create or modify. Make it concrete enough to execute without re-deriving your research, and keep it under roughly 150 lines:",
-    "- `## Approach`: the change in a few sentences and why this approach fits this codebase",
-    "- `## Steps`: ordered steps naming the exact files to create or edit (paths from the repo root) and what changes in each",
-    "- `## Verification`: the tests/linters to run and what proves the change works",
-    "- `## Risks`: what is easy to get wrong (edge cases, coupled files, repo conventions the implementer must follow)",
-    NO_EM_DASHES,
-  ].join("\n");
-}
-
 /** Prompt for implementation tickets: code + summary + demo evidence. */
 export function buildImplementationPrompt(
   ticket: Ticket,
   repo: RepoConfig,
   prDescription: "concise" | "detailed" = "concise",
-  options: { repoMap?: RepoMap; hasPlan?: boolean } = {},
+  options: { repoMap?: RepoMap; delegate?: boolean } = {},
 ): string {
-  const { repoMap, hasPlan } = options;
+  const { repoMap, delegate } = options;
   const summaryInstruction =
     prDescription === "concise"
       ? "2. `.brevi/summary.md`: a very concise pull-request description with one or two sentences on what changed and why, then at most five short bullets covering how you verified it and anything reviewers must not miss. No headings, no restating the ticket."
@@ -114,10 +93,14 @@ export function buildImplementationPrompt(
 
   return [
     "You are an autonomous coding agent working in a git checkout of the repository in the current directory. Complete the ticket below end to end without asking questions.",
-    ...(hasPlan
+    ...(delegate
       ? [
           "",
-          "A planning agent already explored this repository and wrote an implementation plan to `.brevi/plan.md`. Read it first and follow it instead of re-planning from scratch. Where the code contradicts the plan, trust the code and note the deviation in `.brevi/summary.md`.",
+          "## Orchestration",
+          "You are the orchestrator of this run, on a stronger model; an `implementer` subagent on a faster model is available through your agent tool. Keep the thinking for yourself and delegate the labor:",
+          "- Plan the change yourself, then break it into well-scoped tasks and dispatch every substantive implementation task (code edits, running tests, demo capture) to `implementer` subagents, in parallel when tasks are independent.",
+          "- Give each subagent complete instructions: the exact files, the change to make, the conventions to follow, and how to verify it. It starts with no context beyond your prompt.",
+          "- Review what each subagent returns and iterate; fixing small residual issues yourself is fine, re-implementing the whole ticket yourself is not.",
         ]
       : []),
     "",

@@ -6,7 +6,7 @@ import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
 import { authenticatedRemote, createPullRequest, plainRemote } from "./github.js";
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
-import { buildImplementationPrompt, buildPlanPrompt, buildSpikePrompt, type RepoMap } from "./prompts.js";
+import { buildImplementationPrompt, buildSpikePrompt, type RepoMap } from "./prompts.js";
 import { isTerminal, type RunStore } from "./state.js";
 
 const MAX_COMMENT_BYTES = 60 * 1024;
@@ -143,13 +143,13 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     });
 
     const activeSandbox = sandbox;
-    const runAgent = async (prompt: string, model: string | undefined, label: string): Promise<void> => {
+    const runAgent = async (prompt: string, model: string | undefined, label: string, extraArgs: string[] = []): Promise<void> => {
       // --include-partial-messages exists only so the stream carries thinking
       // block boundaries; the token-level deltas are reduced to thinking events
       // above and never persisted.
       const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--dangerously-skip-permissions"];
       if (model) args.push("--model", model);
-      args.push(...config.agent.args);
+      args.push(...extraArgs, ...config.agent.args);
       log("system", `running ${config.agent.command} (${label}${model ? ` on ${model}` : ""}, timeout ${config.sandbox.timeoutMinutes}m)`);
       const exec = await raceWithAbort(
         activeSandbox.exec(config.agent.command, args, {
@@ -170,34 +170,22 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       throwIfAborted(signal);
     };
 
-    // Claude runs are two-phase (plan on planModel, implement on implementModel)
-    // so a stronger model does the thinking and a cheaper one the execution.
-    // Codex agents ignore the phase models and keep the single-phase flow.
+    // Claude runs put the strong orchestratorModel in the main loop (planning,
+    // review) and route the coding labor to an `implementer` subagent on the
+    // cheaper implementModel. An explicit `model` opts out of delegation, and
+    // Codex agents keep their plain single-model flow.
     const claude = agentProvider(config) === "claude";
-    const modelFor = (phase: "plan" | "implement"): string | undefined =>
-      config.agent.model || (phase === "plan" ? config.agent.planModel : config.agent.implementModel);
+    const mainModel = config.agent.model || (claude ? config.agent.orchestratorModel : undefined);
+    const delegate = claude && !config.agent.model && ticket.kind !== "spike";
 
     if (ticket.kind === "spike") {
-      await runAgent(buildSpikePrompt(ticket, repoMap), claude ? modelFor("plan") : config.agent.model, "research");
-    } else if (claude) {
-      await runAgent(buildPlanPrompt(ticket, repoMap), modelFor("plan"), "planning");
-      let hasPlan = true;
-      try {
-        await activeSandbox.readFile(".brevi/plan.md");
-      } catch {
-        hasPlan = false;
-        log("system", "planning phase produced no .brevi/plan.md; implementing without a plan");
-      }
-      await runAgent(
-        buildImplementationPrompt(ticket, repo, config.github.prDescription, { repoMap, hasPlan }),
-        modelFor("implement"),
-        "implementation",
-      );
+      await runAgent(buildSpikePrompt(ticket, repoMap), mainModel, "research");
     } else {
       await runAgent(
-        buildImplementationPrompt(ticket, repo, config.github.prDescription, { repoMap }),
-        config.agent.model,
+        buildImplementationPrompt(ticket, repo, config.github.prDescription, { repoMap, delegate }),
+        mainModel,
         "implementation",
+        delegate ? ["--agents", JSON.stringify(implementerAgent(config.agent.implementModel))] : [],
       );
     }
 
@@ -288,6 +276,24 @@ function limitLabel(limit: LimitInfo): string {
 
 function branchNameFor(ticket: Ticket): string {
   return `brevi/${ticket.identifier.toLowerCase()}`;
+}
+
+/**
+ * Definition for the Claude Code `--agents` flag: the subagent the
+ * orchestrating model dispatches implementation tasks to.
+ */
+function implementerAgent(model: string): Record<string, { description: string; prompt: string; model: string }> {
+  return {
+    implementer: {
+      description: "Implements one well-scoped coding task in this checkout exactly as instructed",
+      model,
+      prompt: [
+        "You are an implementation agent working in a git checkout. Execute exactly the task you were given: follow the repository's existing conventions, run the verification you were asked to run, and report concisely what you changed and what you observed.",
+        "Leave all changes uncommitted; never run `git commit` or `git push`.",
+        "Never use em dashes (\u2014) or spaced hyphens standing in for them in anything you write; use a comma, colon, or parentheses instead.",
+      ].join("\n"),
+    },
+  };
 }
 
 /** Where the Firecracker rootfs bakes Playwright browsers (see build-rootfs.sh). */
@@ -480,7 +486,7 @@ async function collectArtifacts(
     // no demo directory
   }
 
-  for (const doc of ["summary.md", "research.md", "plan.md"]) {
+  for (const doc of ["summary.md", "research.md"]) {
     const source = join(pulledDir, ".brevi", doc);
     try {
       await stat(source);

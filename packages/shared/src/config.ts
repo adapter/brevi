@@ -69,14 +69,18 @@ export const configSchema = z.object({
       /** Coding agent CLI executed inside the sandbox. */
       command: z.string().default("claude"),
       args: z.array(z.string()).default([]),
-      /** When set, overrides planModel and implementModel for every phase. */
+      /**
+       * When set, runs everything on this one model with no subagent
+       * delegation, overriding the two models below.
+       */
       model: z.string().optional(),
       /**
-       * Model for the planning phase of implementation runs and for SPIKE
-       * research (Claude agents only; Codex runs stay single-phase on `model`).
+       * Model the main agent loop runs on: it plans, reviews, and delegates
+       * implementation to subagents. Also used for SPIKE research. Claude
+       * agents only; Codex runs use `model`.
        */
-      planModel: z.string().default("claude-fable-5"),
-      /** Model that executes the plan in the implementation phase. */
+      orchestratorModel: z.string().default("claude-fable-5"),
+      /** Model for the `implementer` subagent that executes the coding tasks. */
       implementModel: z.string().default("claude-sonnet-5"),
       /** Passed to the sandboxed agent as ANTHROPIC_API_KEY. Empty = use host env. */
       anthropicApiKey: z.string().default(""),

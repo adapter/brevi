@@ -111,9 +111,9 @@ The coding agent executed inside the sandbox.
 | --- | --- | --- | --- |
 | `command` | string | `"claude"` | The agent CLI to run inside the sandbox. |
 | `args` | string[] | `[]` | Extra arguments appended after brevi's own. |
-| `model` | string | - | When set, passed as `--model` for every phase, overriding `planModel` and `implementModel`. |
-| `planModel` | string | `"claude-fable-5"` | Model for the planning phase of implementation runs and for SPIKE research. Claude agents only. |
-| `implementModel` | string | `"claude-sonnet-5"` | Model that executes the plan in the implementation phase. Claude agents only. |
+| `model` | string | - | When set, the whole run uses this one model with no subagent delegation, overriding `orchestratorModel` and `implementModel`. |
+| `orchestratorModel` | string | `"claude-fable-5"` | Model the main agent loop runs on (planning, review, delegation), also used for SPIKE research. Claude agents only. |
+| `implementModel` | string | `"claude-sonnet-5"` | Model for the `implementer` subagent that executes the coding tasks. Claude agents only. |
 | `anthropicApiKey` | string | `""` | Exported into the sandbox as `ANTHROPIC_API_KEY`. |
 | `claudeCodeOauthToken` | string | `""` | Claude Code login, exported as `CLAUDE_CODE_OAUTH_TOKEN`. |
 | `codexApiKey` | string | `""` | Exported as `OPENAI_API_KEY`. |
@@ -121,7 +121,7 @@ The coding agent executed inside the sandbox.
 
 brevi always invokes the agent as `<command> -p <prompt> --output-format stream-json --verbose --dangerously-skip-permissions`, then `--model <model>`, then `args`. Those are Claude Code's flags, so a different `command` has to accept the same shape.
 
-Claude implementation runs are two-phase: a planning agent on `planModel` explores the repo and writes a plan, then an implementation agent on `implementModel` executes it in the same sandbox. Commands containing `codex` stay single-phase and only ever use `model`.
+Claude implementation runs are a single agent session with delegation: the main loop runs on `orchestratorModel` and dispatches the coding work to an `implementer` subagent on `implementModel` (defined via Claude Code's `--agents` flag). Setting `model` disables delegation and runs everything on that one model. Commands containing `codex` always run single-model on `model`.
 
 At least one of the four credential fields must be set or every run fails at startup with `no agent credentials configured`. Populate them with the Connections rail rather than by hand; the dashboard verifies keys before saving.
 
