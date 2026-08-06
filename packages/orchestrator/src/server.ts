@@ -117,6 +117,7 @@ function statusForError(error: unknown): number {
   if (error instanceof OrchestratorError) {
     if (error.code === "not-found") return 404;
     if (error.code === "conflict") return 409;
+    if (error.code === "gone") return 410;
     return 400;
   }
   return 500;
@@ -193,6 +194,22 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
   app.post("/api/runs/:id/retry", async (c) => {
     try {
       return c.json(await orchestrator.retryRun(c.req.param("id")));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/runs/:id/resume", async (c) => {
+    try {
+      return c.json(await orchestrator.resumeRun(c.req.param("id")));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/runs/:id/release", async (c) => {
+    try {
+      return c.json(await orchestrator.releaseRun(c.req.param("id")));
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }

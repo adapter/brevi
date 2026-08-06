@@ -53,6 +53,28 @@ export class FirecrackerProvider implements SandboxProvider {
     }
   }
 
+  async rehydrate(options: CreateSandboxOptions): Promise<Sandbox> {
+    const rootDir = join(WORKSPACES_DIR, options.id);
+    const vm = await bootMicroVm({ id: options.id, rootDir, config: this.#config, reuseRootfs: true });
+    try {
+      const target: SshTarget = {
+        keyPath: SSH_KEY_PATH,
+        host: vm.network.guestIp,
+        user: "root",
+      };
+      await waitForSsh(target);
+      return new FirecrackerSandbox({ id: options.id, vm, target, env: options.env ?? {}, rootDir });
+    } catch (error) {
+      // Keep the retained rootfs on disk so a failed resume can be retried.
+      await vm.stop();
+      throw error;
+    }
+  }
+
+  async discard(id: string): Promise<void> {
+    await rm(join(WORKSPACES_DIR, id), { recursive: true, force: true });
+  }
+
   async #collectProblems(): Promise<string[]> {
     const problems: string[] = [];
 

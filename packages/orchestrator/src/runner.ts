@@ -139,6 +139,12 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       // and result events must reach the collector even though most other
       // event types are dropped from the persisted log.
       usage.observe(event);
+      // The Claude stream's init event carries the session id that `claude
+      // --resume` needs to reattach later; persisted best-effort so a slow
+      // store write never holds up log processing.
+      if (isDict(event) && event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
+        void store.update(run.id, { agentSessionId: event.session_id }).catch(() => undefined);
+      }
       if (isDict(event) && event.type === "stream_event") {
         // Subagent streams (parent_tool_use_id set) carry their own thinking
         // block boundaries; only the top-level assistant stream drives the
@@ -355,10 +361,39 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       }
     }
   } finally {
-    if (sandbox) {
-      await sandbox.destroy().catch(() => undefined);
+    // A run that finished (completed or failed) with retention enabled keeps
+    // its sandbox disk around for interactive resume: compute is released,
+    // but the disk (and thus tempRoot, which holds it) survives. Every other
+    // outcome (cancelled, waiting, no sandbox, retention disabled) tears down
+    // the sandbox and its scratch space same as before.
+    const finalStatus = store.get(run.id)?.status;
+    const retain =
+      sandbox !== undefined &&
+      config.sandbox.retentionHours > 0 &&
+      (finalStatus === "completed" || finalStatus === "failed");
+    const current = retain ? store.get(run.id) : undefined;
+    if (retain && sandbox && current) {
+      try {
+        await sandbox.release();
+        const retainedUntil = new Date(Date.now() + config.sandbox.retentionHours * 3_600_000).toISOString();
+        await store.update(run.id, { sandbox: { ...current.sandbox, retainedUntil } });
+        log("system", `sandbox retained until ${retainedUntil}; resume with \`brevi attach ${run.id}\``);
+        // Only the host-side scratch goes; the retained disk lives inside
+        // tempRoot (rootfs.ext4 for firecracker, workspace/ for process).
+        await rm(checkoutDir, { recursive: true, force: true }).catch(() => undefined);
+        await rm(pulledDir, { recursive: true, force: true }).catch(() => undefined);
+      } catch {
+        // release() or the store update failed; fall back to a full teardown
+        // rather than leave a half-retained sandbox nobody can reach.
+        await sandbox.destroy().catch(() => undefined);
+        await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+      }
+    } else {
+      if (sandbox) {
+        await sandbox.destroy().catch(() => undefined);
+      }
+      await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     }
-    await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -399,7 +434,7 @@ const FIRECRACKER_BROWSERS_PATH = "/opt/ms-playwright";
  * process provider gets a persistent host cache under ~/.brevi; the first run
  * to need a browser installs into it and every later run reuses it.
  */
-async function playwrightBrowsersPath(provider: string): Promise<string> {
+export async function playwrightBrowsersPath(provider: string): Promise<string> {
   if (provider === "firecracker") return FIRECRACKER_BROWSERS_PATH;
   const dir = join(BREVI_HOME, "cache", "ms-playwright");
   await mkdir(dir, { recursive: true });
@@ -433,7 +468,7 @@ async function buildRepoMap(checkoutDir: string, token: string): Promise<RepoMap
  * from ~/.brevi/config.json (connected via the dashboard); the orchestrator's
  * own environment is never consulted at run time.
  */
-function collectAgentEnv(config: BreviConfig): Record<string, string> {
+export function collectAgentEnv(config: BreviConfig): Record<string, string> {
   const env: Record<string, string> = {};
   const { anthropicApiKey, claudeCodeOauthToken, codexApiKey, codexAuthJson } = config.agent;
   if (anthropicApiKey) env.ANTHROPIC_API_KEY = anthropicApiKey;

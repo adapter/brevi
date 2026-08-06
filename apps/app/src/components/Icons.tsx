@@ -109,6 +109,13 @@ export const Terminal = (p: IconProps) => (
   </Svg>
 );
 
+export const Copy = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="5.5" y="5.5" width="7" height="7" rx="1.2" />
+    <path d="M10.5 3.5h-6a1 1 0 0 0-1 1v6" opacity={0.5} />
+  </Svg>
+);
+
 export const Branch = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="4.5" cy="3.6" r="1.6" />

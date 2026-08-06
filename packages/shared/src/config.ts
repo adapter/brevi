@@ -144,6 +144,12 @@ export const configSchema = z.object({
       concurrency: z.number().int().min(1).max(16).default(1),
       /** Hard wall-clock limit for a single run. */
       timeoutMinutes: z.number().int().min(1).default(60),
+      /**
+       * How many hours a finished (completed or failed) run's sandbox disk is
+       * kept for interactive resume via `brevi attach`. While retained the
+       * sandbox consumes only disk, no memory or CPU. 0 disables retention.
+       */
+      retentionHours: z.number().min(0).default(24),
     })
     .prefault({}),
   /** OAuth app settings powering the dashboard's one-click Connect flows. */

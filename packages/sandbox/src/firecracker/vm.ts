@@ -19,6 +19,8 @@ export interface MicroVmOptions {
   /** Per-sandbox directory holding the rootfs copy, API socket, and log. */
   rootDir: string;
   config: FirecrackerConfig;
+  /** Boot from an existing rootfs.ext4 in rootDir (a retained sandbox disk) instead of copying the base image. */
+  reuseRootfs?: boolean;
 }
 
 /** A running Firecracker microVM: one process, one tap device, one rootfs copy. */
@@ -63,7 +65,11 @@ export async function bootMicroVm(options: MicroVmOptions): Promise<MicroVm> {
   await mkdir(options.rootDir, { recursive: true });
 
   const rootfsPath = join(options.rootDir, "rootfs.ext4");
-  await copyRootfs(options.config.rootfs, rootfsPath);
+  if (options.reuseRootfs) {
+    if (!existsSync(rootfsPath)) throw new Error(`no retained rootfs at ${rootfsPath}`);
+  } else {
+    await copyRootfs(options.config.rootfs, rootfsPath);
+  }
 
   const network = allocateNetwork();
   let ownsTapDevice = false;

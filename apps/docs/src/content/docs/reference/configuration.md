@@ -41,7 +41,8 @@ A freshly initialised config, with every default filled in:
       "vcpus": 2,
       "memMib": 4096
     },
-    "timeoutMinutes": 60
+    "timeoutMinutes": 60,
+    "retentionHours": 24
   },
   "connect": {
     "apiBase": "https://api.brevi.dev",
@@ -173,6 +174,7 @@ At least one of the four credential fields (`anthropicApiKey`, `claudeCodeOauthT
 | `provider` | `"auto"` \| `"firecracker"` \| `"process"` | `"auto"` | See [Sandboxes](/guides/sandboxes/). |
 | `concurrency` | integer 1-16 | `1` | How many sandboxed runs execute at once. Each Firecracker microVM reserves its own memory (`firecracker.memMib`, 4 GiB by default) and one tap device from the pool created by [the network setup script](/guides/sandboxes/) (16 by default), so the host needs enough of both for all of them running simultaneously. Adjustable live from the dashboard; takes effect immediately, no restart needed. |
 | `timeoutMinutes` | integer ≥ 1 | `60` | Hard wall-clock limit applied per agent execution: the implementation pass, each of the parallel Codex reviewers, the synthesis pass, and the fix pass each get their own budget, rather than one limit for the whole run. |
+| `retentionHours` | number ≥ 0 | `24` | How many hours a finished (completed or failed) run's sandbox disk is kept for interactive resume, either from the dashboard's "Continue in CLI" button or `brevi attach <runId>`. `0` disables retention. A retained sandbox's compute is stopped; it costs disk only, no memory or CPU. |
 | `firecracker` | object | see below | Only consulted when the Firecracker provider is used. |
 
 ### `sandbox.firecracker`

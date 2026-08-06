@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { registerAttachCommand } from "./commands/attach.js";
 import { registerDefaultCommand } from "./commands/default.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerStartCommand } from "./commands/start.js";
@@ -23,6 +24,7 @@ registerInitCommand(program);
 registerUiCommand(program);
 registerStartCommand(program);
 registerStopCommand(program);
+registerAttachCommand(program);
 registerStatusCommand(program);
 registerUpdateCommand(program);
 

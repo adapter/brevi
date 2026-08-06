@@ -13,6 +13,8 @@ brevi [command]
   init      Create the brevi config and choose a sandbox provider
   start     Start the orchestrator headlessly, without opening a browser
   status    Check whether the brevi orchestrator is running
+  attach <runId>
+            Resume a run's agent conversation inside its retained sandbox
   update    Update @brevi/cli to the latest version published on npm
 
   -V, --version   Print the version
@@ -65,6 +67,16 @@ $ brevi status
 ```
 
 Exits `0` when the orchestrator answers, and `1` when it doesn't (or when there is no config).
+
+## `brevi attach <runId>`
+
+Resumes a finished run's agent conversation, right where it left off, inside its retained sandbox. This is what the dashboard's "Continue in CLI" button on the run detail page reveals.
+
+Calls `POST /api/runs/:id/resume`, which boots the sandbox back up from its retained disk if it isn't already running, and prepares an interactive `claude --resume` session with the run's full history, working directory at the run's checkout. `attach` then opens that session in your terminal: over ssh for Firecracker sandboxes, directly on the host for the process provider.
+
+On exit, `attach` calls `POST /api/runs/:id/release`, which stops the sandbox's compute again; its disk stays until `sandbox.retentionHours` runs out.
+
+Resume works for completed and failed runs and is Claude-only for now (Codex runs report "Resume unavailable", since the run has no captured session id to resume from). Fails with a clear message once the retention window has passed and the sandbox's disk was already reclaimed.
 
 ## `brevi update`
 

@@ -1,4 +1,5 @@
 import type { LimitInfo, Run, RunEvent } from "@brevi/shared";
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -9,7 +10,7 @@ import { Artifacts } from "./Artifacts";
 import { KindChip, Plate, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { CostBadge } from "./CostBadge";
-import { External, Play, Stop } from "./Icons";
+import { Check, Copy, External, Play, Stop, Terminal } from "./Icons";
 import { PhaseSpine } from "./PhaseSpine";
 import { ResultCard } from "./ResultCard";
 
@@ -33,6 +34,11 @@ export function RunDetail({
 }) {
   const live = isActive(run.status);
   const retryable = run.status === "failed" || run.status === "cancelled";
+  const finished = run.status === "completed" || run.status === "failed";
+  const retainedMs = run.sandbox.retainedUntil ? Date.parse(run.sandbox.retainedUntil) : Number.NaN;
+  const sandboxRetained = retainedMs > now;
+  const resumable = finished && sandboxRetained && Boolean(run.agentSessionId);
+  const [showAttach, setShowAttach] = useState(false);
   const artifacts = run.result?.artifacts ?? collectArtifacts(events);
   const hasResult = Boolean(run.result);
   const hasArtifacts = artifacts.length > 0;
@@ -71,6 +77,27 @@ export function RunDetail({
               {busy ? "Retrying" : "Retry run"}
             </Button>
           )}
+          {finished &&
+            (resumable ? (
+              <Button variant="outline" size="plate" onClick={() => setShowAttach((v) => !v)}>
+                <Terminal className="size-3" />
+                Continue in CLI
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="plate"
+                disabled
+                title={
+                  !sandboxRetained
+                    ? "The run's sandbox is no longer available; it was cleaned up when the retention window ended."
+                    : "No agent session was captured for this run; resume supports Claude runs only."
+                }
+              >
+                <Terminal className="size-3" />
+                {!sandboxRetained ? "Sandbox expired" : "Resume unavailable"}
+              </Button>
+            ))}
         </span>
       </div>
 
@@ -109,6 +136,10 @@ export function RunDetail({
               busy={busy}
               onResume={onRetry}
             />
+          )}
+
+          {resumable && showAttach && (
+            <AttachBanner runId={run.id} retainedUntil={run.sandbox.retainedUntil as string} now={now} />
           )}
 
           <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
@@ -192,6 +223,49 @@ function WaitingBanner({
           {limit.message}
         </p>
       )}
+    </div>
+  );
+}
+
+/** The run is finished but its sandbox is still retained; hand over the CLI command to resume it. */
+function AttachBanner({
+  runId,
+  retainedUntil,
+  now,
+}: {
+  runId: string;
+  retainedUntil: string;
+  now: number;
+}) {
+  const [copied, setCopied] = useState(false);
+  const command = `brevi attach ${runId}`;
+  const retainedMs = Date.parse(retainedUntil);
+
+  function onCopy() {
+    void navigator.clipboard.writeText(command);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <div className="rounded-[5px] border border-ink-700/70 bg-ink-800/40 p-3">
+      <span className="plate text-haze-200">Continue this run in your terminal</span>
+      <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-haze-600">
+        Boots the run's sandbox with the checkout, dependencies, and credentials still in place, and
+        resumes the agent conversation.
+      </p>
+      <div className="mt-2 flex items-center gap-2">
+        <code className="flex-1 truncate rounded-[4px] border border-ink-700 bg-ink-900 px-2.5 py-1.5 font-mono text-[11px] text-haze-200">
+          {command}
+        </code>
+        <Button variant="outline" size="plate" onClick={onCopy}>
+          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+          {copied ? "Copied" : "Copy"}
+        </Button>
+      </div>
+      <p className="mt-1.5 font-mono text-[11px] text-haze-700">
+        Sandbox available until {clock(retainedUntil)} (in {elapsed(retainedMs - now)})
+      </p>
     </div>
   );
 }
