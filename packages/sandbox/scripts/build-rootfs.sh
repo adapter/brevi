@@ -198,5 +198,5 @@ Done.
   key:    $KEY
   kernel: $IMAGES_DIR/vmlinux $([[ -f "$IMAGES_DIR/vmlinux" ]] && echo "(present)" || echo "(MISSING - see --with-kernel)")
 
-Next: sudo packages/sandbox/scripts/setup-network.sh --taps 8 --user "$owner"
+Next: sudo packages/sandbox/scripts/setup-network.sh --taps 16 --user "$owner"
 EOF

@@ -17,6 +17,8 @@ import {
   type ReposUpdateResponse,
   type Run,
   type RunEvent,
+  type SandboxSettingsUpdateRequest,
+  type SandboxSettingsUpdateResponse,
   type Ticket,
 } from "@brevi/shared";
 import { createSandboxProvider, type SandboxProvider } from "@brevi/sandbox";
@@ -67,7 +69,8 @@ interface OrchestratorEvents {
 
 /**
  * Ties everything together: polls Linear on an interval, auto-queues eligible
- * tickets, and executes runs serially (FIFO, one at a time).
+ * tickets, and executes runs FIFO with at most `sandbox.concurrency` in
+ * flight (default 1).
  */
 export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   readonly store: RunStore;
@@ -78,9 +81,10 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #provider?: SandboxProvider;
   #tickets: Ticket[] = [];
   #queue: string[] = [];
-  #drainPromise?: Promise<void>;
-  #activeRunId?: string;
-  #abort?: AbortController;
+  /** Abort controller per run currently executing in a sandbox. */
+  #aborts = new Map<string, AbortController>();
+  /** Settled when a run's execution finishes; awaited by stop(). */
+  #running = new Map<string, Promise<void>>();
   #pollTimer?: NodeJS.Timeout;
   /** One pending resume timer per run waiting on a usage-limit reset. */
   #resumeTimers = new Map<string, NodeJS.Timeout>();
@@ -485,6 +489,23 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return { config: redactConfig(this.config) };
   }
 
+  /** Apply and persist sandbox scheduling settings from the dashboard. */
+  async updateSandboxSettings(
+    request: SandboxSettingsUpdateRequest,
+  ): Promise<SandboxSettingsUpdateResponse> {
+    const { concurrency } = request;
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
+      throw new OrchestratorError("invalid", "sandbox concurrency must be an integer between 1 and 16");
+    }
+    this.config.sandbox.concurrency = concurrency;
+    await saveConfig(this.config, this.#configPath);
+    this.emit("config", redactConfig(this.config));
+    // Raising the limit can start queued runs right away; lowering it only
+    // affects new starts, already-running sandboxes finish out.
+    this.#kickWorker();
+    return { config: redactConfig(this.config) };
+  }
+
   /** Cancel a queued, waiting, or active run. Terminal runs are returned unchanged. */
   async cancelRun(runId: string): Promise<Run> {
     const run = this.store.get(runId);
@@ -501,9 +522,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         resumeAt: undefined,
       });
     }
-    if (this.#activeRunId === runId) {
-      this.#abort?.abort();
-    }
+    this.#aborts.get(runId)?.abort();
     return this.store.get(runId) ?? run;
   }
 
@@ -542,14 +561,14 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     // Waiting runs stay "waiting" on disk; the next boot reschedules them.
     for (const timer of this.#resumeTimers.values()) clearTimeout(timer);
     this.#resumeTimers.clear();
-    this.#abort?.abort();
+    for (const abort of this.#aborts.values()) abort.abort();
     // Cancel anything still waiting in the queue so it isn't left "queued" forever.
     for (const id of this.#queue.splice(0)) {
       await this.store
         .setStatus(id, "cancelled", { finishedAt: new Date().toISOString() })
         .catch(() => undefined);
     }
-    await this.#drainPromise?.catch(() => undefined);
+    await Promise.allSettled(this.#running.values());
     await this.store.flush();
   }
 
@@ -672,60 +691,67 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return run;
   }
 
+  /** Start queued runs until the concurrency limit is reached. */
   #kickWorker(): void {
-    if (this.#drainPromise) return;
-    this.#drainPromise = this.#drain().finally(() => {
-      this.#drainPromise = undefined;
-    });
-  }
-
-  async #drain(): Promise<void> {
-    while (this.#queue.length > 0 && !this.#stopped) {
+    if (this.#stopped) return;
+    const limit = Math.max(1, this.config.sandbox.concurrency);
+    while (this.#running.size < limit && this.#queue.length > 0) {
       const runId = this.#queue.shift();
       if (!runId) break;
       const run = this.store.get(runId);
       if (!run || run.status !== "queued") continue;
-      const provider = this.#provider;
-      if (!provider) break;
-      const linear = this.#linear;
-      if (!linear) {
-        // Linear was disconnected after this run was queued.
-        await this.store
-          .setStatus(runId, "failed", {
-            error: "Linear was disconnected before the run started",
-            finishedAt: new Date().toISOString(),
-          })
-          .catch(() => undefined);
-        continue;
-      }
-      this.#abort = new AbortController();
-      this.#activeRunId = runId;
-      try {
-        await executeRun({
-          runId,
-          config: this.config,
-          store: this.store,
-          provider,
-          linear,
-          signal: this.#abort.signal,
-        });
-      } catch (error) {
-        // executeRun handles its own failures; this is a last line of defense.
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[brevi] run ${runId} crashed: ${message}`);
-        const current = this.store.get(runId);
-        if (current && !isTerminal(current.status)) {
-          await this.store
-            .setStatus(runId, "failed", { error: message, finishedAt: new Date().toISOString() })
-            .catch(() => undefined);
-        }
-      } finally {
-        this.#activeRunId = undefined;
-        this.#abort = undefined;
-      }
-      // An attempt that ended on a usage limit parked the run as waiting;
-      // arm the timer that will start the next attempt.
-      if (this.store.get(runId)?.status === "waiting") this.#scheduleResume(runId);
+      const promise = this.#execute(runId).finally(() => {
+        this.#running.delete(runId);
+        this.#kickWorker();
+      });
+      this.#running.set(runId, promise);
     }
+  }
+
+  async #execute(runId: string): Promise<void> {
+    const provider = this.#provider;
+    if (!provider) {
+      // Only possible before start(); leave the run queued for the next kick.
+      this.#queue.unshift(runId);
+      return;
+    }
+    const linear = this.#linear;
+    if (!linear) {
+      // Linear was disconnected after this run was queued.
+      await this.store
+        .setStatus(runId, "failed", {
+          error: "Linear was disconnected before the run started",
+          finishedAt: new Date().toISOString(),
+        })
+        .catch(() => undefined);
+      return;
+    }
+    const abort = new AbortController();
+    this.#aborts.set(runId, abort);
+    try {
+      await executeRun({
+        runId,
+        config: this.config,
+        store: this.store,
+        provider,
+        linear,
+        signal: abort.signal,
+      });
+    } catch (error) {
+      // executeRun handles its own failures; this is a last line of defense.
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[brevi] run ${runId} crashed: ${message}`);
+      const current = this.store.get(runId);
+      if (current && !isTerminal(current.status)) {
+        await this.store
+          .setStatus(runId, "failed", { error: message, finishedAt: new Date().toISOString() })
+          .catch(() => undefined);
+      }
+    } finally {
+      this.#aborts.delete(runId);
+    }
+    // An attempt that ended on a usage limit parked the run as waiting;
+    // arm the timer that will start the next attempt.
+    if (this.store.get(runId)?.status === "waiting") this.#scheduleResume(runId);
   }
 }

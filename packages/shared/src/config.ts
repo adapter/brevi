@@ -100,6 +100,13 @@ export const configSchema = z.object({
       /** "auto" picks firecracker on Linux with KVM, process otherwise. */
       provider: z.enum(["auto", "firecracker", "process"]).default("auto"),
       firecracker: firecrackerConfigSchema.prefault({}),
+      /**
+       * How many sandboxed runs may execute at once. Each Firecracker microVM
+       * reserves its own memory (memMib, 4 GiB by default) and one tap device
+       * from the pool setup-network.sh provisions (16 by default), so keep
+       * this in line with what the host can hold.
+       */
+      concurrency: z.number().int().min(1).max(16).default(1),
       /** Hard wall-clock limit for a single run. */
       timeoutMinutes: z.number().int().min(1).default(60),
     })

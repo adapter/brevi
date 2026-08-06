@@ -117,12 +117,13 @@ root. Regenerating the key means rebuilding the image.
 ### 3. Networking
 
 ```sh
-sudo packages/sandbox/scripts/setup-network.sh --taps 8 --user "$(whoami)"
+sudo packages/sandbox/scripts/setup-network.sh --taps 16 --user "$(whoami)"
 ```
 
 Enables `ip_forward`, installs an iptables MASQUERADE rule for `172.30.0.0/16`, and
 pre-creates a pool of tap devices owned by your user so brevi can attach VMs to them
-without root. brevi never escalates privileges itself: if it has to create a tap device
+without root. One tap is consumed per concurrent run, so provision at least
+`sandbox.concurrency` of them; 16 covers the maximum. brevi never escalates privileges itself: if it has to create a tap device
 and gets `EPERM`, it fails with a message pointing back at this script. Both the rules and
 the devices are lost on reboot, so re-run after restarting. `--clean` removes them.
 
