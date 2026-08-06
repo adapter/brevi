@@ -11,7 +11,7 @@ import { buildImplementationPrompt, buildReviewFixPrompt, buildSpikePrompt, type
 import { uploadRunEvidence, type UploadedEvidence } from "./r2.js";
 import { codexReviewEnabled, runCodexReview } from "./review.js";
 import { isTerminal, type RunStore } from "./state.js";
-import { lineSink, raceWithAbort, RunCancelledError, throwIfAborted } from "./util.js";
+import { lineSink, RunCancelledError, throwIfAborted } from "./util.js";
 
 const MAX_COMMENT_BYTES = 60 * 1024;
 const BREVI_FOOTER = "🤖 Automated by [brevi]";
@@ -188,24 +188,25 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       // Labeled before the racing await so an abort still knows which
       // execution's usage to persist.
       pendingCostLabel = attempt.number > 1 ? `${label} (attempt ${attempt.number})` : label;
-      const exec = await raceWithAbort(
-        activeSandbox.exec(config.agent.command, args, {
-          cwd: activeSandbox.workspacePath,
-          env: codexHome ? { CODEX_HOME: codexHome } : undefined,
-          timeoutMs: config.sandbox.timeoutMinutes * 60_000,
-          onStdout: (chunk) => stdoutSink.write(chunk),
-          onStderr: (chunk) => stderrSink.write(chunk),
-        }),
+      // The signal terminates the agent subprocess on cancellation and exec
+      // resolves once it is gone, so awaiting it (rather than racing past it)
+      // guarantees nothing is still running when the sandbox is destroyed.
+      const exec = await activeSandbox.exec(config.agent.command, args, {
+        cwd: activeSandbox.workspacePath,
+        env: codexHome ? { CODEX_HOME: codexHome } : undefined,
+        timeoutMs: config.sandbox.timeoutMinutes * 60_000,
         signal,
-      );
-      // Recorded before the exitCode check so failed and limit-ended
-      // executions still keep whatever usage they burned.
+        onStdout: (chunk) => stdoutSink.write(chunk),
+        onStderr: (chunk) => stderrSink.write(chunk),
+      });
+      // Recorded before the exitCode check so failed, cancelled, and
+      // limit-ended executions still keep whatever usage they burned.
       await recordPendingCost();
+      throwIfAborted(signal);
       if (exec.exitCode !== 0) {
         if (detectedLimit) throw new AgentLimitError(detectedLimit);
         throw new Error(`agent exited with code ${exec.exitCode} (${label})`);
       }
-      throwIfAborted(signal);
     };
 
     // Claude runs put the strong orchestratorModel in the main loop (planning,
@@ -254,7 +255,12 @@ export async function executeRun(ctx: RunContext): Promise<void> {
           );
         }
       } else if (config.agent.codexReview) {
-        log("system", "codex review skipped: no Codex credential configured");
+        log(
+          "system",
+          claude
+            ? "codex review skipped: no Codex credential configured"
+            : "codex review skipped: the primary agent is already Codex",
+        );
       }
     }
 

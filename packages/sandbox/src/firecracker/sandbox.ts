@@ -45,8 +45,11 @@ export class FirecrackerSandbox implements Sandbox {
       command,
       args,
     );
+    // The signal kills the local ssh client; the remote command may outlive it
+    // briefly but dies with the microVM when the sandbox is destroyed.
     return runCommand("ssh", sshArgs(this.#target, remote), {
       timeoutMs: options.timeoutMs,
+      signal: options.signal,
       onStdout: options.onStdout,
       onStderr: options.onStderr,
     });

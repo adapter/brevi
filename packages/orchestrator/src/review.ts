@@ -10,12 +10,22 @@
 import type { Sandbox } from "@brevi/sandbox";
 import type { BreviConfig, CostEntry, Ticket } from "@brevi/shared";
 import { usageCollector } from "./costs.js";
+import { agentProvider } from "./limits.js";
 import { buildReviewerPrompt, buildReviewSynthesisPrompt, type ReviewAngle } from "./prompts.js";
-import { lineSink, raceWithAbort, RunCancelledError, throwIfAborted } from "./util.js";
+import { lineSink, RunCancelledError, throwIfAborted } from "./util.js";
 
-/** True when the review is on in config and a Codex credential is actually available to run it with. */
+/**
+ * True when the review is on in config, the primary agent is Claude (the
+ * review is an independent cross-check by a different provider; a Codex
+ * primary agent reviewing itself would only multiply Codex spend), and a
+ * Codex credential is actually available to run it with.
+ */
 export function codexReviewEnabled(config: BreviConfig): boolean {
-  return config.agent.codexReview && (config.agent.codexApiKey !== "" || config.agent.codexAuthJson !== "");
+  return (
+    config.agent.codexReview &&
+    agentProvider(config) === "claude" &&
+    (config.agent.codexApiKey !== "" || config.agent.codexAuthJson !== "")
+  );
 }
 
 const REVIEW_ANGLES: ReviewAngle[] = [
@@ -63,7 +73,9 @@ export interface CodexReviewOptions {
  * there was nothing to fix or the review could not complete.
  *
  * Never throws for review failures, only cancellation escapes (via
- * throwIfAborted/raceWithAbort raising RunCancelledError).
+ * throwIfAborted raising RunCancelledError). Cancellation reaches every Codex
+ * subprocess through the exec signal, and each exec is awaited after it, so by
+ * the time the error escapes no reviewer process is left running.
  */
 export async function runCodexReview(options: CodexReviewOptions): Promise<string | undefined> {
   const { sandbox, config, ticket, signal, codexHome, log, addCost } = options;
@@ -78,22 +90,24 @@ export async function runCodexReview(options: CodexReviewOptions): Promise<strin
 
     const runReviewer = async (angle: ReviewAngle): Promise<number> => {
       const prompt = buildReviewerPrompt({ angle, ticket, outFile: `${REVIEW_DIR}/${angle.key}.md` });
-      const exitCode = await runCodexExec({ sandbox, config, codexHome, prompt, addCost, costLabel: `review (${angle.key})` });
+      const exitCode = await runCodexExec({ sandbox, config, signal, codexHome, prompt, addCost, costLabel: `review (${angle.key})` });
       log("system", exitCode === 0 ? `codex reviewer (${angle.title}) finished` : `codex reviewer (${angle.title}) failed (exit ${exitCode})`);
       return exitCode;
     };
 
-    const exitCodes = await raceWithAbort(Promise.all(REVIEW_ANGLES.map(runReviewer)), signal);
+    // Cancellation propagates to each codex subprocess via the exec signal, so
+    // this await also waits for cancelled reviewers to actually terminate
+    // before the runner moves on to destroy the sandbox.
+    const exitCodes = await Promise.all(REVIEW_ANGLES.map(runReviewer));
+    throwIfAborted(signal);
     if (exitCodes.every((code) => code !== 0)) {
       log("system", "codex review failed: no reviewer completed");
       return undefined;
     }
 
     const synthesisPrompt = buildReviewSynthesisPrompt({ ticket, reviewDir: REVIEW_DIR, outFile: REVIEW_FILE });
-    const synthesisExit = await raceWithAbort(
-      runCodexExec({ sandbox, config, codexHome, prompt: synthesisPrompt, addCost, costLabel: "review (synthesis)" }),
-      signal,
-    );
+    const synthesisExit = await runCodexExec({ sandbox, config, signal, codexHome, prompt: synthesisPrompt, addCost, costLabel: "review (synthesis)" });
+    throwIfAborted(signal);
     if (synthesisExit !== 0) {
       log("system", `codex review failed: synthesis pass failed (exit ${synthesisExit})`);
       return undefined;
@@ -126,6 +140,7 @@ export async function runCodexReview(options: CodexReviewOptions): Promise<strin
 interface RunCodexExecOptions {
   sandbox: Sandbox;
   config: BreviConfig;
+  signal: AbortSignal;
   codexHome: string | undefined;
   prompt: string;
   addCost: (entry: CostEntry) => Promise<void>;
@@ -140,7 +155,7 @@ interface RunCodexExecOptions {
  * Never throws on a non-zero exit, the caller decides what that means.
  */
 async function runCodexExec(options: RunCodexExecOptions): Promise<number> {
-  const { sandbox, config, codexHome, prompt, addCost, costLabel } = options;
+  const { sandbox, config, signal, codexHome, prompt, addCost, costLabel } = options;
   const usage = usageCollector();
   // Reviewer transcripts run three at a time; interleaving their raw output
   // into the console would be unreadable, so only usage observation reads
@@ -171,6 +186,7 @@ async function runCodexExec(options: RunCodexExecOptions): Promise<number> {
       cwd: sandbox.workspacePath,
       env: codexHome ? { CODEX_HOME: codexHome } : undefined,
       timeoutMs: config.sandbox.timeoutMinutes * 60_000,
+      signal,
       onStdout: (chunk) => stdoutSink.write(chunk),
       onStderr: (chunk) => stderrSink.write(chunk),
     },

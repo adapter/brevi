@@ -6,6 +6,12 @@ export interface ExecOptions {
   env?: Record<string, string>;
   /** Kill the command after this many milliseconds. */
   timeoutMs?: number;
+  /**
+   * Terminates the command (SIGTERM, then SIGKILL after a grace period) when
+   * aborted. exec still resolves normally, with a non-zero exitCode, after the
+   * process is gone, so awaiting it is how callers wait out a cancellation.
+   */
+  signal?: AbortSignal;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
 }
