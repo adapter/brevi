@@ -1,6 +1,20 @@
 import { LinearClient, type Issue, type LinearDocument } from "@linear/sdk";
 import type { BreviConfig, LinearProject, Ticket, TicketKind } from "@brevi/shared";
 
+/** Backoff before the single retry of a failed Linear API call. */
+const RETRY_DELAY_MS = 2_000;
+
+/**
+ * After setting the review state, re-check it at these offsets and re-assert
+ * if it changed. Linear's GitHub integration links the just-opened PR (via
+ * the branch name and the "Fixes PD-x" magic word) and its "PR opened"
+ * automation moves the issue back to In Progress a second or two after we
+ * set In Review, silently clobbering the update.
+ */
+const REVIEW_REASSERT_DELAYS_MS = [5_000, 15_000];
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Linear integration: polls for eligible tickets, posts result comments, and
  * moves issues into a started state when a run begins.
@@ -54,9 +68,13 @@ export class LinearService {
     return comment?.url;
   }
 
-  /** Best-effort: move the issue to its team's first "started"-type state. */
+  /**
+   * Move the issue to its team's first "started"-type state. Throws on
+   * failure (after one retry) so callers can log the reason; the run itself
+   * should still carry on.
+   */
   async moveToStarted(issueId: string): Promise<void> {
-    try {
+    await this.#withRetry(async () => {
       const issue = await this.#client.issue(issueId);
       const team = await issue.team;
       if (!team) return;
@@ -65,28 +83,52 @@ export class LinearService {
         .filter((state) => state.type === "started")
         .sort((a, b) => a.position - b.position)[0];
       if (started) await issue.update({ stateId: started.id });
-    } catch {
-      // best-effort by design
-    }
+    });
   }
 
   /**
-   * Best-effort: after a successful run, move the issue to a review state,
-   * meaning the team's first "started"-type state whose name mentions review
-   * (e.g. "In Review"). Teams without one keep their current state.
+   * After a successful run, move the issue to a review state, meaning the
+   * team's first "started"-type state whose name mentions review (e.g. "In
+   * Review"). Teams without one keep their current state. Returns whether a
+   * review state was set; throws on failure (after one retry) so callers can
+   * log the reason.
    */
-  async moveToReview(issueId: string): Promise<void> {
-    try {
+  async moveToReview(issueId: string): Promise<boolean> {
+    const reviewStateId = await this.#withRetry(async () => {
       const issue = await this.#client.issue(issueId);
       const team = await issue.team;
-      if (!team) return;
+      if (!team) return undefined;
       const states = await team.states();
       const review = states.nodes
         .filter((state) => state.type === "started" && /review/i.test(state.name))
         .sort((a, b) => a.position - b.position)[0];
-      if (review) await issue.update({ stateId: review.id });
+      if (!review) return undefined;
+      await issue.update({ stateId: review.id });
+      return review.id;
+    });
+    if (!reviewStateId) return false;
+
+    // The GitHub integration's PR-opened automation may knock the issue back
+    // to In Progress moments after the update above; wait out the webhook and
+    // re-assert the review state if it no longer holds.
+    for (const delay of REVIEW_REASSERT_DELAYS_MS) {
+      await sleep(delay);
+      await this.#withRetry(async () => {
+        const issue = await this.#client.issue(issueId);
+        const state = await issue.state;
+        if (state?.id !== reviewStateId) await issue.update({ stateId: reviewStateId });
+      });
+    }
+    return true;
+  }
+
+  /** Run a Linear API operation, retrying once after a short backoff. */
+  async #withRetry<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
     } catch {
-      // best-effort by design
+      await sleep(RETRY_DELAY_MS);
+      return await operation();
     }
   }
 
