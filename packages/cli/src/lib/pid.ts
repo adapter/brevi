@@ -98,6 +98,21 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Polls for the pid file a freshly started server writes once it's up,
+ * resolving null when none appears within `timeoutMs`. Used by `brevi update`
+ * to confirm the restarted instance came up.
+ */
+export async function waitForPidFile(timeoutMs: number): Promise<number | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const pid = readPidFile();
+    if (pid !== null) return pid;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return null;
+}
+
 const execFileAsync = promisify(execFile);
 
 /**
