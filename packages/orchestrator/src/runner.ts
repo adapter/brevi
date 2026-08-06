@@ -59,6 +59,11 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     detectedLimit = detectLimit(line, limitProvider) ?? detectedLimit;
   };
 
+  // Assigned once the agent sinks exist; persists an in-flight execution's
+  // usage on paths that never reach the post-exec snapshot in runAgent
+  // (cancellation, a sandbox that dies mid-exec).
+  let recordPendingCost = async (): Promise<void> => {};
+
   const attempt = await store.beginAttempt(run.id);
   try {
     // ---- preparing -------------------------------------------------------
@@ -152,6 +157,20 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       log("stderr", line);
     });
 
+    let pendingCostLabel: string | undefined;
+    recordPendingCost = async () => {
+      if (!pendingCostLabel) return;
+      const label = pendingCostLabel;
+      pendingCostLabel = undefined;
+      stdoutSink.flush();
+      stderrSink.flush();
+      const provider = agentProvider(config);
+      const subscription = provider === "claude" ? !config.agent.anthropicApiKey : !config.agent.codexApiKey;
+      const entry = usage.snapshot({ label, provider, subscription });
+      if (entry) await store.addCost(run.id, entry);
+      usage = usageCollector();
+    };
+
     const activeSandbox = sandbox;
     const runAgent = async (prompt: string, model: string | undefined, label: string, extraArgs: string[] = []): Promise<void> => {
       // --include-partial-messages exists only so the stream carries thinking
@@ -161,6 +180,9 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       if (model) args.push("--model", model);
       args.push(...extraArgs, ...config.agent.args);
       log("system", `running ${config.agent.command} (${label}${model ? ` on ${model}` : ""}, timeout ${config.sandbox.timeoutMinutes}m)`);
+      // Labeled before the racing await so an abort still knows which
+      // execution's usage to persist.
+      pendingCostLabel = attempt.number > 1 ? `${label} (attempt ${attempt.number})` : label;
       const exec = await raceWithAbort(
         activeSandbox.exec(config.agent.command, args, {
           cwd: activeSandbox.workspacePath,
@@ -171,16 +193,9 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         }),
         signal,
       );
-      stdoutSink.flush();
-      stderrSink.flush();
       // Recorded before the exitCode check so failed and limit-ended
       // executions still keep whatever usage they burned.
-      const costLabel = attempt.number > 1 ? `${label} (attempt ${attempt.number})` : label;
-      const provider = agentProvider(config);
-      const subscription = provider === "claude" ? !config.agent.anthropicApiKey : !config.agent.codexApiKey;
-      const entry = usage.snapshot({ label: costLabel, provider, subscription });
-      if (entry) await store.addCost(run.id, entry);
-      usage = usageCollector();
+      await recordPendingCost();
       if (exec.exitCode !== 0) {
         if (detectedLimit) throw new AgentLimitError(detectedLimit);
         throw new Error(`agent exited with code ${exec.exitCode} (${label})`);
@@ -238,6 +253,9 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     });
     log("system", `run completed: ${result.prUrl ?? result.commentUrl ?? "done"}`);
   } catch (error) {
+    // An execution interrupted mid-flight (cancellation, a sandbox failure)
+    // never reached its snapshot in runAgent; keep the spend it burned.
+    await recordPendingCost().catch(() => undefined);
     const cancelled = signal.aborted || error instanceof RunCancelledError;
     const message = error instanceof Error ? error.message : String(error);
     const current = store.get(run.id);

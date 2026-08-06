@@ -199,9 +199,10 @@ export function usageCollector(): UsageCollector {
   function claudeSnapshot(label: string, subscription: boolean): CostEntry | undefined {
     if (!result && !fallbackSeen) return undefined;
     // The result event's usage is the authoritative roll-up (subagent usage
-    // included); when it's present the per-message fallback is ignored
-    // entirely rather than blended with it.
-    const usage = result ? (result.usage ?? { inputTokens: 0, outputTokens: 0 }) : fallback;
+    // included); when present the per-message fallback is ignored entirely
+    // rather than blended with it. A result without a recognized usage object
+    // keeps the accumulated fallback instead of zeroing the token counts.
+    const usage = result?.usage ?? fallback;
     const entry: CostEntry = {
       label,
       provider: "claude",
