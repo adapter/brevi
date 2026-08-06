@@ -87,6 +87,9 @@ export function AttachTerminal({
 
     const inputSub = term.onData((data) => send({ type: "input", data }));
     const observer = new ResizeObserver(() => {
+      // Zero size means the panel is on a hidden tab; fitting now would
+      // collapse the grid. The observer fires again when it comes back.
+      if (el.clientWidth === 0 || el.clientHeight === 0) return;
       fit.fit();
       send({ type: "resize", cols: term.cols, rows: term.rows });
     });

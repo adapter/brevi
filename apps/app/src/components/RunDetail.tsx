@@ -1,9 +1,8 @@
 import type { LimitInfo, Run, RunEvent } from "@brevi/shared";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import { clock, elapsed, relative } from "../lib/format";
 import { isActive } from "../lib/status";
 import { Artifacts } from "./Artifacts";
@@ -11,7 +10,7 @@ import { AttachTerminal } from "./AttachTerminal";
 import { KindChip, Plate, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { CostBadge } from "./CostBadge";
-import { External, Play, Stop, Terminal } from "./Icons";
+import { External, Play, Stop } from "./Icons";
 import { PhaseSpine } from "./PhaseSpine";
 import { ResultCard } from "./ResultCard";
 
@@ -39,7 +38,15 @@ export function RunDetail({
   const retainedMs = run.sandbox.retainedUntil ? Date.parse(run.sandbox.retainedUntil) : Number.NaN;
   const sandboxRetained = retainedMs > now;
   const resumable = finished && sandboxRetained && Boolean(run.agentSessionId);
-  const [showAttach, setShowAttach] = useState(false);
+  const [tab, setTab] = useState<LeftTab>(run.result ? "result" : "console");
+  const [terminalStarted, setTerminalStarted] = useState(false);
+  // Selecting a different run resets the view: result-first when one exists,
+  // the console while the run is still producing it.
+  useEffect(() => {
+    setTab(run.result ? "result" : "console");
+    setTerminalStarted(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.id]);
   const artifacts = run.result?.artifacts ?? collectArtifacts(events);
   const hasResult = Boolean(run.result);
   const hasArtifacts = artifacts.length > 0;
@@ -78,32 +85,6 @@ export function RunDetail({
               {busy ? "Retrying" : "Retry run"}
             </Button>
           )}
-          {finished &&
-            (resumable ? (
-              <Button
-                variant="outline"
-                size="plate"
-                onClick={() => setShowAttach((v) => !v)}
-                title="Resume the agent conversation in this run's sandbox, right here"
-              >
-                <Terminal className="size-3" />
-                {showAttach ? "Close terminal" : "Open terminal"}
-              </Button>
-            ) : (
-              <Button
-                variant="outline"
-                size="plate"
-                disabled
-                title={
-                  !sandboxRetained
-                    ? "The run's sandbox is no longer available; it was cleaned up when the retention window ended."
-                    : "No agent session was captured for this run; resume supports Claude runs only."
-                }
-              >
-                <Terminal className="size-3" />
-                {!sandboxRetained ? "Sandbox expired" : "Resume unavailable"}
-              </Button>
-            ))}
         </span>
       </div>
 
@@ -145,38 +126,85 @@ export function RunDetail({
           )}
 
           <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
-            <div className="flex min-w-0 flex-col gap-4">
+            <div className="min-w-0">
               <PhaseSpine run={run} events={events} now={now} />
 
-              <Console runId={run.id} events={events} live={live} />
+              <div className="mt-4 flex items-end gap-1 border-b border-ink-700/70" role="tablist">
+                <TabButton active={tab === "result"} onClick={() => setTab("result")}>
+                  Result
+                </TabButton>
+                <TabButton active={tab === "console"} onClick={() => setTab("console")}>
+                  Console
+                </TabButton>
+                {finished && (
+                  <TabButton
+                    active={tab === "terminal"}
+                    disabled={!resumable}
+                    title={
+                      resumable
+                        ? "Resume the agent conversation in this run's sandbox"
+                        : !sandboxRetained
+                          ? "The run's sandbox is no longer available; it was cleaned up when the retention window ended."
+                          : "No agent session was captured for this run; resume supports Claude runs only."
+                    }
+                    onClick={() => {
+                      setTerminalStarted(true);
+                      setTab("terminal");
+                    }}
+                  >
+                    Terminal
+                  </TabButton>
+                )}
+              </div>
 
-              {resumable && showAttach && (
-                <AttachTerminal
-                  runId={run.id}
-                  retainedUntil={run.sandbox.retainedUntil as string}
-                  now={now}
-                  onClose={() => setShowAttach(false)}
-                />
-              )}
+              {/* Inactive panels hide instead of unmounting: the console keeps
+                  its scroll position and the terminal keeps its live session. */}
+              <div className="mt-3">
+                <div className={tab === "result" ? "" : "hidden"}>
+                  <Card
+                    className={`block animate-rise border-l-2 ${
+                      hasResult && shipped ? "border-mint-500/30" : "border-ink-700"
+                    } p-4`}
+                  >
+                    <ResultCard run={run} />
+                    {!hasResult && (
+                      <div>
+                        <Plate className="text-haze-700">Result</Plate>
+                        <p className="mt-2 text-[12.5px] leading-relaxed text-haze-600">
+                          The run's outcome lands here once it finishes.
+                        </p>
+                      </div>
+                    )}
+                  </Card>
+                </div>
+                <div className={tab === "console" ? "" : "hidden"}>
+                  <Console runId={run.id} events={events} live={live} />
+                </div>
+                {terminalStarted && resumable && (
+                  <div className={tab === "terminal" ? "" : "hidden"}>
+                    <AttachTerminal
+                      runId={run.id}
+                      retainedUntil={run.sandbox.retainedUntil as string}
+                      now={now}
+                      onClose={() => {
+                        setTerminalStarted(false);
+                        setTab("console");
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
 
             <aside className="min-w-0 xl:sticky xl:top-14 xl:max-h-[calc(100svh-8.5rem)] xl:overflow-y-auto">
-              <Card
-                className={`block animate-rise border-l-2 ${
-                  hasResult && shipped ? "border-mint-500/30" : "border-ink-700"
-                } p-4`}
-              >
-                <ResultCard run={run} />
-
-                {hasResult && hasArtifacts && <Separator className="my-4" />}
-
+              <Card className="block animate-rise border-l-2 border-ink-700 p-4">
                 <Artifacts runId={run.id} artifacts={artifacts} />
 
-                {!hasResult && !hasArtifacts && (
+                {!hasArtifacts && (
                   <div>
-                    <Plate className="text-haze-700">Output</Plate>
+                    <Plate className="text-haze-700">Evidence</Plate>
                     <p className="mt-2 text-[12.5px] leading-relaxed text-haze-600">
-                      Results and evidence appear here as the run produces them.
+                      Screenshots and recordings appear here as the run captures them.
                     </p>
                   </div>
                 )}
@@ -186,6 +214,42 @@ export function RunDetail({
         </div>
       </div>
     </div>
+  );
+}
+
+type LeftTab = "result" | "console" | "terminal";
+
+function TabButton({
+  active,
+  disabled,
+  title,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  disabled?: boolean;
+  title?: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      disabled={disabled}
+      title={title}
+      onClick={onClick}
+      className={`-mb-px border-b-2 px-3 py-2 font-plate text-[11px] tracking-[0.06em] transition-colors ${
+        active
+          ? "border-ember-500 text-haze-50"
+          : disabled
+            ? "cursor-not-allowed border-transparent text-haze-800"
+            : "cursor-pointer border-transparent text-haze-600 hover:text-haze-200"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 
