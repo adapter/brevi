@@ -3,6 +3,7 @@ import {
   mkdir,
   readFile as readHostFile,
   rm,
+  stat,
   writeFile as writeHostFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -14,6 +15,7 @@ import type {
   ExecOptions,
   ExecResult,
   Sandbox,
+  SandboxConnection,
   SandboxProvider,
 } from "../types.js";
 
@@ -37,6 +39,21 @@ export class ProcessProvider implements SandboxProvider {
     const workspacePath = join(rootDir, "workspace");
     await mkdir(workspacePath, { recursive: true });
     return new ProcessSandbox(options.id, rootDir, workspacePath, options.env ?? {});
+  }
+
+  async rehydrate(options: CreateSandboxOptions): Promise<Sandbox> {
+    const rootDir = join(WORKSPACES_DIR, options.id);
+    const workspacePath = join(rootDir, "workspace");
+    try {
+      await stat(workspacePath);
+    } catch {
+      throw new Error(`no retained sandbox for ${options.id}`);
+    }
+    return new ProcessSandbox(options.id, rootDir, workspacePath, options.env ?? {});
+  }
+
+  async discard(id: string): Promise<void> {
+    await rm(join(WORKSPACES_DIR, id), { recursive: true, force: true });
   }
 }
 
@@ -84,6 +101,14 @@ class ProcessSandbox implements Sandbox {
 
   async readFile(path: string): Promise<string> {
     return readHostFile(resolveHostPath(this.workspacePath, path), "utf8");
+  }
+
+  connection(): SandboxConnection {
+    return { kind: "local", workspacePath: this.workspacePath };
+  }
+
+  async release(): Promise<void> {
+    // No-op: the workspace directory on the host IS the retained state.
   }
 
   async destroy(): Promise<void> {

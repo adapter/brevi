@@ -18,12 +18,13 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target=node --format=esm --external open && cp -R ../../apps/app/dist dist/app",
+    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target=node --format=esm --external open --external @lydell/node-pty && cp -R ../../apps/app/dist dist/app",
     "dev": "tsc --watch",
     "lint": "oxlint --max-warnings 0",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
+    "@lydell/node-pty": "^1.1.0",
     "open": "^11.0.0"
   },
   "devDependencies": {

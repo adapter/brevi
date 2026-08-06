@@ -67,4 +67,10 @@ Firecracker requires KVM, which is a Linux kernel feature. There is no macOS por
 
 ## Timeouts and cleanup
 
-`sandbox.timeoutMinutes` (60 by default) is a hard wall-clock limit on the agent command; hitting it kills the command and fails the run. Either way (success, failure, or cancellation), the sandbox is destroyed and the run's scratch directory under `~/.brevi/workspaces/` is removed. Artifacts have already been copied into `~/.brevi/runs/` by then, so they survive.
+`sandbox.timeoutMinutes` (60 by default) is a hard wall-clock limit on the agent command; hitting it kills the command and fails the run. A cancelled run's sandbox is destroyed immediately, and its scratch directory under `~/.brevi/workspaces/` is removed. A completed or failed run's sandbox is kept instead, for interactive resume, see below. Artifacts have already been copied into `~/.brevi/runs/` by then either way, so they survive.
+
+## Retention and resuming
+
+When a run completes or fails, brevi doesn't tear its sandbox down: compute stops (the microVM shuts off; nothing uses memory or CPU) but the disk is kept, checkout, installed dependencies and credentials included, for `sandbox.retentionHours` (24 by default, `0` disables retention). The expiry is stored on the run, so it survives an orchestrator restart; a timer reaps disks once their window ends, and any leftovers are also cleaned up on startup and on `brevi stop`.
+
+Resume a retained run from its detail page in the dashboard with the "Open terminal" button, which opens the session in an embedded web terminal (the sandbox boots server-side, so this works even when the orchestrator runs on another machine), or run `brevi attach <runId>` in your own terminal. Either way boots the sandbox back up from its retained disk and opens an interactive `claude --resume` session with the run's full history; detaching releases compute again while the disk keeps counting down. Resume works for completed and failed runs and is Claude-only for now. Once the window passes, the dashboard shows a disabled "Sandbox expired" button and the API answers `410`.

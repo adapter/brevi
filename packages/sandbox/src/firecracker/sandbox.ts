@@ -3,7 +3,7 @@ import { dirname } from "node:path/posix";
 import { execa } from "execa";
 import { runCommand, runOrThrow } from "../exec.js";
 import { resolveGuestPath } from "../paths.js";
-import type { ExecOptions, ExecResult, Sandbox } from "../types.js";
+import type { ExecOptions, ExecResult, Sandbox, SandboxConnection } from "../types.js";
 import { quote, remoteCommandLine, sshArgs, type SshTarget } from "./ssh.js";
 import type { MicroVm } from "./vm.js";
 
@@ -97,6 +97,15 @@ export class FirecrackerSandbox implements Sandbox {
       throw new Error(`failed to read ${target} from the sandbox: ${result.stderr.trim()}`);
     }
     return result.stdout;
+  }
+
+  connection(): SandboxConnection {
+    return { kind: "ssh", host: this.#target.host, user: this.#target.user, keyPath: this.#target.keyPath };
+  }
+
+  async release(): Promise<void> {
+    // Stop the VM only; the rootfs stays in #rootDir for a later provider.rehydrate().
+    await this.#vm.stop();
   }
 
   async destroy(): Promise<void> {

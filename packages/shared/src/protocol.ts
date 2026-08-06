@@ -16,6 +16,19 @@ import type { Run, RunEvent, Ticket } from "./types.js";
  *   POST /api/runs/:id/retry             -> Run
  *        Start a new attempt of a failed, cancelled, or waiting run. A waiting
  *        run resumes immediately instead of waiting for its limit to lift.
+ *   POST /api/runs/:id/resume            -> ResumeRunResponse
+ *        Boot the run's retained sandbox back up (when needed) and prepare an
+ *        interactive `claude --resume` session inside it; `brevi attach` calls
+ *        this and opens the returned session. 410 once the retention window
+ *        has passed and the disk was reclaimed.
+ *   POST /api/runs/:id/release           -> Run
+ *        Stop the resumed sandbox's compute again, keeping its disk until the
+ *        retention window ends. Called by `brevi attach` on detach; a no-op
+ *        when nothing is booted.
+ *   WS   /ws/runs/:id/attach             -> AttachServerMessage / AttachClientMessage
+ *        Web-terminal bridge for the dashboard: booting the retained sandbox
+ *        and releasing it on disconnect happen server-side, so this works
+ *        when the orchestrator runs on a different machine than the browser.
  *   PUT  /api/settings/credentials       -> CredentialsUpdateResponse
  *        body: CredentialsUpdateRequest. Each provided key is validated against
  *        its provider before being saved; invalid keys are rejected per-field
@@ -215,6 +228,30 @@ export interface ReposUpdateResponse {
   config: BreviConfig;
 }
 
+/** How `brevi attach` opens the interactive session a resume prepared. */
+export type RunAttachInfo =
+  | {
+      /** Process sandbox: run the script directly on the host. */
+      kind: "local";
+      /** Host path of the script that starts the resumed agent session. */
+      scriptPath: string;
+    }
+  | {
+      /** Firecracker sandbox: run the script in the guest over ssh. */
+      kind: "ssh";
+      /** Guest path of the script that starts the resumed agent session. */
+      scriptPath: string;
+      host: string;
+      user: string;
+      /** Host path of the ssh private key. */
+      keyPath: string;
+    };
+
+export interface ResumeRunResponse {
+  run: Run;
+  attach: RunAttachInfo;
+}
+
 /** Sandbox scheduling settings adjustable from the dashboard. */
 export interface SandboxSettingsUpdateRequest {
   /** How many sandboxed runs may execute at once (1 to 16). */
@@ -238,3 +275,17 @@ export type ServerMessage =
 export type ClientMessage =
   | { type: "subscribe"; runId: string }
   | { type: "unsubscribe"; runId: string };
+
+/**
+ * Messages on the interactive attach socket (`/ws/runs/:id/attach`), which
+ * bridges the dashboard's web terminal to a PTY running the run's resume
+ * session inside its retained sandbox. Terminal bytes travel as UTF-8 strings.
+ */
+export type AttachServerMessage =
+  | { type: "data"; data: string }
+  | { type: "exit"; code: number }
+  | { type: "error"; message: string };
+
+export type AttachClientMessage =
+  | { type: "input"; data: string }
+  | { type: "resize"; cols: number; rows: number };

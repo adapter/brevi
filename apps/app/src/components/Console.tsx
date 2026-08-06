@@ -28,17 +28,21 @@ export function Console({
   runId,
   events,
   live,
+  fill = false,
 }: {
   runId: string;
   events: RunEvent[];
   live: boolean;
+  /** Always expanded at full page height, with no collapse affordance. */
+  fill?: boolean;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [stick, setStick] = useState(true);
   // A finished run's console starts (and, on completion, becomes) a collapsed
-  // bar; the operator expands it on demand. Live consoles are always open.
+  // bar; the operator expands it on demand. Live and fill consoles are always
+  // open.
   const [open, setOpen] = useState(live);
-  const expanded = live || open;
+  const expanded = fill || live || open;
 
   // Reset the viewport when the operator opens a different run, and collapse
   // or reopen as the run's liveness changes.
@@ -108,31 +112,39 @@ export function Console({
   return (
     <Card
       className={`flex flex-col gap-0 overflow-hidden py-0 ${
-        expanded ? "max-h-[clamp(320px,52vh,680px)] min-h-[180px]" : ""
+        fill
+          ? "h-full min-h-[320px]"
+          : expanded
+            ? "max-h-[clamp(320px,52vh,680px)] min-h-[180px]"
+            : ""
       }`}
     >
-      {live ? (
+      {live || fill ? (
         <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
           <Plate className="text-haze-400">Console</Plate>
           <span className="font-mono text-[11px] leading-none text-haze-700">{events.length}</span>
-          <span className="inline-flex items-center gap-1.5 text-ember-500">
-            <span className="inline-block size-[6px] animate-beacon rounded-[1.5px] bg-ember-500 text-ember-500" />
-            <span className="plate">Streaming</span>
-          </span>
-          <Button
-            size="plate"
-            variant={stick ? "outline" : "default"}
-            onClick={() => {
-              setStick(true);
-              const el = scroller.current;
-              if (el) el.scrollTop = el.scrollHeight;
-            }}
-            aria-pressed={stick}
-            className={stick ? "ml-auto bg-ink-750" : "ml-auto"}
-          >
-            <Pin className="size-3" />
-            {stick ? "Following" : "Jump to latest"}
-          </Button>
+          {live && (
+            <>
+              <span className="inline-flex items-center gap-1.5 text-ember-500">
+                <span className="inline-block size-[6px] animate-beacon rounded-[1.5px] bg-ember-500 text-ember-500" />
+                <span className="plate">Streaming</span>
+              </span>
+              <Button
+                size="plate"
+                variant={stick ? "outline" : "default"}
+                onClick={() => {
+                  setStick(true);
+                  const el = scroller.current;
+                  if (el) el.scrollTop = el.scrollHeight;
+                }}
+                aria-pressed={stick}
+                className={stick ? "ml-auto bg-ink-750" : "ml-auto"}
+              >
+                <Pin className="size-3" />
+                {stick ? "Following" : "Jump to latest"}
+              </Button>
+            </>
+          )}
         </div>
       ) : (
         <button

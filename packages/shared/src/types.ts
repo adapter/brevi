@@ -150,7 +150,19 @@ export interface Run {
     provider: SandboxProviderName;
     /** Provider-specific sandbox id once booted. */
     id?: string;
+    /**
+     * When set, the sandbox's filesystem is retained until this ISO time so
+     * the agent conversation can be resumed interactively; cleared once the
+     * disk is reclaimed.
+     */
+    retainedUntil?: string;
   };
+  /**
+   * Agent session id captured from the Claude stream's init event, used to
+   * resume the conversation with `claude --resume` inside the retained
+   * sandbox. Absent for agents that don't report one (e.g. Codex).
+   */
+  agentSessionId?: string;
   createdAt: string;
   /** Time the run last entered the scheduler's FIFO queue (refreshed on requeue); queued runs start in ascending queuedAt order. */
   queuedAt?: string;

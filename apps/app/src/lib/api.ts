@@ -87,3 +87,9 @@ export function wsUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}/ws`;
 }
+
+/** Socket bridging the web terminal to a run's retained sandbox. */
+export function attachWsUrl(runId: string): string {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/ws/runs/${encodeURIComponent(runId)}/attach`;
+}

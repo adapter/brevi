@@ -20,6 +20,9 @@ There is no authentication: the server is loopback-only and anything reaching it
 | `GET` | `/api/runs/:id/artifacts/:name` | Raw artifact bytes |
 | `POST` | `/api/tickets/:id/run` | `Run`: manually queue a ticket |
 | `POST` | `/api/runs/:id/cancel` | `Run` |
+| `POST` | `/api/runs/:id/resume` | `ResumeRunResponse` |
+| `POST` | `/api/runs/:id/release` | `Run` |
+| `WS` | `/ws/runs/:id/attach` | Web-terminal bridge into the retained sandbox |
 | `PUT` | `/api/settings/credentials` | `CredentialsUpdateResponse` |
 | `POST` | `/api/connect/:provider` | `ConnectResponse` |
 | `POST` | `/api/connect/github/poll` | `DevicePollResponse` |
@@ -32,7 +35,7 @@ There is no authentication: the server is loopback-only and anything reaching it
 | `PUT` | `/api/settings/sandbox` | `SandboxSettingsUpdateResponse` |
 | `GET` | `/ws` | WebSocket upgrade |
 
-Errors are `{ "error": string }` with status `400` (invalid), `404` (not found), `409` (conflict, e.g. the ticket already has an active run), or `500`.
+Errors are `{ "error": string }` with status `400` (invalid), `404` (not found), `409` (conflict, e.g. the ticket already has an active run), `410` (gone, e.g. a resumable sandbox's retention window passed), or `500`.
 
 ### Health
 
@@ -53,7 +56,8 @@ interface Run {
   id: string;
   ticket: Ticket;
   status: RunStatus;
-  sandbox: { provider: "firecracker" | "process"; id?: string };
+  sandbox: { provider: "firecracker" | "process"; id?: string; retainedUntil?: string };
+  agentSessionId?: string;  // captured from the Claude stream, powers resume
   createdAt: string;
   queuedAt?: string;
   startedAt?: string;
@@ -70,6 +74,48 @@ interface Run {
 Cancelling a terminal run is a no-op and returns it unchanged; cancelling a queued run marks it `cancelled` immediately; cancelling the active run aborts it.
 
 `costs` has one `CostEntry` per agent execution (an attempt, or a future phase/subagent), each carrying `label`, `provider`, an optional `model`, token counts (`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`), an optional `costUsd` (absent when only tokens are known), and `estimated`, true when the cost is computed from a pricing table or modeled on a subscription login rather than reported by the provider. `costTotals` sums those entries for the whole run.
+
+### Resume and release
+
+A completed or failed run keeps its sandbox disk around for `sandbox.retentionHours` (see [Configuration](/reference/configuration/)): the checkout with the run's changes, installed dependencies, and credentials, ready to pick the conversation back up.
+
+`POST /api/runs/:id/resume` boots that sandbox back up (if it isn't already) and prepares an interactive `claude --resume <sessionId>` session inside it:
+
+```ts
+interface ResumeRunResponse {
+  run: Run;
+  attach: RunAttachInfo;
+}
+
+type RunAttachInfo =
+  | { kind: "local"; scriptPath: string }
+  | { kind: "ssh"; scriptPath: string; host: string; user: string; keyPath: string };
+```
+
+`attach` tells the caller how to open the session: `"local"` runs `scriptPath` directly on the host (process sandboxes), `"ssh"` runs it in the guest over ssh with the given `host` / `user` / `keyPath` (Firecracker sandboxes). `brevi attach <runId>` calls this endpoint and opens whichever it gets back.
+
+Errors: `404` when the run doesn't exist, `409` when the run hasn't finished yet or the configured sandbox provider has changed since it did, `410` once the retention window has passed and the disk was reclaimed, `400` when the run has no captured agent session id (resume is Claude-only for now; Codex runs don't report one).
+
+`POST /api/runs/:id/release` stops a resumed sandbox's compute again, keeping its disk until the retention window ends, and returns the updated `Run`. `brevi attach` calls it on detach; it's a no-op when nothing is booted.
+
+### Web terminal
+
+`WS /ws/runs/:id/attach` is what the run detail page's "Open terminal" button connects to: the server performs the whole resume flow itself (boot, session script, release on disconnect) and bridges the session to the socket through a PTY, so the browser needs no ssh access and the orchestrator can live on a different machine. Messages are JSON in both directions:
+
+```ts
+// server -> client
+type AttachServerMessage =
+  | { type: "data"; data: string }      // terminal output
+  | { type: "exit"; code: number }      // the session process ended
+  | { type: "error"; message: string }; // resume failed (same reasons as POST /resume)
+
+// client -> server
+type AttachClientMessage =
+  | { type: "input"; data: string }
+  | { type: "resize"; cols: number; rows: number };
+```
+
+Multiple clients (web terminals, `brevi attach` sessions) share one booted sandbox; it stops again when the last one disconnects.
 
 ### Credentials
 

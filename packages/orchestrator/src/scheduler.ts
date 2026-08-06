@@ -1,8 +1,11 @@
 import { EventEmitter } from "node:events";
+import { readdir, rm } from "node:fs/promises";
+import { join } from "node:path";
 import {
   CONFIG_PATH,
   redactConfig,
   repoConfigSchema,
+  WORKSPACES_DIR,
   type BreviConfig,
   type ConnectResponse,
   type CredentialProvider,
@@ -19,13 +22,15 @@ import {
   type RepoConfig,
   type ReposUpdateRequest,
   type ReposUpdateResponse,
+  type ResumeRunResponse,
   type Run,
+  type RunAttachInfo,
   type RunEvent,
   type SandboxSettingsUpdateRequest,
   type SandboxSettingsUpdateResponse,
   type Ticket,
 } from "@brevi/shared";
-import { createSandboxProvider, type SandboxProvider } from "@brevi/sandbox";
+import { createSandboxProvider, type Sandbox, type SandboxProvider } from "@brevi/sandbox";
 import { saveConfig } from "./config.js";
 import {
   discoverAnthropicCredential,
@@ -53,13 +58,14 @@ import { listRepos } from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
 import { LinearService } from "./linear.js";
 import { checkWrangler, startWranglerLogin } from "./r2.js";
-import { executeRun } from "./runner.js";
+import { buildResumeScript } from "./resume.js";
+import { collectAgentEnv, executeRun, playwrightBrowsersPath } from "./runner.js";
 import { ACTIVE_STATUSES, RunStore, isTerminal } from "./state.js";
 
 /** Error with an HTTP-mappable code, thrown by orchestrator commands. */
 export class OrchestratorError extends Error {
   constructor(
-    readonly code: "not-found" | "conflict" | "invalid",
+    readonly code: "not-found" | "conflict" | "invalid" | "gone",
     message: string,
   ) {
     super(message);
@@ -93,6 +99,15 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #pollTimer?: NodeJS.Timeout;
   /** One pending resume timer per run waiting on a usage-limit reset. */
   #resumeTimers = new Map<string, NodeJS.Timeout>();
+  /**
+   * Sandboxes rehydrated for interactive resume, keyed by run id; a promise so
+   * concurrent resume calls share one boot. `clients` counts the attach
+   * sessions sharing it, so a release only stops the VM when the last one
+   * detaches.
+   */
+  #attached = new Map<string, { pending: Promise<Sandbox>; clients: number }>();
+  /** One pending reap timer per run with a retained sandbox, keyed by run id. */
+  #reapTimers = new Map<string, NodeJS.Timeout>();
   #stopped = false;
   #warnedNoRepo = new Set<string>();
   #githubDevice?: GithubDeviceSession;
@@ -136,6 +151,19 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       firecracker: this.config.sandbox.firecracker,
     });
     await this.#provider.ensureAvailable();
+    // Runs left with a retained sandbox from a previous process pick their
+    // reaper back up: a window that already passed is reclaimed right away,
+    // otherwise a timer is armed for when it ends.
+    for (const run of this.store.list()) {
+      const retainedUntil = run.sandbox.retainedUntil;
+      if (!retainedUntil) continue;
+      if (Date.parse(retainedUntil) <= Date.now()) await this.#reap(run.id);
+      else this.#scheduleReap(run.id);
+    }
+    // Clears workspace dirs left behind by a crashed or interrupted run:
+    // store.init() already marked interrupted runs failed, and they carry no
+    // retainedUntil, so anything without an active or retained owner is stale.
+    await this.#sweepWorkspaces();
     // Runs left waiting on a limit reset by a previous process pick their
     // schedule back up.
     for (const run of this.store.list()) {
@@ -622,6 +650,118 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return this.#requeue(runId);
   }
 
+  /**
+   * Boot a finished run's retained sandbox back up (if it isn't already) and
+   * install a resume script inside it that reattaches the agent conversation.
+   * `brevi attach` calls this, then opens the session the returned attach
+   * info describes.
+   */
+  async resumeRun(runId: string): Promise<ResumeRunResponse> {
+    const run = this.store.get(runId);
+    if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
+    if (run.status !== "completed" && run.status !== "failed") {
+      throw new OrchestratorError("conflict", `run ${runId} is ${run.status}; only finished runs can be resumed`);
+    }
+    const retainedUntil = run.sandbox.retainedUntil;
+    if (!retainedUntil || Date.parse(retainedUntil) <= Date.now()) {
+      throw new OrchestratorError(
+        "gone",
+        "the run's sandbox is no longer available; it was cleaned up when the retention window ended",
+      );
+    }
+    if (!run.agentSessionId) {
+      throw new OrchestratorError(
+        "invalid",
+        "no agent session id was captured for this run; interactive resume supports Claude runs only",
+      );
+    }
+    const provider = this.#provider;
+    if (!provider || provider.name !== run.sandbox.provider) {
+      throw new OrchestratorError(
+        "conflict",
+        `this run's sandbox provider (${run.sandbox.provider}) is no longer the active one (${provider?.name ?? "none"}); it can't be resumed`,
+      );
+    }
+
+    let entry = this.#attached.get(runId);
+    if (!entry) {
+      const pending = (async () => {
+        const env = collectAgentEnv(this.config);
+        env.PLAYWRIGHT_BROWSERS_PATH = await playwrightBrowsersPath(provider.name);
+        return provider.rehydrate({ id: runId, env });
+      })();
+      entry = { pending, clients: 0 };
+      this.#attached.set(runId, entry);
+      pending.catch(() => this.#attached.delete(runId)); // a failed boot must not poison later resumes
+      this.store.appendEvent({
+        runId,
+        ts: new Date().toISOString(),
+        type: "log",
+        stream: "system",
+        text: "booting retained sandbox for interactive resume",
+      });
+    }
+    const sandbox = await entry.pending;
+    entry.clients += 1;
+
+    // Installed fresh on every resume call: cheap, and keeps credentials
+    // current if they changed since the sandbox was retained.
+    const env = collectAgentEnv(this.config);
+    env.PLAYWRIGHT_BROWSERS_PATH = await playwrightBrowsersPath(provider.name);
+    const connection = sandbox.connection();
+    // Kept outside the workspace/checkout in both cases, so the script never
+    // dirties the run's tree: /root for ssh, alongside (not inside) the
+    // workspace dir on the host for the process provider.
+    const scriptPath =
+      connection.kind === "ssh" ? "/root/brevi-resume.sh" : join(WORKSPACES_DIR, runId, "brevi-resume.sh");
+    await sandbox.writeFile(
+      scriptPath,
+      buildResumeScript({
+        workspacePath: sandbox.workspacePath,
+        env,
+        command: this.config.agent.command,
+        sessionId: run.agentSessionId,
+      }),
+    );
+    await sandbox.exec("chmod", ["755", scriptPath]);
+
+    const attach: RunAttachInfo =
+      connection.kind === "ssh"
+        ? { kind: "ssh", scriptPath, host: connection.host, user: connection.user, keyPath: connection.keyPath }
+        : { kind: "local", scriptPath };
+
+    return { run: this.store.get(runId) ?? run, attach };
+  }
+
+  /**
+   * Detach one resume client; stops the sandbox's compute again (keeping its
+   * disk until the retention window ends) once the last client is gone. A
+   * no-op when nothing is currently attached.
+   */
+  async releaseRun(runId: string): Promise<Run> {
+    const run = this.store.get(runId);
+    if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
+    const entry = this.#attached.get(runId);
+    if (entry) {
+      entry.clients = Math.max(0, entry.clients - 1);
+      if (entry.clients > 0) return this.store.get(runId) ?? run;
+      this.#attached.delete(runId);
+      const sandbox = await entry.pending.catch(() => undefined);
+      await sandbox?.release().catch(() => undefined);
+      const retainedUntil = this.store.get(runId)?.sandbox.retainedUntil;
+      if (retainedUntil) {
+        this.store.appendEvent({
+          runId,
+          ts: new Date().toISOString(),
+          type: "log",
+          stream: "system",
+          text: `sandbox released; disk retained until ${retainedUntil}`,
+        });
+      }
+    }
+    return this.store.get(runId) ?? run;
+  }
+
   /** Stop polling and abort any active run. Resolves once the worker settles. */
   async stop(): Promise<void> {
     this.#stopped = true;
@@ -637,6 +777,16 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         .catch(() => undefined);
     }
     await Promise.allSettled(this.#running.values());
+    for (const timer of this.#reapTimers.values()) clearTimeout(timer);
+    this.#reapTimers.clear();
+    for (const entry of this.#attached.values()) {
+      const sandbox = await entry.pending.catch(() => undefined);
+      await sandbox?.release().catch(() => undefined);
+    }
+    this.#attached.clear();
+    // Expired and untracked workspace dirs go; unexpired retained disks
+    // survive so the resume window persists across restarts.
+    await this.#sweepWorkspaces();
     await this.store.flush();
   }
 
@@ -648,6 +798,10 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   /** Put a run back in the queue for its next attempt. */
   async #requeue(runId: string): Promise<Run> {
     this.#clearResume(runId);
+    // A retry starts from a fresh checkout, so any sandbox retained from the
+    // previous attempt is stale before it's ever used again; discard it now
+    // rather than let it linger until its own retention window ends.
+    await this.#discardRetained(runId);
     const run = await this.store.setStatus(runId, "queued", {
       resumeAt: undefined,
       queuedAt: new Date().toISOString(),
@@ -661,6 +815,110 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     const timer = this.#resumeTimers.get(runId);
     if (timer) clearTimeout(timer);
     this.#resumeTimers.delete(runId);
+  }
+
+  /**
+   * Tear down a run's retained sandbox: an already-attached (rehydrated)
+   * instance is destroyed directly, otherwise the provider is asked to
+   * discard the disk. Shared by the reaper (retention window expired) and
+   * requeue (a retry makes any retained disk stale immediately).
+   */
+  async #discardRetained(runId: string): Promise<void> {
+    const timer = this.#reapTimers.get(runId);
+    if (timer) clearTimeout(timer);
+    this.#reapTimers.delete(runId);
+
+    const entry = this.#attached.get(runId);
+    if (entry) {
+      this.#attached.delete(runId);
+      const sandbox = await entry.pending.catch(() => undefined);
+      await sandbox?.destroy().catch(() => undefined);
+    } else if (this.store.get(runId)?.sandbox.retainedUntil) {
+      await this.#provider?.discard(runId).catch(() => undefined);
+    }
+
+    const run = this.store.get(runId);
+    if (run?.sandbox.retainedUntil) {
+      await this.store.update(runId, { sandbox: { ...run.sandbox, retainedUntil: undefined } });
+    }
+  }
+
+  /** Arm a timer that reclaims a retained sandbox's disk at retainedUntil (or right away when past). */
+  #scheduleReap(runId: string): void {
+    const existing = this.#reapTimers.get(runId);
+    if (existing) clearTimeout(existing);
+    this.#reapTimers.delete(runId);
+    const retainedUntil = this.store.get(runId)?.sandbox.retainedUntil;
+    if (!retainedUntil) return;
+    const dueIn = Math.max(Date.parse(retainedUntil) - Date.now(), 0);
+    // setTimeout's delay is a signed 32-bit int; clamp to its max and let
+    // #maybeReap re-check and reschedule when the real due time is further out.
+    const delay = Math.min(dueIn, 2 ** 31 - 1);
+    const timer = setTimeout(() => {
+      this.#reapTimers.delete(runId);
+      void this.#maybeReap(runId);
+    }, delay);
+    timer.unref();
+    this.#reapTimers.set(runId, timer);
+  }
+
+  /**
+   * A reap timer fired. Reclaim the disk if the window has actually passed,
+   * otherwise reschedule for the remaining time (only reachable after the
+   * 32-bit setTimeout clamp above).
+   */
+  async #maybeReap(runId: string): Promise<void> {
+    const retainedUntil = this.store.get(runId)?.sandbox.retainedUntil;
+    if (!retainedUntil) return;
+    if (Date.parse(retainedUntil) > Date.now()) {
+      this.#scheduleReap(runId);
+      return;
+    }
+    try {
+      await this.#reap(runId);
+    } catch (error) {
+      console.error(
+        `[brevi] failed to reap retained sandbox for ${runId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /** Reclaim a run's retained sandbox disk once its retention window has passed. */
+  async #reap(runId: string): Promise<void> {
+    await this.#discardRetained(runId);
+    const run = this.store.get(runId);
+    if (!run) return; // run was removed while the reap was in flight
+    this.store.appendEvent({
+      runId,
+      ts: new Date().toISOString(),
+      type: "log",
+      stream: "system",
+      text: "retained sandbox expired and was removed",
+    });
+  }
+
+  /**
+   * Run workspaces are ephemeral except while a run is active or its sandbox
+   * is retained; delete anything else left behind under WORKSPACES_DIR
+   * (a crash, an interrupted retry, a provider that never got to clean up).
+   */
+  async #sweepWorkspaces(): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(WORKSPACES_DIR, { withFileTypes: true });
+    } catch {
+      return; // nothing to sweep
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const runId = entry.name;
+      const run = this.store.get(runId);
+      const retainedUntil = run?.sandbox.retainedUntil;
+      const retained = retainedUntil !== undefined && Date.parse(retainedUntil) > Date.now();
+      if (run && (ACTIVE_STATUSES.has(run.status) || retained)) continue;
+      console.log(`[brevi] removed leftover sandbox workspace ${runId}`);
+      await rm(join(WORKSPACES_DIR, runId), { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   /** Arm a timer that fires at the run's resumeAt (or right away when past). */
@@ -824,5 +1082,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     // An attempt that ended on a usage limit parked the run as waiting;
     // arm the timer that will start the next attempt.
     if (this.store.get(runId)?.status === "waiting") this.#scheduleResume(runId);
+    // A completed/failed attempt that retained its sandbox needs a reaper
+    // armed for when the retention window ends.
+    if (this.store.get(runId)?.sandbox.retainedUntil) this.#scheduleReap(runId);
   }
 }

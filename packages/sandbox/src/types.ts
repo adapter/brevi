@@ -22,11 +22,28 @@ export interface ExecResult {
   stderr: string;
 }
 
+/** How a host process can open an interactive session inside a sandbox. */
+export type SandboxConnection =
+  | {
+      /** Commands run directly on the host (process provider). */
+      kind: "local";
+      workspacePath: string;
+    }
+  | {
+      /** Commands run in the guest over ssh (firecracker provider). */
+      kind: "ssh";
+      host: string;
+      user: string;
+      keyPath: string;
+    };
+
 /**
  * A booted, isolated execution environment holding one run's workspace.
  *
- * Lifecycle: provider.create() -> writeFiles/exec/readFile... -> destroy().
- * The workspace (a git checkout) lives at `workspacePath` inside the sandbox.
+ * Lifecycle: provider.create() -> writeFiles/exec/readFile... -> destroy(),
+ * or release() to stop compute while keeping the disk for a later
+ * provider.rehydrate(). The workspace (a git checkout) lives at
+ * `workspacePath` inside the sandbox.
  */
 export interface Sandbox {
   id: string;
@@ -40,6 +57,13 @@ export interface Sandbox {
   pullDirectory(srcPath: string, localPath: string): Promise<void>;
   writeFile(path: string, contents: string): Promise<void>;
   readFile(path: string): Promise<string>;
+  /** How to open an interactive session inside this sandbox from the host. */
+  connection(): SandboxConnection;
+  /**
+   * Stop the sandbox's compute (VM, processes) but keep its filesystem on
+   * host disk so provider.rehydrate() can boot it back up later.
+   */
+  release(): Promise<void>;
   destroy(): Promise<void>;
 }
 
@@ -55,6 +79,13 @@ export interface SandboxProvider {
   /** Throws with a human-readable reason if this provider can't run on this host. */
   ensureAvailable(): Promise<void>;
   create(options: CreateSandboxOptions): Promise<Sandbox>;
+  /**
+   * Boot a sandbox back up from the disk a previous release() retained.
+   * Throws when no retained disk exists for the id.
+   */
+  rehydrate(options: CreateSandboxOptions): Promise<Sandbox>;
+  /** Delete a retained sandbox's disk without booting it. Idempotent. */
+  discard(id: string): Promise<void>;
 }
 
 export interface ProviderSelection {
