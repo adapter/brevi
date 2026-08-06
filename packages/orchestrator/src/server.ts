@@ -13,6 +13,7 @@ import {
   type ClientMessage,
   type CredentialsUpdateRequest,
   type HealthResponse,
+  type R2SettingsUpdateRequest,
   type ReposUpdateRequest,
   type Run,
   type RunEvent,
@@ -219,6 +220,14 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
     }
   });
 
+  app.get("/api/connect/r2", async (c) => {
+    return c.json(await orchestrator.r2Status());
+  });
+
+  app.post("/api/connect/r2", async (c) => {
+    return c.json(await orchestrator.connectR2());
+  });
+
   app.post("/api/connect/:provider", async (c) => {
     const provider = c.req.param("provider");
     if (!["linear", "github", "anthropic", "codex"].includes(provider)) {
@@ -295,6 +304,26 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
     }
     try {
       return c.json(await orchestrator.updateSandboxSettings({ concurrency: body.concurrency }));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.put("/api/settings/r2", async (c) => {
+    let body: R2SettingsUpdateRequest;
+    try {
+      body = (await c.req.json()) as R2SettingsUpdateRequest;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const request: R2SettingsUpdateRequest = {};
+    if (typeof body.bucket === "string") request.bucket = body.bucket;
+    if (typeof body.publicBaseUrl === "string") request.publicBaseUrl = body.publicBaseUrl;
+    if (Object.keys(request).length === 0) {
+      return c.json({ error: "no r2 settings provided" }, 400);
+    }
+    try {
+      return c.json(await orchestrator.updateR2Settings(request));
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }

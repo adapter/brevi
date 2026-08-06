@@ -8,6 +8,7 @@ import { authenticatedRemote, createPullRequest, plainRemote } from "./github.js
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
 import { buildImplementationPrompt, buildSpikePrompt, type RepoMap } from "./prompts.js";
+import { uploadRunEvidence, type UploadedEvidence } from "./r2.js";
 import { isTerminal, type RunStore } from "./state.js";
 
 const MAX_COMMENT_BYTES = 60 * 1024;
@@ -232,10 +233,24 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       await store.addArtifact(run.id, artifact);
     }
 
+    // Best-effort: uploadRunEvidence never throws, so a wrangler hiccup or a
+    // failed upload never fails the run, it just leaves the PR without a
+    // demo section. Spikes have no PR to embed evidence in.
+    const evidence =
+      ticket.kind === "spike"
+        ? []
+        : await uploadRunEvidence({
+            runId: run.id,
+            artifactsDir: store.artifactsDir(run.id),
+            artifacts,
+            config,
+            log: (text) => log("system", text),
+          });
+
     const result =
       ticket.kind === "spike"
         ? await finalizeSpike({ ticket, pulledDir, artifacts, linear })
-        : await finalizeImplementation({ ticket, repo, branch, pulledDir, artifacts, config, linear, log });
+        : await finalizeImplementation({ ticket, repo, branch, pulledDir, artifacts, config, linear, log, evidence });
 
     try {
       if (await linear.moveToReview(ticket.id, signal)) {
@@ -585,10 +600,11 @@ interface ImplementationFinalizeOptions {
   config: BreviConfig;
   linear: LinearService;
   log: (stream: "stdout" | "stderr" | "system", text: string) => void;
+  evidence: UploadedEvidence[];
 }
 
 async function finalizeImplementation(options: ImplementationFinalizeOptions): Promise<RunResult> {
-  const { ticket, repo, branch, pulledDir, artifacts, config, linear, log } = options;
+  const { ticket, repo, branch, pulledDir, artifacts, config, linear, log, evidence } = options;
   const token = config.github.token;
 
   const summary = await readFile(join(pulledDir, ".brevi", "summary.md"), "utf8")
@@ -616,7 +632,7 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
   );
 
   const title = `${ticket.identifier}: ${ticket.title}`;
-  const body = buildPrBody({ summary, ticket });
+  const body = buildPrBody({ summary, ticket, evidence });
   log("system", "opening pull request");
   const prUrl = await createPullRequest({
     remote: repo.remote,
@@ -647,10 +663,27 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
   };
 }
 
-/** Demo evidence stays with the local run's artifacts; the PR carries only the summary. */
-function buildPrBody(options: { summary: string; ticket: Ticket }): string {
-  const { summary, ticket } = options;
-  return [summary, `Fixes ${ticket.identifier}`, `---\n${BREVI_FOOTER}`].join("\n\n");
+/**
+ * When R2 evidence upload succeeded, the PR gets a "## Demo" section between
+ * the summary and the "Fixes ..." line: images embed directly, videos with a
+ * GIF preview become a clickable thumbnail linking to the full recording,
+ * and videos without one fall back to a plain link. Otherwise (no evidence
+ * uploaded, R2 unconfigured, or a spike) demo evidence stays with the local
+ * run's artifacts and the PR carries only the summary.
+ */
+export function buildPrBody(options: { summary: string; ticket: Ticket; evidence: UploadedEvidence[] }): string {
+  const { summary, ticket, evidence } = options;
+  const parts = [summary];
+  if (evidence.length > 0) {
+    const items = evidence.map((item) => {
+      if (item.kind === "image") return `![${item.name}](${item.url})`;
+      if (item.previewUrl) return `[![${item.name}](${item.previewUrl})](${item.url})`;
+      return `[${item.name}](${item.url})`;
+    });
+    parts.push(["## Demo", ...items].join("\n\n"));
+  }
+  parts.push(`Fixes ${ticket.identifier}`, `---\n${BREVI_FOOTER}`);
+  return parts.join("\n\n");
 }
 
 /** Truncate a string to at most maxBytes of utf8 without splitting surrogates. */

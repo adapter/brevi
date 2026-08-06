@@ -26,6 +26,15 @@ import type { Run, RunEvent, Ticket } from "./types.js";
  *        dashboard should do next; "manual" means show the key input.
  *   POST /api/connect/github/poll        -> DevicePollResponse
  *        Poll an in-flight GitHub device authorization.
+ *   GET  /api/connect/r2                 -> R2Status
+ *        Live state of the Cloudflare R2 evidence connector: is wrangler
+ *        installed and logged in, and is a bucket configured.
+ *   POST /api/connect/r2                 -> R2ConnectResponse
+ *        Start `wrangler login` on the host (interactive OAuth in the
+ *        browser); the dashboard polls GET /api/connect/r2 until logged in.
+ *   PUT  /api/settings/r2                -> R2SettingsUpdateResponse
+ *        body: R2SettingsUpdateRequest. Sets the evidence bucket and its
+ *        public base URL.
  *   GET  /api/connect/linear/callback    -> HTML (OAuth redirect target; the
  *        server exchanges the code, saves the token, and broadcasts config)
  *   GET  /api/github/repos               -> GithubRepo[]   (repos visible to the
@@ -123,6 +132,60 @@ export type DevicePollResponse =
   | { status: "pending" }
   | { status: "connected"; detail: string; config: BreviConfig }
   | { status: "error"; detail: string };
+
+/**
+ * Live state of the Cloudflare R2 evidence connector. There is no stored
+ * credential: authentication lives with the host's wrangler CLI, so this is
+ * probed via `wrangler whoami` on every request.
+ */
+export interface R2Status {
+  /** The wrangler CLI is available on the host. */
+  installed: boolean;
+  /** `wrangler whoami` reports an authenticated identity. */
+  loggedIn: boolean;
+  /** Account email reported by `wrangler whoami`, when logged in. */
+  account?: string;
+  /** Configured bucket (config.r2.bucket); empty = not configured. */
+  bucket: string;
+  /** Configured public base URL (config.r2.publicBaseUrl); empty = not configured. */
+  publicBaseUrl: string;
+  /** True when installed, logged in, and bucket + public base URL are set. */
+  ready: boolean;
+}
+
+/** Result of a one-click R2 connect attempt. */
+export type R2ConnectResponse =
+  | {
+      /** Wrangler is already authenticated; nothing to do. */
+      status: "connected";
+      r2: R2Status;
+    }
+  | {
+      /**
+       * `wrangler login` was started on the host and is opening a browser.
+       * Poll GET /api/connect/r2 until loggedIn flips.
+       */
+      status: "login-started";
+      detail: string;
+    }
+  | {
+      /** No automatic path (wrangler missing); reason says what to install. */
+      status: "unavailable";
+      reason: string;
+    };
+
+/** Only provided fields are touched; empty string clears that field. */
+export interface R2SettingsUpdateRequest {
+  bucket?: string;
+  publicBaseUrl?: string;
+}
+
+export interface R2SettingsUpdateResponse {
+  /** Redacted config after the update. */
+  config: BreviConfig;
+  /** Live connector state after the update. */
+  r2: R2Status;
+}
 
 /** A Linear project visible to the connected credential, for the repo mapping picker. */
 export interface LinearProject {

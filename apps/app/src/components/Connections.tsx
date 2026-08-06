@@ -6,6 +6,7 @@ import type {
   CredentialsUpdateRequest,
   GithubRepo,
   LinearProject,
+  R2Status,
   RepoConfig,
 } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
@@ -123,6 +124,9 @@ export function ConnectionsSidebar({
                   <ProviderRow spec={spec} config={config} onConfig={onConfig} />
                 </li>
               ))}
+              <li>
+                <R2Row config={config} onConfig={onConfig} />
+              </li>
             </ul>
             <RepositoriesSection config={config} onConfig={onConfig} />
             <SandboxSection config={config} onConfig={onConfig} />
@@ -409,6 +413,287 @@ function ProviderRow({
             Get a key: {spec.keyUrlLabel}
             <External className="size-2.5" />
           </a>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** How long an in-flight `wrangler login` may stay pending before we give up polling. */
+const R2_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+const R2_POLL_INTERVAL_MS = 3000;
+
+/**
+ * Cloudflare R2 evidence connector. Unlike the credential providers above,
+ * "connected" is a live probe of the host's wrangler CLI, not a stored
+ * secret, so this is a dedicated card rather than a ProviderSpec entry.
+ */
+function R2Row({
+  config,
+  onConfig,
+}: {
+  config: BreviConfig;
+  onConfig: (config: BreviConfig) => void;
+}) {
+  const [status, setStatus] = useState<R2Status | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [connectDetail, setConnectDetail] = useState<string | null>(null);
+  const [unavailableReason, setUnavailableReason] = useState<string | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [bucket, setBucket] = useState(config.r2.bucket);
+  const [publicBaseUrl, setPublicBaseUrl] = useState(config.r2.publicBaseUrl);
+  const [settingsPending, setSettingsPending] = useState(false);
+  const [settingsResult, setSettingsResult] = useState<CredentialResult | null>(null);
+
+  const stopPolling = () => {
+    if (pollTimer.current) clearTimeout(pollTimer.current);
+    pollTimer.current = null;
+  };
+  useEffect(() => stopPolling, []);
+
+  const refresh = () => {
+    setLoadError(null);
+    return api.r2Status().then(
+      (next) => {
+        setStatus(next);
+        return next;
+      },
+      (err: unknown) => {
+        setLoadError(err instanceof Error ? err.message : "The orchestrator did not respond.");
+        return null;
+      },
+    );
+  };
+
+  // Refetch on mount, and again whenever the saved bucket/URL change under us
+  // (e.g. applied from another tab via the config broadcast).
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.r2.bucket, config.r2.publicBaseUrl]);
+
+  useEffect(() => {
+    setBucket(config.r2.bucket);
+    setPublicBaseUrl(config.r2.publicBaseUrl);
+  }, [config.r2.bucket, config.r2.publicBaseUrl]);
+
+  // Give up on a wrangler login that never completed: re-enable Connect and
+  // say why, rather than leaving the button dead until a page reload.
+  const expireLogin = () => {
+    setConnectDetail(null);
+    setLoadError("The Cloudflare login was not completed in time. Connect again to retry.");
+  };
+
+  const pollStatus = (deadline: number) => {
+    pollTimer.current = setTimeout(() => {
+      void api.r2Status().then(
+        (next) => {
+          setStatus(next);
+          if (next.loggedIn) return;
+          if (Date.now() < deadline) pollStatus(deadline);
+          else expireLogin();
+        },
+        () => {
+          if (Date.now() < deadline) pollStatus(deadline);
+          else expireLogin();
+        },
+      );
+    }, R2_POLL_INTERVAL_MS);
+  };
+
+  // The login happens in a host browser tab; once polling sees loggedIn flip
+  // we're done.
+  useEffect(() => {
+    if (status?.loggedIn) {
+      setConnectDetail(null);
+      stopPolling();
+    }
+  }, [status?.loggedIn]);
+
+  const connect = async () => {
+    setPending(true);
+    setLoadError(null);
+    setConnectDetail(null);
+    setUnavailableReason(null);
+    try {
+      const response = await api.connectR2();
+      switch (response.status) {
+        case "connected":
+          setStatus(response.r2);
+          break;
+        case "login-started":
+          setConnectDetail(response.detail);
+          pollStatus(Date.now() + R2_POLL_TIMEOUT_MS);
+          break;
+        case "unavailable":
+          setUnavailableReason(response.reason);
+          break;
+      }
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "The orchestrator did not respond.");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const saveSettings = async () => {
+    setSettingsPending(true);
+    setSettingsResult(null);
+    try {
+      const response = await api.updateR2Settings({ bucket, publicBaseUrl });
+      onConfig(response.config);
+      setStatus(response.r2);
+      setSettingsResult({ ok: true, detail: "Saved." });
+    } catch (err) {
+      setSettingsResult({
+        ok: false,
+        detail: err instanceof Error ? err.message : "The orchestrator did not respond.",
+      });
+    } finally {
+      setSettingsPending(false);
+    }
+  };
+
+  const ready = status?.ready ?? false;
+  const showConnect = status !== null && status.installed && !status.loggedIn;
+
+  return (
+    <Card size="sm" className="gap-1.5">
+      <CardHeader className="gap-0">
+        <div className="flex items-center gap-2">
+          <span
+            className={`inline-block size-[7px] shrink-0 rounded-full ${ready ? "bg-mint-500" : "bg-haze-700"}`}
+            role="img"
+            aria-label={ready ? "Connected" : "Not connected"}
+            title={ready ? "Connected" : "Not connected"}
+          />
+          <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
+            Cloudflare R2
+          </h3>
+          {showConnect && (
+            <span className="ml-auto">
+              <Button
+                size="plate"
+                onClick={() => void connect()}
+                disabled={pending || connectDetail !== null}
+                title="Authenticate wrangler with your Cloudflare account"
+              >
+                {pending ? "Connecting" : "Connect"}
+              </Button>
+            </span>
+          )}
+        </div>
+      </CardHeader>
+
+      <CardContent>
+        <p className="text-[12px] leading-relaxed text-haze-400">
+          Publishes run evidence (screenshots, recordings) to a public bucket, embedded in PR
+          descriptions.
+        </p>
+
+        {status && !status.installed && (
+          <>
+            <p className="mt-2.5 text-[12px] leading-relaxed text-haze-400">
+              The wrangler CLI was not found on this machine. Install it with{" "}
+              <code className="font-mono text-[11px] text-haze-200">npm install -g wrangler</code>,
+              then recheck.
+            </p>
+            <Button variant="outline" size="plate" onClick={() => void refresh()} className="mt-2.5">
+              Recheck
+            </Button>
+          </>
+        )}
+
+        {connectDetail && (
+          <p className="mt-2.5 flex items-center gap-1.5 text-[12px] text-haze-400">
+            <span className="inline-block size-[6px] animate-beacon rounded-full bg-ember-500" />
+            {connectDetail}
+          </p>
+        )}
+
+        {unavailableReason && (
+          <p className="mt-2.5 text-[12px] leading-relaxed text-haze-400">{unavailableReason}</p>
+        )}
+
+        {status?.loggedIn && (
+          <>
+            <p className="mt-2.5 text-[12px] leading-relaxed text-haze-400">
+              Authenticated {status.account ? `as ${status.account} ` : ""}via wrangler
+            </p>
+            <p className="mt-1 text-[11px] leading-relaxed text-haze-700">
+              Run <code className="font-mono text-[10.5px] text-haze-400">wrangler logout</code> on
+              this machine to disconnect.
+            </p>
+          </>
+        )}
+
+        <div className="mt-3 flex flex-col gap-2">
+          <Input
+            type="text"
+            value={bucket}
+            onChange={(e) => {
+              setBucket(e.target.value);
+              setSettingsResult(null);
+            }}
+            placeholder="Bucket name"
+            autoComplete="off"
+            spellCheck={false}
+            className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+          />
+          <Input
+            type="text"
+            value={publicBaseUrl}
+            onChange={(e) => {
+              setPublicBaseUrl(e.target.value);
+              setSettingsResult(null);
+            }}
+            placeholder="https://pub-xxxx.r2.dev"
+            autoComplete="off"
+            spellCheck={false}
+            className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+          />
+          <Button
+            size="plate"
+            onClick={() => void saveSettings()}
+            disabled={settingsPending}
+            className="self-start"
+          >
+            {settingsPending ? "Saving" : "Save"}
+          </Button>
+        </div>
+
+        {status?.loggedIn && (bucket.trim() === "" || publicBaseUrl.trim() === "") && (
+          <p className="mt-2.5 text-[12px] leading-relaxed text-haze-700">
+            Set a bucket and its public URL to activate uploads.
+          </p>
+        )}
+
+        <p className="mt-2 text-[11px] leading-relaxed text-haze-700">
+          The bucket must be public: enable its r2.dev development URL or attach a custom domain.
+        </p>
+
+        {settingsResult && (
+          <p
+            className={`mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed ${
+              settingsResult.ok ? "text-mint-400" : "text-rust-400"
+            }`}
+          >
+            {settingsResult.ok ? (
+              <Check className="mt-px size-3 shrink-0" />
+            ) : (
+              <Warn className="mt-px size-3 shrink-0" />
+            )}
+            {settingsResult.detail}
+          </p>
+        )}
+
+        {loadError && (
+          <p className="mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed text-rust-400">
+            <Warn className="mt-px size-3 shrink-0" />
+            {loadError}
+          </p>
         )}
       </CardContent>
     </Card>

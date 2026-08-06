@@ -15,6 +15,7 @@ A freshly initialised config, with every default filled in:
 {
   "linear": { "apiKey": "", "teamKeys": [] },
   "github": { "token": "", "prDescription": "concise" },
+  "r2": { "bucket": "", "publicBaseUrl": "" },
   "repos": {},
   "agent": {
     "command": "claude",
@@ -67,6 +68,27 @@ Keys beginning with `lin_api_` are sent as a raw `Authorization` header; anythin
 | `prDescription` | `"concise"` \| `"detailed"` | `"concise"` | How the agent is told to write the PR description: `concise` asks for a couple of sentences plus a few bullets, `detailed` allows a full write-up. |
 
 Implementation tickets will not run without it. SPIKEs will.
+
+## `r2`
+
+Optional. When both fields are set, demo evidence (screenshots and recordings) from successful implementation runs is uploaded to a public Cloudflare R2 bucket and embedded in the PR description.
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `bucket` | string | `""` | Public R2 bucket evidence is uploaded to. Empty means uploads are disabled. |
+| `publicBaseUrl` | string | `""` | Public base URL the bucket serves from: its r2.dev development URL, or a custom domain. Used verbatim to build the asset links embedded in PR descriptions. |
+
+There is no credential field here. Authentication goes through the host's `wrangler` CLI, the same one you use for any other Cloudflare work: `wrangler login` for auth, `wrangler r2 object put` for the upload. Connect and configure both fields from the dashboard's Connections rail; see [Connections](/guides/connections/).
+
+At the end of a successful run, once artifacts are collected on the host, each screenshot (`png`/`jpg`) and recording (`webm`/`mp4`/`mov`/`gif`) is uploaded to `<bucket>/<runId>/<name>`, keyed by run id so names never collide across runs. Uploads are strictly best-effort: a failure is logged in the run's console and never fails the run. If wrangler is logged out, missing, or either field is unset, runs behave exactly as before and evidence stays local.
+
+brevi never creates the bucket or manages its public access. You create the bucket yourself and either enable its r2.dev public development URL or attach a custom domain.
+
+:::caution
+The bucket is public: anyone with a URL can view any screenshot or recording brevi has uploaded, which may include your codebase or product. Leave both fields empty to keep all evidence local.
+
+brevi also never deletes uploaded objects. Clean them up yourself, or attach an R2 lifecycle rule to expire old objects automatically.
+:::
 
 ## `repos` and `defaultRepo`
 
