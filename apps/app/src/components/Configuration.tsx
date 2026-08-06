@@ -18,7 +18,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Sidebar, SidebarContent, SidebarHeader } from "@/components/ui/sidebar";
 import { api } from "../lib/api";
 import { Plate, RepoChip } from "./Bits";
 import { Check, ChevronRight, Close, External, Minus, Plus, Warn } from "./Icons";
@@ -86,39 +85,40 @@ export const PROVIDERS: ProviderSpec[] = [
 ];
 
 /**
- * Permanent right sidebar to connect Linear, GitHub, and agent credentials,
- * the mirror of the runs sidebar on the left.
+ * The Configuration page: provider connections, repository mappings, and
+ * sandbox settings. Rendered in the main content area at /config; sections
+ * are the natural home for future settings.
  */
-export function ConnectionsSidebar({
+export function ConfigurationPage({
   config,
   onConfig,
 }: {
   config: BreviConfig | null;
   onConfig: (config: BreviConfig) => void;
 }) {
-  const connectedCount = config
-    ? PROVIDERS.filter((spec) => spec.connected(config)).length
-    : 0;
+  const connectedCount = config ? PROVIDERS.filter((spec) => spec.connected(config)).length : 0;
 
   return (
-    <Sidebar
-      side="right"
-      collapsible="none"
-      className="h-svh w-[22rem] shrink-0 border-l border-sidebar-border"
-    >
-      <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
-        <div className="flex items-center gap-2">
-          <Plate className="text-haze-400">Connections</Plate>
-          <span className="font-mono text-[11px] leading-none font-normal text-haze-700">
-            {config ? `${connectedCount}/${PROVIDERS.length}` : "-"}
-          </span>
-        </div>
-      </SidebarHeader>
+    <div className="mx-auto w-full max-w-4xl px-5 py-7 md:px-8">
+      <header className="flex items-baseline gap-2.5">
+        <h2 className="font-plate text-[13px] font-semibold tracking-[0.08em] text-haze-50 uppercase">
+          Configuration
+        </h2>
+      </header>
+      <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
+        Connections and run settings for this orchestrator.
+      </p>
 
-      <SidebarContent className="min-h-0 flex-1 overflow-y-auto p-3">
-        {config ? (
-          <>
-            <ul className="flex flex-col gap-2.5">
+      {config ? (
+        <>
+          <section className="mt-6">
+            <div className="flex items-center gap-2">
+              <Plate className="text-haze-400">Connections</Plate>
+              <span className="font-mono text-[11px] leading-none text-haze-700">
+                {connectedCount}/{PROVIDERS.length}
+              </span>
+            </div>
+            <ul className="mt-3 grid grid-cols-1 gap-2.5 lg:grid-cols-2">
               {PROVIDERS.map((spec) => (
                 <li key={spec.id}>
                   <ProviderRow spec={spec} config={config} onConfig={onConfig} />
@@ -128,21 +128,21 @@ export function ConnectionsSidebar({
                 <R2Row config={config} onConfig={onConfig} />
               </li>
             </ul>
-            <RepositoriesSection config={config} onConfig={onConfig} />
-            <SandboxSection config={config} onConfig={onConfig} />
-            <p className="mt-4 border-t border-ink-700 pt-3 text-[11.5px] leading-relaxed text-haze-700">
-              Credentials are validated with the provider, then stored in{" "}
-              <code className="font-mono text-[10.5px] text-haze-400">~/.brevi/config.json</code>.
-              They never leave this machine.
-            </p>
-          </>
-        ) : (
-          <p className="mt-3 px-1 text-[12.5px] leading-relaxed text-haze-700">
-            Waiting for the orchestrator; connections can be edited once it answers.
+          </section>
+          <RepositoriesSection config={config} onConfig={onConfig} />
+          <SandboxSection config={config} onConfig={onConfig} />
+          <p className="mt-6 border-t border-ink-700 pt-3.5 text-[11.5px] leading-relaxed text-haze-700">
+            Credentials are validated with the provider, then stored in{" "}
+            <code className="font-mono text-[10.5px] text-haze-400">~/.brevi/config.json</code>.
+            They never leave this machine.
           </p>
-        )}
-      </SidebarContent>
-    </Sidebar>
+        </>
+      ) : (
+        <p className="mt-6 text-[12.5px] leading-relaxed text-haze-700">
+          Waiting for the orchestrator; configuration can be edited once it answers.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -814,7 +814,7 @@ function RepositoriesSection({
   };
 
   return (
-    <section className="mt-5 border-t border-ink-700 pt-4">
+    <section className="mt-6 border-t border-ink-700 pt-4">
       <div className="flex items-center gap-2">
         <Plate className="text-haze-400">Repositories</Plate>
         <span className="font-mono text-[11px] leading-none text-haze-700">{mapped.length}</span>
@@ -985,7 +985,7 @@ function SandboxSection({
   };
 
   return (
-    <section className="mt-5 border-t border-ink-700 pt-4">
+    <section className="mt-6 border-t border-ink-700 pt-4">
       <div className="flex items-center gap-2">
         <Plate className="text-haze-400">Sandbox</Plate>
       </div>

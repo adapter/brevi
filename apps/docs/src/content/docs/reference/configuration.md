@@ -55,7 +55,7 @@ A freshly initialised config, with every default filled in:
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `apiKey` | string | `""` | Personal API key or OAuth access token. Empty means not connected. Set it from the Connections rail. |
+| `apiKey` | string | `""` | Personal API key or OAuth access token. Empty means not connected. Set it from the dashboard's Configuration page. |
 | `teamKeys` | string[] | `[]` | Restrict polling to these team keys, e.g. `["ENG"]`. Empty polls all teams you can see. |
 
 Keys beginning with `lin_api_` are sent as a raw `Authorization` header; anything else is treated as an OAuth token and sent as `Bearer`.
@@ -78,7 +78,7 @@ Optional. When both fields are set, demo evidence (screenshots and recordings) f
 | `bucket` | string | `""` | Public R2 bucket evidence is uploaded to. Empty means uploads are disabled. |
 | `publicBaseUrl` | string | `""` | Public base URL the bucket serves from: its r2.dev development URL, or a custom domain. Used verbatim to build the asset links embedded in PR descriptions. |
 
-There is no credential field here. Authentication goes through the host's `wrangler` CLI, the same one you use for any other Cloudflare work: `wrangler login` for auth, `wrangler r2 object put` for the upload. Connect and configure both fields from the dashboard's Connections rail; see [Connections](/guides/connections/).
+There is no credential field here. Authentication goes through the host's `wrangler` CLI, the same one you use for any other Cloudflare work: `wrangler login` for auth, `wrangler r2 object put` for the upload. Connect and configure both fields from the dashboard's Configuration page; see [Connections](/guides/connections/).
 
 At the end of a successful run, once artifacts are collected on the host, each screenshot (`png`/`jpg`) and recording (`webm`/`mp4`/`mov`/`gif`) is uploaded to `<bucket>/<runId>/<name>`, keyed by run id so names never collide across runs. Uploads are strictly best-effort: a failure is logged in the run's console and never fails the run. If wrangler is logged out, missing, or either field is unset, runs behave exactly as before and evidence stays local.
 
@@ -118,7 +118,7 @@ brevi also never deletes uploaded objects. Clean them up yourself, or attach an 
 | --- | --- | --- | --- |
 | `remote` | string | required | `"owner/name"`. Validated against that shape. |
 | `defaultBranch` | string | `"main"` | Cloned from, and the base branch of the PR. |
-| `projects` | string[] | `[]` | Linear project names whose tickets run against this repo. Matched case-insensitively; editable per repo in the dashboard's Connections panel. |
+| `projects` | string[] | `[]` | Linear project names whose tickets run against this repo. Matched case-insensitively; editable per repo on the dashboard's Configuration page. |
 | `path` | string | - | Local checkout to clone from instead of the network. |
 | `devCommand` | string | - | Command that starts a dev server; makes the agent capture Playwright screenshots for the demo. |
 | `devUrl` | string | - | URL the dev server listens on, so the agent knows when it's up and what to screenshot. |
@@ -146,7 +146,7 @@ brevi always invokes the agent as `<command> -p <prompt> --output-format stream-
 
 Claude implementation runs are a single agent session with delegation: the main loop runs on `orchestratorModel` and dispatches the coding work to an `implementer` subagent on `implementModel` (defined via Claude Code's `--agents` flag). Setting `model` disables delegation and runs everything on that one model. Commands containing `codex` always run single-model on `model`.
 
-At least one of the four credential fields must be set or every run fails at startup with `no agent credentials configured`. Populate them with the Connections rail rather than by hand; the dashboard verifies keys before saving.
+At least one of the four credential fields must be set or every run fails at startup with `no agent credentials configured`. Populate them from the dashboard's Configuration page rather than by hand; the dashboard verifies keys before saving.
 
 ## `sandbox`
 

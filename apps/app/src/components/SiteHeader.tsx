@@ -8,9 +8,10 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { Connection } from "../lib/useOrchestrator";
+import type { Connection, Page } from "../lib/useOrchestrator";
 import { useTheme, type ThemePref } from "../lib/useTheme";
-import { Monitor, Moon, Sun } from "./Icons";
+import { PROVIDERS } from "./Configuration";
+import { Gear, Monitor, Moon, Sun } from "./Icons";
 
 const CONNECTION = {
   connecting: { label: "Connecting", dot: "bg-haze-600", text: "text-haze-400", live: false },
@@ -23,13 +24,19 @@ export function SiteHeader({
   conn,
   health,
   config,
+  page,
+  onOpenConfig,
 }: {
   conn: Connection;
   health: HealthResponse | null;
   config: BreviConfig | null;
+  page: Page;
+  onOpenConfig: () => void;
 }) {
   const c = CONNECTION[conn];
   const provider = health?.sandboxProvider ?? config?.sandbox.provider;
+  const disconnected = config !== null && PROVIDERS.some((spec) => !spec.connected(config));
+  const onConfig = page === "config";
 
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-center gap-2.5 border-b border-ink-700 bg-ink-900/80 px-4 backdrop-blur-md">
@@ -51,6 +58,30 @@ export function SiteHeader({
           />
           {c.label}
         </Badge>
+
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Configuration"
+          title="Configuration"
+          aria-current={onConfig ? "page" : undefined}
+          onClick={onOpenConfig}
+          className={
+            onConfig ? "bg-ink-750 text-haze-100 hover:bg-ink-750" : "text-haze-400"
+          }
+        >
+          <span className="relative inline-flex">
+            <Gear className="size-3.5" />
+            {disconnected && (
+              <span
+                className="absolute -top-1 -right-1 size-[6px] rounded-full bg-ember-400"
+                role="img"
+                aria-label="A connection needs attention"
+                title="A connection needs attention"
+              />
+            )}
+          </span>
+        </Button>
 
         <ThemeToggle />
       </div>

@@ -4,7 +4,7 @@ import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "./components/AppSidebar";
-import { ConnectionsSidebar } from "./components/Connections";
+import { ConfigurationPage } from "./components/Configuration";
 import { Overview } from "./components/Overview";
 import { RunDetail } from "./components/RunDetail";
 import { SiteHeader } from "./components/SiteHeader";
@@ -27,7 +27,9 @@ export default function App() {
     selectedRun,
     selectedRunId,
     loaded,
+    page,
     openRun,
+    openConfig,
     runTicket,
     cancelRun,
     retryRun,
@@ -72,7 +74,7 @@ export default function App() {
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
-        <SiteHeader conn={conn} health={health} config={config} />
+        <SiteHeader conn={conn} health={health} config={config} page={page} onOpenConfig={openConfig} />
 
         {notice && (
           <Alert
@@ -96,7 +98,9 @@ export default function App() {
         )}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {selectedRun ? (
+          {page === "config" ? (
+            <ConfigurationPage config={config} onConfig={applyConfig} />
+          ) : selectedRun ? (
             <RunDetail
               run={selectedRun}
               repoName={repoDisplay(config, selectedRun.ticket.repo)}
@@ -115,8 +119,6 @@ export default function App() {
           )}
         </div>
       </SidebarInset>
-
-      <ConnectionsSidebar config={config} onConfig={applyConfig} />
     </SidebarProvider>
   );
 }
