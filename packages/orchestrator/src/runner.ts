@@ -1,12 +1,12 @@
 import { copyFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { execa, type Result as ExecaResult } from "execa";
-import { WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type LimitInfo, type RepoConfig, type RunResult, type Ticket } from "@brevi/shared";
+import { BREVI_HOME, WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type LimitInfo, type RepoConfig, type RunResult, type Ticket } from "@brevi/shared";
 import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
 import { authenticatedRemote, createPullRequest, plainRemote } from "./github.js";
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
-import { buildImplementationPrompt, buildSpikePrompt } from "./prompts.js";
+import { buildImplementationPrompt, buildSpikePrompt, type RepoMap } from "./prompts.js";
 import { isTerminal, type RunStore } from "./state.js";
 
 const MAX_COMMENT_BYTES = 60 * 1024;
@@ -78,6 +78,10 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       throw new Error(`ticket ${ticket.identifier} has no resolved repo mapping`);
     }
     const agentEnv = collectAgentEnv(config);
+    // Chromium for playwright demos lives in a shared location so runs never
+    // re-download it: baked into the Firecracker rootfs, a persistent host
+    // cache for the process provider.
+    agentEnv.PLAYWRIGHT_BROWSERS_PATH = await playwrightBrowsersPath(provider.name);
     const branch = branchNameFor(ticket);
 
     await mkdir(tempRoot, { recursive: true });
@@ -89,6 +93,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     await git(["checkout", "-B", branch], checkoutDir, config.github.token);
     await git(["config", "user.name", "brevi"], checkoutDir, config.github.token);
     await git(["config", "user.email", "brevi@localhost"], checkoutDir, config.github.token);
+    const repoMap = await buildRepoMap(checkoutDir, config.github.token);
     throwIfAborted(signal);
 
     log("system", `creating ${provider.name} sandbox`);
@@ -113,17 +118,6 @@ export async function executeRun(ctx: RunContext): Promise<void> {
 
     // ---- running ---------------------------------------------------------
     await store.setStatus(run.id, "running");
-    const prompt =
-      ticket.kind === "spike"
-        ? buildSpikePrompt(ticket)
-        : buildImplementationPrompt(ticket, repo, config.github.prDescription);
-    // --include-partial-messages exists only so the stream carries thinking
-    // block boundaries; the token-level deltas are reduced to thinking events
-    // below and never persisted.
-    const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--dangerously-skip-permissions"];
-    if (config.agent.model) args.push("--model", config.agent.model);
-    args.push(...config.agent.args);
-
     const trackThinking = thinkingTracker((phase, durationMs) => {
       store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "thinking", phase, durationMs });
     });
@@ -148,22 +142,51 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       log("stderr", line);
     });
 
-    log("system", `running ${config.agent.command} (timeout ${config.sandbox.timeoutMinutes}m)`);
-    const exec = await raceWithAbort(
-      sandbox.exec(config.agent.command, args, {
-        cwd: sandbox.workspacePath,
-        env: codexHome ? { CODEX_HOME: codexHome } : undefined,
-        timeoutMs: config.sandbox.timeoutMinutes * 60_000,
-        onStdout: (chunk) => stdoutSink.write(chunk),
-        onStderr: (chunk) => stderrSink.write(chunk),
-      }),
-      signal,
-    );
-    stdoutSink.flush();
-    stderrSink.flush();
-    if (exec.exitCode !== 0) {
-      if (detectedLimit) throw new AgentLimitError(detectedLimit);
-      throw new Error(`agent exited with code ${exec.exitCode}`);
+    const activeSandbox = sandbox;
+    const runAgent = async (prompt: string, model: string | undefined, label: string, extraArgs: string[] = []): Promise<void> => {
+      // --include-partial-messages exists only so the stream carries thinking
+      // block boundaries; the token-level deltas are reduced to thinking events
+      // above and never persisted.
+      const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--dangerously-skip-permissions"];
+      if (model) args.push("--model", model);
+      args.push(...extraArgs, ...config.agent.args);
+      log("system", `running ${config.agent.command} (${label}${model ? ` on ${model}` : ""}, timeout ${config.sandbox.timeoutMinutes}m)`);
+      const exec = await raceWithAbort(
+        activeSandbox.exec(config.agent.command, args, {
+          cwd: activeSandbox.workspacePath,
+          env: codexHome ? { CODEX_HOME: codexHome } : undefined,
+          timeoutMs: config.sandbox.timeoutMinutes * 60_000,
+          onStdout: (chunk) => stdoutSink.write(chunk),
+          onStderr: (chunk) => stderrSink.write(chunk),
+        }),
+        signal,
+      );
+      stdoutSink.flush();
+      stderrSink.flush();
+      if (exec.exitCode !== 0) {
+        if (detectedLimit) throw new AgentLimitError(detectedLimit);
+        throw new Error(`agent exited with code ${exec.exitCode} (${label})`);
+      }
+      throwIfAborted(signal);
+    };
+
+    // Claude runs put the strong orchestratorModel in the main loop (planning,
+    // review) and route the coding labor to an `implementer` subagent on the
+    // cheaper implementModel. An explicit `model` opts out of delegation, and
+    // Codex agents keep their plain single-model flow.
+    const claude = agentProvider(config) === "claude";
+    const mainModel = config.agent.model || (claude ? config.agent.orchestratorModel : undefined);
+    const delegate = claude && !config.agent.model && ticket.kind !== "spike";
+
+    if (ticket.kind === "spike") {
+      await runAgent(buildSpikePrompt(ticket, repoMap), mainModel, "research");
+    } else {
+      await runAgent(
+        buildImplementationPrompt(ticket, repo, config.github.prDescription, { repoMap, delegate }),
+        mainModel,
+        "implementation",
+        delegate ? ["--agents", JSON.stringify(implementerAgent(config.agent.implementModel))] : [],
+      );
     }
 
     // ---- finalizing ------------------------------------------------------
@@ -253,6 +276,61 @@ function limitLabel(limit: LimitInfo): string {
 
 function branchNameFor(ticket: Ticket): string {
   return `brevi/${ticket.identifier.toLowerCase()}`;
+}
+
+/**
+ * Definition for the Claude Code `--agents` flag: the subagent the
+ * orchestrating model dispatches implementation tasks to.
+ */
+function implementerAgent(model: string): Record<string, { description: string; prompt: string; model: string }> {
+  return {
+    implementer: {
+      description: "Implements one well-scoped coding task in this checkout exactly as instructed",
+      model,
+      prompt: [
+        "You are an implementation agent working in a git checkout. Execute exactly the task you were given: follow the repository's existing conventions, run the verification you were asked to run, and report concisely what you changed and what you observed.",
+        "Leave all changes uncommitted; never run `git commit` or `git push`.",
+        "Never use em dashes (\u2014) or spaced hyphens standing in for them in anything you write; use a comma, colon, or parentheses instead.",
+      ].join("\n"),
+    },
+  };
+}
+
+/** Where the Firecracker rootfs bakes Playwright browsers (see build-rootfs.sh). */
+const FIRECRACKER_BROWSERS_PATH = "/opt/ms-playwright";
+
+/**
+ * Shared Playwright browser location, so runs never re-download Chromium. The
+ * process provider gets a persistent host cache under ~/.brevi; the first run
+ * to need a browser installs into it and every later run reuses it.
+ */
+async function playwrightBrowsersPath(provider: string): Promise<string> {
+  if (provider === "firecracker") return FIRECRACKER_BROWSERS_PATH;
+  const dir = join(BREVI_HOME, "cache", "ms-playwright");
+  await mkdir(dir, { recursive: true });
+  return dir;
+}
+
+const REPO_MAP_MAX_FILES = 400;
+
+/**
+ * Cheap orientation injected into every prompt: the tracked file list plus
+ * recent history, generated from the checkout so it is never stale. Failure
+ * only costs the agent some exploration turns, so it never fails the run.
+ */
+async function buildRepoMap(checkoutDir: string, token: string): Promise<RepoMap | undefined> {
+  try {
+    const files = await git(["ls-files"], checkoutDir, token);
+    const log = await git(["log", "--oneline", "-n", "10"], checkoutDir, token);
+    const lines = String(files.stdout).split("\n").filter(Boolean);
+    const tree = lines.slice(0, REPO_MAP_MAX_FILES);
+    if (lines.length > REPO_MAP_MAX_FILES) {
+      tree.push(`... plus ${lines.length - REPO_MAP_MAX_FILES} more files (run \`git ls-files\` for the rest)`);
+    }
+    return { tree: tree.join("\n"), commits: String(log.stdout).trim() };
+  } catch {
+    return undefined;
+  }
 }
 
 /**

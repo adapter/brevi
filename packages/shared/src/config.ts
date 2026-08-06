@@ -23,6 +23,13 @@ export const repoConfigSchema = z.object({
   devCommand: z.string().optional(),
   /** URL the dev server listens on once up, used for demo capture. */
   devUrl: z.string().optional(),
+  /**
+   * How much demo evidence implementation runs must capture. "always" is the
+   * full dev-server/screenshot flow, "auto" lets the agent downgrade to cheap
+   * evidence (test output, a CLI transcript) for docs-only or test-only
+   * changes, "never" skips the demo requirement entirely.
+   */
+  demo: z.enum(["always", "auto", "never"]).default("auto"),
 });
 
 export const firecrackerConfigSchema = z.object({
@@ -62,7 +69,19 @@ export const configSchema = z.object({
       /** Coding agent CLI executed inside the sandbox. */
       command: z.string().default("claude"),
       args: z.array(z.string()).default([]),
+      /**
+       * When set, runs everything on this one model with no subagent
+       * delegation, overriding the two models below.
+       */
       model: z.string().optional(),
+      /**
+       * Model the main agent loop runs on: it plans, reviews, and delegates
+       * implementation to subagents. Also used for SPIKE research. Claude
+       * agents only; Codex runs use `model`.
+       */
+      orchestratorModel: z.string().default("claude-fable-5"),
+      /** Model for the `implementer` subagent that executes the coding tasks. */
+      implementModel: z.string().default("claude-sonnet-5"),
       /** Passed to the sandboxed agent as ANTHROPIC_API_KEY. Empty = use host env. */
       anthropicApiKey: z.string().default(""),
       /** Claude Code OAuth token (host-discovered), passed as CLAUDE_CODE_OAUTH_TOKEN. */
