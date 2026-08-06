@@ -104,7 +104,11 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       await sandbox.exec("mkdir", ["-p", codexHome]);
       await sandbox.writeFile(`${codexHome}/auth.json`, config.agent.codexAuthJson);
     }
-    await linear.moveToStarted(ticket.id);
+    try {
+      await linear.moveToStarted(ticket.id);
+    } catch (error) {
+      log("system", `failed to move ${ticket.identifier} to started: ${error instanceof Error ? error.message : String(error)}`);
+    }
     throwIfAborted(signal);
 
     // ---- running ---------------------------------------------------------
@@ -177,7 +181,15 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         ? await finalizeSpike({ ticket, pulledDir, artifacts, linear })
         : await finalizeImplementation({ ticket, repo, branch, pulledDir, artifacts, config, linear, log });
 
-    await linear.moveToReview(ticket.id);
+    try {
+      if (await linear.moveToReview(ticket.id, signal)) {
+        log("system", `moved ${ticket.identifier} to review`);
+      }
+    } catch (error) {
+      if (signal.aborted) throw error;
+      log("system", `failed to move ${ticket.identifier} to review: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    throwIfAborted(signal);
     await store.endAttempt(run.id, { outcome: "completed" });
     await store.setStatus(run.id, "completed", { finishedAt: new Date().toISOString(), result });
     log("system", `run completed: ${result.prUrl ?? result.commentUrl ?? "done"}`);
