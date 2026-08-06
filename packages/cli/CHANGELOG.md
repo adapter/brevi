@@ -1,5 +1,33 @@
 # @brevi/cli
 
+## 0.4.0
+
+### Minor Changes
+
+- 33aba10: Runs interrupted by a Claude or Codex usage limit now park as waiting and restart on their own once the limit lifts, with Retry buttons in the dashboard.
+- 7ebe58e: Implementation runs now drive the Claude orchestrator at high reasoning effort and add an adversarial Codex review with a fix pass before the PR opens.
+- ad68279: Runs start faster and cheaper: an orchestrator model delegates coding to a subagent, prompts carry a repo map, and Chromium is provisioned once per host.
+- f5f6997: Runs can now upload demo evidence to a public Cloudflare R2 bucket via wrangler and embed screenshots and clickable GIF video previews in PR descriptions.
+- 7a2b1ae: Connecting Cloudflare R2 is now one click: after the wrangler login, brevi creates the evidence bucket and enables its public r2.dev URL automatically.
+- a25759c: Removed the SPIKE ticket kind: every brevi-labeled ticket now runs the full implementation pipeline to a pull request; trigger.spikeMarker is gone.
+- d832345: Finished runs keep their sandbox disk for 24 hours; an embedded web terminal on the run page and brevi attach resume the agent conversation in it.
+- 645a0ed: Runs now record total LLM cost and token usage across providers and attempts, with a per-execution breakdown shown on run cards and the run detail view.
+- 8d35dc9: New `sandbox.concurrency` setting caps how many sandboxed runs execute at once, adjustable live from Mission Control's Sandbox page without a restart.
+- 31f45eb: `brevi update` now restarts a running instance after installing: the old process is stopped and the new version relaunched, no manual restart needed.
+
+### Patch Changes
+
+- 6668fa6: Mission Control drops the run-count stats and the npx command hint from the header and sidebar chrome, keeping the badges and the theme toggle.
+- a350c3c: The Configuration page is now split into Connectors, Repositories, and Sandbox subpages, each with its own URL and reachable from a submenu.
+- 1a6eeb1: Mission Control replaces the permanent Connections sidebar with a Configuration page at /config, opened from a gear button that flags disconnected providers.
+- 9d561c4: The run console no longer leaks status or token-progress noise, shows one deduped thinking line per spell, and counts up live while the agent thinks.
+- d406d7c: The GitHub connect flow now requests the workflow scope, so runs can push branches that touch (or lag behind) files under .github/workflows.
+- b154e1c: Mission Control: queued runs show no timer, run detail splits into console and a sticky output card, costs become badges, theme toggle moves to the sidebar.
+- 31713ed: Tickets now reliably end up In Review after a successful run: brevi re-asserts the state when Linear's GitHub automation reverts it, and logs every move.
+- 3d44a45: The run detail header now shows the repo and ticket state badges beside the Cancel/Retry controls, replacing the started-ago text and the title row badges.
+- 3dd2f40: The runs sidebar now shows two sections: active runs on top with queued runs in scheduler pickup order below, and finished runs separated underneath.
+- 83b4b32: Fixes the console noise filter to match how Claude Code really emits status and thinking_tokens (system-event subtypes), so they stay out of the log.
+
 ## 0.3.0
 
 ### Minor Changes
