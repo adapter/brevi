@@ -112,19 +112,6 @@ export function RunDetail({
               </Badge>
             ))}
           </div>
-          {/* The key figures the phase spine used to carry; the phase-by-phase
-              timeline itself is gone. */}
-          <div className="mt-2.5 flex flex-wrap items-center gap-x-5 gap-y-1.5">
-            <Field label="Elapsed">
-              {run.finishedAt && run.startedAt
-                ? duration(run.startedAt, Date.parse(run.finishedAt))
-                : duration(run.startedAt ?? run.createdAt, now)}
-            </Field>
-            {run.attempts.length > 1 && <Field label="Attempts">{run.attempts.length}</Field>}
-            <Field label="Sandbox">{run.sandbox.provider}</Field>
-            {run.sandbox.id && <Field label="VM">{run.sandbox.id}</Field>}
-            <Field label="Run">{run.id}</Field>
-          </div>
         </div>
 
           {run.status === "waiting" && (
@@ -218,8 +205,25 @@ export function RunDetail({
                 )}
               </div>
 
-            <aside className="min-h-0 min-w-0 xl:col-start-2 xl:row-start-2">
-              <Card className="flex h-full min-h-[280px] flex-col gap-0 overflow-hidden py-0">
+            <aside className="flex min-h-0 min-w-0 flex-col gap-3 xl:col-start-2 xl:row-start-1 xl:row-span-2">
+              {/* The key figures the phase spine used to carry. */}
+              <Card className="block shrink-0 px-4 py-3.5">
+                <div className="grid grid-cols-2 gap-x-5 gap-y-3">
+                  <Field label="Elapsed">
+                    {run.finishedAt && run.startedAt
+                      ? duration(run.startedAt, Date.parse(run.finishedAt))
+                      : duration(run.startedAt ?? run.createdAt, now)}
+                  </Field>
+                  {run.attempts.length > 1 && (
+                    <Field label="Attempts">{run.attempts.length}</Field>
+                  )}
+                  <Field label="Sandbox">{run.sandbox.provider}</Field>
+                  {run.sandbox.id && <Field label="VM">{run.sandbox.id}</Field>}
+                  <Field label="Run">{run.id}</Field>
+                </div>
+              </Card>
+
+              <Card className="flex min-h-[280px] flex-1 flex-col gap-0 overflow-hidden py-0">
                 <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
                   <Plate className="text-haze-400">Evidence</Plate>
                   {hasArtifacts && (
@@ -248,10 +252,12 @@ type LeftTab = "result" | "console" | "terminal";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <span className="flex min-w-0 items-baseline gap-2">
-      <span className="plate shrink-0 text-haze-700">{label}</span>
-      <span className="truncate font-mono text-[11px] text-haze-300">{children}</span>
-    </span>
+    <div className="min-w-0">
+      <span className="plate text-haze-700">{label}</span>
+      <p className="mt-1 truncate font-mono text-[11px] text-haze-300" title={String(children)}>
+        {children}
+      </p>
+    </div>
   );
 }
 
