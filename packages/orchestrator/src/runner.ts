@@ -95,16 +95,26 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       ticket.kind === "spike"
         ? buildSpikePrompt(ticket)
         : buildImplementationPrompt(ticket, repo, config.github.prDescription);
-    const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"];
+    // --include-partial-messages exists only so the stream carries thinking
+    // block boundaries; the token-level deltas are reduced to thinking events
+    // below and never persisted.
+    const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--dangerously-skip-permissions"];
     if (config.agent.model) args.push("--model", config.agent.model);
     args.push(...config.agent.args);
 
+    const trackThinking = thinkingTracker((phase, durationMs) => {
+      store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "thinking", phase, durationMs });
+    });
     const stdoutSink = lineSink((line) => {
       let event: unknown;
       try {
         event = JSON.parse(line);
       } catch {
         log("stdout", line);
+        return;
+      }
+      if (isDict(event) && event.type === "stream_event") {
+        trackThinking(event.event);
         return;
       }
       store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "agent", event });
@@ -214,6 +224,40 @@ async function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promi
     // If we lost the race, don't let the abandoned promise become an unhandled rejection.
     promise.catch(() => undefined);
   }
+}
+
+const isDict = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+/**
+ * Reduces the agent's raw partial-message stream events to thinking-block
+ * boundaries: "started" when a (redacted) thinking block opens, "finished"
+ * with the elapsed time when it closes. Everything else is ignored.
+ */
+function thinkingTracker(
+  emit: (phase: "started" | "finished", durationMs?: number) => void,
+): (rawEvent: unknown) => void {
+  const startedAt = new Map<number, number>();
+  return (rawEvent: unknown): void => {
+    if (!isDict(rawEvent)) return;
+    const index = typeof rawEvent.index === "number" ? rawEvent.index : undefined;
+    if (rawEvent.type === "message_start") {
+      startedAt.clear();
+    } else if (rawEvent.type === "content_block_start" && index !== undefined) {
+      const block = rawEvent.content_block;
+      const kind = isDict(block) ? block.type : undefined;
+      if (kind === "thinking" || kind === "redacted_thinking") {
+        startedAt.set(index, Date.now());
+        emit("started");
+      }
+    } else if (rawEvent.type === "content_block_stop" && index !== undefined) {
+      const began = startedAt.get(index);
+      if (began !== undefined) {
+        startedAt.delete(index);
+        emit("finished", Date.now() - began);
+      }
+    }
+  };
 }
 
 /** Buffers chunks and invokes the callback once per complete, non-empty line. */

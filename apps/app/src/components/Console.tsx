@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RunEvent } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -8,7 +8,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { toAgentBlocks, type AgentBlock } from "../lib/agent";
-import { bytes, clock, oneLine } from "../lib/format";
+import { bytes, clock, elapsed, oneLine } from "../lib/format";
 import { STATUS_TONE } from "../lib/status";
 import { Plate } from "./Bits";
 import { Pin } from "./Icons";
@@ -50,6 +50,17 @@ export function Console({
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 28;
     setStick(atBottom);
   };
+
+  // The one "thinking started" event with no "finished" after it: the agent is
+  // mid-thought, so its row gets the spinner. Only meaningful while live.
+  const spinnerIndex = useMemo(() => {
+    if (!live) return -1;
+    let pending = -1;
+    events.forEach((event, i) => {
+      if (event.type === "thinking") pending = event.phase === "started" ? i : -1;
+    });
+    return pending;
+  }, [events, live]);
 
   return (
     <Card
@@ -113,7 +124,7 @@ export function Console({
           ) : (
             <div className="flex flex-col">
               {events.map((event, i) => (
-                <Row key={`${event.ts}-${i}`} event={event} />
+                <Row key={`${event.ts}-${i}`} event={event} thinking={i === spinnerIndex} />
               ))}
             </div>
           )}
@@ -123,7 +134,33 @@ export function Console({
   );
 }
 
-function Row({ event }: { event: RunEvent }) {
+function Row({ event, thinking }: { event: RunEvent; thinking?: boolean }) {
+  if (event.type === "thinking") {
+    if (event.phase === "finished") {
+      return (
+        <div className="flex gap-2.5 py-[2px]">
+          <Gutter ts={event.ts} />
+          <p className="min-w-0 font-mono text-[11.5px] text-haze-600 italic">
+            Thought for {elapsed(Math.max(1000, event.durationMs ?? 0))}
+          </p>
+        </div>
+      );
+    }
+    // A "started" event draws the spinner only while the agent is still in that
+    // thought; once the matching "finished" line lands (or the run ends), the
+    // duration line is the whole story.
+    if (!thinking) return null;
+    return (
+      <div className="flex gap-2.5 py-[2px]">
+        <Gutter ts={event.ts} />
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="size-3 shrink-0 animate-spin rounded-full border border-haze-600 border-t-transparent" />
+          <span className="font-mono text-[11.5px] text-haze-500 italic">Thinking…</span>
+        </span>
+      </div>
+    );
+  }
+
   if (event.type === "status") {
     const tone = STATUS_TONE[event.status];
     return (
@@ -199,24 +236,6 @@ function Block({ block }: { block: AgentBlock }) {
             {block.text}
           </p>
         </div>
-      );
-
-    case "thinking":
-      return (
-        <Collapsible
-          summary={
-            <>
-              <span className="plate text-haze-700">Thinking</span>
-              <span className="truncate font-mono text-[11px] text-haze-700 italic">
-                {oneLine(block.text, 90)}
-              </span>
-            </>
-          }
-        >
-          <p className="text-[12px] leading-relaxed whitespace-pre-wrap text-haze-400 italic">
-            {block.text}
-          </p>
-        </Collapsible>
       );
 
     case "tool":
