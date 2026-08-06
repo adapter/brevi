@@ -185,6 +185,16 @@ function Row({ event, thinking }: { event: RunEvent; thinking?: boolean }) {
     );
   }
 
+  if (event.type === "attempt") {
+    return (
+      <div className="my-1.5 flex items-center gap-2.5">
+        <Gutter ts={event.ts} />
+        <span className="plate text-iris-400">Attempt {event.number}</span>
+        <span className="h-px flex-1 bg-ink-700" />
+      </div>
+    );
+  }
+
   if (event.type === "log") {
     const styles = {
       stdout: "text-haze-200",

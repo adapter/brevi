@@ -37,6 +37,8 @@ export const api = {
     json<Run>(`/api/tickets/${encodeURIComponent(ticketId)}/run`, { method: "POST" }),
   cancelRun: (runId: string) =>
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
+  retryRun: (runId: string) =>
+    json<Run>(`/api/runs/${encodeURIComponent(runId)}/retry`, { method: "POST" }),
   updateCredentials: (request: CredentialsUpdateRequest) =>
     json<CredentialsUpdateResponse>("/api/settings/credentials", {
       method: "PUT",
