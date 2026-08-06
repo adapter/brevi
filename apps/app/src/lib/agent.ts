@@ -6,7 +6,6 @@
 
 export type AgentBlock =
   | { kind: "text"; text: string }
-  | { kind: "thinking"; text: string }
   | { kind: "tool"; name: string; target: string; detail: string }
   | { kind: "tool-result"; ok: boolean; text: string }
   | { kind: "note"; text: string }
@@ -79,12 +78,11 @@ function fromMessage(message: unknown, out: AgentBlock[]): void {
         if (text) out.push({ kind: "text", text });
         break;
       }
+      // Thinking is never shown as text; the console renders the run's
+      // "thinking" events (spinner, then duration) in its place.
       case "thinking":
-      case "redacted_thinking": {
-        const text = str(part["thinking"])?.trim() ?? "Thought redacted";
-        out.push({ kind: "thinking", text });
+      case "redacted_thinking":
         break;
-      }
       case "tool_use":
       case "server_tool_use": {
         out.push({
@@ -117,8 +115,12 @@ export function toAgentBlocks(event: unknown): AgentBlock[] {
   const type = str(event["type"]);
 
   if (type === "assistant" || type === "user") {
+    // A message may legitimately yield nothing (e.g. it only carried thinking);
+    // never fall through to the raw dump below.
     fromMessage(event["message"] ?? event, out);
-  } else if (type === "system") {
+    return out;
+  }
+  if (type === "system") {
     const subtype = str(event["subtype"]) ?? "system";
     const model = str(event["model"]);
     const tools = Array.isArray(event["tools"]) ? event["tools"].length : undefined;

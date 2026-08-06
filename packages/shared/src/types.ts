@@ -79,4 +79,13 @@ export type RunEvent =
       /** Structured event forwarded from the coding agent's stream-json output. */
       event: unknown;
     }
+  | {
+      runId: string;
+      ts: string;
+      type: "thinking";
+      /** Boundary of a thinking block in the agent's stream. */
+      phase: "started" | "finished";
+      /** How long the block took, present on "finished". */
+      durationMs?: number;
+    }
   | { runId: string; ts: string; type: "artifact"; artifact: ArtifactRef };
