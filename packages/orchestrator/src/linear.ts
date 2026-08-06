@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { LinearClient, type Issue, type LinearDocument } from "@linear/sdk";
 import type { BreviConfig, LinearProject, Ticket, TicketKind } from "@brevi/shared";
 
@@ -13,7 +14,7 @@ const RETRY_DELAY_MS = 2_000;
  */
 const REVIEW_REASSERT_DELAYS_MS = [5_000, 15_000];
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number, signal?: AbortSignal): Promise<void> => delay(ms, undefined, { signal });
 
 /**
  * Linear integration: polls for eligible tickets, posts result comments, and
@@ -91,9 +92,9 @@ export class LinearService {
    * team's first "started"-type state whose name mentions review (e.g. "In
    * Review"). Teams without one keep their current state. Returns whether a
    * review state was set; throws on failure (after one retry) so callers can
-   * log the reason.
+   * log the reason. Aborting `signal` interrupts the reassertion waits.
    */
-  async moveToReview(issueId: string): Promise<boolean> {
+  async moveToReview(issueId: string, signal?: AbortSignal): Promise<boolean> {
     const reviewStateId = await this.#withRetry(async () => {
       const issue = await this.#client.issue(issueId);
       const team = await issue.team;
@@ -105,29 +106,35 @@ export class LinearService {
       if (!review) return undefined;
       await issue.update({ stateId: review.id });
       return review.id;
-    });
+    }, signal);
     if (!reviewStateId) return false;
 
     // The GitHub integration's PR-opened automation may knock the issue back
     // to In Progress moments after the update above; wait out the webhook and
-    // re-assert the review state if it no longer holds.
-    for (const delay of REVIEW_REASSERT_DELAYS_MS) {
-      await sleep(delay);
+    // re-assert the review state if it no longer holds. Only a revert to
+    // another "started"-type state is treated as the automation's doing — a
+    // move to Done, Canceled, or the like is a legitimate concurrent
+    // transition and is left alone.
+    for (const wait of REVIEW_REASSERT_DELAYS_MS) {
+      await sleep(wait, signal);
       await this.#withRetry(async () => {
         const issue = await this.#client.issue(issueId);
         const state = await issue.state;
-        if (state?.id !== reviewStateId) await issue.update({ stateId: reviewStateId });
-      });
+        if (state && state.id !== reviewStateId && state.type === "started") {
+          await issue.update({ stateId: reviewStateId });
+        }
+      }, signal);
     }
     return true;
   }
 
   /** Run a Linear API operation, retrying once after a short backoff. */
-  async #withRetry<T>(operation: () => Promise<T>): Promise<T> {
+  async #withRetry<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     try {
       return await operation();
-    } catch {
-      await sleep(RETRY_DELAY_MS);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      await sleep(RETRY_DELAY_MS, signal);
       return await operation();
     }
   }
