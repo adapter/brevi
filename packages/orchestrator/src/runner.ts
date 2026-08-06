@@ -7,19 +7,16 @@ import { usageCollector } from "./costs.js";
 import { authenticatedRemote, createPullRequest, plainRemote } from "./github.js";
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
-import { buildImplementationPrompt, buildSpikePrompt, type RepoMap } from "./prompts.js";
+import { buildImplementationPrompt, buildReviewFixPrompt, buildSpikePrompt, type RepoMap } from "./prompts.js";
 import { uploadRunEvidence, type UploadedEvidence } from "./r2.js";
+import { codexReviewEnabled, runCodexReview } from "./review.js";
 import { isTerminal, type RunStore } from "./state.js";
+import { lineSink, raceWithAbort, RunCancelledError, throwIfAborted } from "./util.js";
 
 const MAX_COMMENT_BYTES = 60 * 1024;
 const BREVI_FOOTER = "🤖 Automated by [brevi]";
 
-export class RunCancelledError extends Error {
-  constructor() {
-    super("run cancelled");
-    this.name = "RunCancelledError";
-  }
-}
+export { RunCancelledError } from "./util.js";
 
 export interface RunContext {
   runId: string;
@@ -173,12 +170,19 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     };
 
     const activeSandbox = sandbox;
-    const runAgent = async (prompt: string, model: string | undefined, label: string, extraArgs: string[] = []): Promise<void> => {
+    const runAgent = async (
+      prompt: string,
+      model: string | undefined,
+      effort: string | undefined,
+      label: string,
+      extraArgs: string[] = [],
+    ): Promise<void> => {
       // --include-partial-messages exists only so the stream carries thinking
       // block boundaries; the token-level deltas are reduced to thinking events
       // above and never persisted.
       const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--dangerously-skip-permissions"];
       if (model) args.push("--model", model);
+      if (effort) args.push("--effort", effort);
       args.push(...extraArgs, ...config.agent.args);
       log("system", `running ${config.agent.command} (${label}${model ? ` on ${model}` : ""}, timeout ${config.sandbox.timeoutMinutes}m)`);
       // Labeled before the racing await so an abort still knows which
@@ -206,21 +210,52 @@ export async function executeRun(ctx: RunContext): Promise<void> {
 
     // Claude runs put the strong orchestratorModel in the main loop (planning,
     // review) and route the coding labor to an `implementer` subagent on the
-    // cheaper implementModel. An explicit `model` opts out of delegation, and
-    // Codex agents keep their plain single-model flow.
+    // cheaper implementModel, at the configured orchestratorEffort. An
+    // explicit `model` opts out of delegation, and Codex agents keep their
+    // plain single-model flow with no effort flag.
     const claude = agentProvider(config) === "claude";
     const mainModel = config.agent.model || (claude ? config.agent.orchestratorModel : undefined);
+    const mainEffort = claude ? config.agent.orchestratorEffort : undefined;
     const delegate = claude && !config.agent.model && ticket.kind !== "spike";
 
     if (ticket.kind === "spike") {
-      await runAgent(buildSpikePrompt(ticket, repoMap), mainModel, "research");
+      await runAgent(buildSpikePrompt(ticket, repoMap), mainModel, mainEffort, "research");
     } else {
       await runAgent(
         buildImplementationPrompt(ticket, repo, config.github.prDescription, { repoMap, delegate }),
         mainModel,
+        mainEffort,
         "implementation",
         delegate ? ["--agents", JSON.stringify(implementerAgent(config.agent.implementModel))] : [],
       );
+
+      // Adversarial review is best-effort and grounded only in the ticket plus
+      // the actual codebase; confirmed findings feed a fix pass on the main
+      // orchestrator model (same runAgent path, so usage limits and cost
+      // tracking behave exactly as they do for the implementation pass) before
+      // the PR opens.
+      if (codexReviewEnabled(config)) {
+        const findings = await runCodexReview({
+          sandbox: activeSandbox,
+          config,
+          ticket,
+          signal,
+          codexHome,
+          log,
+          addCost: (entry) => store.addCost(run.id, entry),
+        });
+        if (findings) {
+          await runAgent(
+            buildReviewFixPrompt({ ticket, findings, delegate }),
+            mainModel,
+            mainEffort,
+            "review fixes",
+            delegate ? ["--agents", JSON.stringify(implementerAgent(config.agent.implementModel))] : [],
+          );
+        }
+      } else if (config.agent.codexReview) {
+        log("system", "codex review skipped: no Codex credential configured");
+      }
     }
 
     // ---- finalizing ------------------------------------------------------
@@ -409,26 +444,6 @@ function collectAgentEnv(config: BreviConfig): Record<string, string> {
 /** In-workspace directory holding a Codex ChatGPT login, wired up via CODEX_HOME. */
 const CODEX_HOME_DIR = ".brevi/codex-home";
 
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw new RunCancelledError();
-}
-
-async function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  throwIfAborted(signal);
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => reject(new RunCancelledError());
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([promise, aborted]);
-  } finally {
-    if (onAbort) signal.removeEventListener("abort", onAbort);
-    // If we lost the race, don't let the abandoned promise become an unhandled rejection.
-    promise.catch(() => undefined);
-  }
-}
-
 const isDict = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -470,27 +485,6 @@ function thinkingTracker(
   };
 }
 
-/** Buffers chunks and invokes the callback once per complete, non-empty line. */
-function lineSink(onLine: (line: string) => void): { write(chunk: string): void; flush(): void } {
-  let buffer = "";
-  return {
-    write(chunk: string): void {
-      buffer += chunk;
-      let index = buffer.indexOf("\n");
-      while (index >= 0) {
-        const line = buffer.slice(0, index).replace(/\r$/, "");
-        buffer = buffer.slice(index + 1);
-        if (line.trim()) onLine(line);
-        index = buffer.indexOf("\n");
-      }
-    },
-    flush(): void {
-      if (buffer.trim()) onLine(buffer);
-      buffer = "";
-    },
-  };
-}
-
 /** Run git, scrubbing any embedded token out of error output. */
 async function git(args: string[], cwd: string, token: string): Promise<ExecaResult> {
   try {
@@ -516,7 +510,7 @@ function classifyArtifact(name: string): ArtifactRef["type"] {
 }
 
 /**
- * Copy the agent's outputs (.brevi/demo/* plus summary/research docs) into the
+ * Copy the agent's outputs (.brevi/demo/* plus summary/research/review docs) into the
  * run's artifact directory, flattening nested demo paths into safe names.
  */
 async function collectArtifacts(
@@ -547,7 +541,7 @@ async function collectArtifacts(
     // no demo directory
   }
 
-  for (const doc of ["summary.md", "research.md"]) {
+  for (const doc of ["summary.md", "research.md", "review.md"]) {
     const source = join(pulledDir, ".brevi", doc);
     try {
       await stat(source);

@@ -99,6 +99,12 @@ export const configSchema = z.object({
       orchestratorModel: z.string().default("claude-fable-5"),
       /** Model for the `implementer` subagent that executes the coding tasks. */
       implementModel: z.string().default("claude-sonnet-5"),
+      /**
+       * Reasoning effort for the main agent loop, passed to Claude Code as
+       * `--effort`. Claude agents only; the implementer subagent keeps the
+       * CLI's default effort.
+       */
+      orchestratorEffort: z.enum(["low", "medium", "high"]).default("high"),
       /** Passed to the sandboxed agent as ANTHROPIC_API_KEY. Empty = use host env. */
       anthropicApiKey: z.string().default(""),
       /** Claude Code OAuth token (host-discovered), passed as CLAUDE_CODE_OAUTH_TOKEN. */
@@ -110,6 +116,18 @@ export const configSchema = z.object({
        * accounts without an API key. Mounted into the sandbox via CODEX_HOME.
        */
       codexAuthJson: z.string().default(""),
+      /**
+       * Adversarial Codex review of implementation runs: after the coding
+       * agent finishes, parallel Codex reviewers judge the diff against the
+       * ticket and the codebase, and confirmed findings trigger a fix pass
+       * before the PR opens. Requires a Codex credential (codexApiKey or
+       * codexAuthJson); without one the review is skipped even when true.
+       */
+      codexReview: z.boolean().default(true),
+      /** Model the Codex review runs on. */
+      reviewModel: z.string().default("gpt-5.6-sol"),
+      /** Reasoning effort for Codex review executions (model_reasoning_effort). */
+      reviewEffort: z.enum(["minimal", "low", "medium", "high"]).default("high"),
     })
     .prefault({}),
   sandbox: z
