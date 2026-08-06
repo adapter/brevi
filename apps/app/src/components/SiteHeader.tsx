@@ -2,7 +2,7 @@ import type { BreviConfig, HealthResponse } from "@brevi/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Connection, Page } from "../lib/useOrchestrator";
-import { PROVIDERS } from "./Configuration";
+import { PROVIDERS } from "./config/ConnectorsSection";
 
 const CONNECTION = {
   connecting: { label: "Connecting", dot: "bg-haze-600", text: "text-haze-400", live: false },
@@ -27,7 +27,7 @@ export function SiteHeader({
   const c = CONNECTION[conn];
   const provider = health?.sandboxProvider ?? config?.sandbox.provider;
   const disconnected = config !== null && PROVIDERS.some((spec) => !spec.connected(config));
-  const onConfig = page === "config";
+  const onConfig = page.startsWith("config:");
 
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-center gap-2.5 border-b border-ink-700 bg-ink-900/80 px-4 backdrop-blur-md">

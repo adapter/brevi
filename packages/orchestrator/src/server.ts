@@ -110,7 +110,7 @@ function connectResultPage(ok: boolean, detail: string): string {
 <body style="font-family: system-ui; padding: 4rem; background: #101014; color: #e8e8ee">
 <h1 style="font-size: 1.2rem">${title}</h1>
 <p>${detail.replace(/</g, "&lt;")}</p>
-<p style="color:#888">You can close this window and return to the brevi dashboard.</p>
+<p style="color:#888">You can close this window and <a href="/config/connectors" style="color:#8ab4d8">return to the brevi dashboard</a>.</p>
 </body></html>`;
 }
 

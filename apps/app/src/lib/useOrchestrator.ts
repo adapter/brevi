@@ -70,11 +70,16 @@ function pathForRun(runId: string | null): string {
   return runId ? `/runs/${encodeURIComponent(runId)}` : "/";
 }
 
-export type Page = "home" | "config";
+export type ConfigSection = "connectors" | "repositories" | "sandbox";
+
+export type Page = "home" | `config:${ConfigSection}`;
 
 /** Non-run pages live at fixed paths; anything else is the home/run view. */
 function pageFromPath(pathname: string): Page {
-  return /^\/config\/?$/.test(pathname) ? "config" : "home";
+  const match = /^\/config(?:\/(connectors|repositories|sandbox))?\/?$/.exec(pathname);
+  if (!match) return "home";
+  const section = (match[1] ?? "connectors") as ConfigSection;
+  return `config:${section}`;
 }
 
 function byNewest(a: Run, b: Run): number {
@@ -309,12 +314,26 @@ export function useOrchestrator() {
     [selectRun],
   );
 
-  /** Open the Configuration page at its own URL. */
-  const openConfig = useCallback(() => {
-    if (window.location.pathname !== "/config") window.history.pushState(null, "", "/config");
-    dispatch({ t: "page", page: "config" });
-    selectRun(null);
-  }, [selectRun]);
+  /** Open a Configuration section at its own URL. */
+  const openConfig = useCallback(
+    (section: ConfigSection = "connectors") => {
+      const path = `/config/${section}`;
+      if (window.location.pathname !== path) window.history.pushState(null, "", path);
+      dispatch({ t: "page", page: `config:${section}` });
+      selectRun(null);
+    },
+    [selectRun],
+  );
+
+  // A bare /config URL is valid (defaults to Connectors) but should not stay
+  // in the address bar as-is: normalize it to the real section URL on load
+  // without adding a history entry, so refresh reflects the actual page.
+  useEffect(() => {
+    if (/^\/config\/?$/.test(window.location.pathname)) {
+      window.history.replaceState(null, "", "/config/connectors");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only
+  }, []);
 
   // Deep link: a run opened by URL needs its console history like any other open.
   useEffect(() => {

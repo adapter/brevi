@@ -12,7 +12,7 @@ import { Close, Warn } from "./components/Icons";
 import { repoDisplay } from "./lib/repo";
 import { isActive } from "./lib/status";
 import { useNow } from "./lib/useNow";
-import { useOrchestrator } from "./lib/useOrchestrator";
+import { useOrchestrator, type ConfigSection } from "./lib/useOrchestrator";
 
 export default function App() {
   const {
@@ -98,23 +98,30 @@ export default function App() {
         )}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {page === "config" ? (
-            <ConfigurationPage config={config} onConfig={applyConfig} />
-          ) : selectedRun ? (
-            <RunDetail
-              run={selectedRun}
-              repoName={repoDisplay(config, selectedRun.ticket.repo)}
-              events={events[selectedRun.id] ?? []}
-              now={now}
-              busy={busy[selectedRun.id] === true}
-              onCancel={() => void cancelRun(selectedRun.id)}
-              onRetry={() => void retryRun(selectedRun.id)}
-            />
+          {page === "home" ? (
+            selectedRun ? (
+              <RunDetail
+                run={selectedRun}
+                repoName={repoDisplay(config, selectedRun.ticket.repo)}
+                events={events[selectedRun.id] ?? []}
+                now={now}
+                busy={busy[selectedRun.id] === true}
+                onCancel={() => void cancelRun(selectedRun.id)}
+                onRetry={() => void retryRun(selectedRun.id)}
+              />
+            ) : (
+              <Overview
+                offline={unreachable}
+                hasRuns={runs.length > 0}
+                missingRun={selectedRunId !== null && loaded}
+              />
+            )
           ) : (
-            <Overview
-              offline={unreachable}
-              hasRuns={runs.length > 0}
-              missingRun={selectedRunId !== null && loaded}
+            <ConfigurationPage
+              config={config}
+              section={page.slice("config:".length) as ConfigSection}
+              onSection={openConfig}
+              onConfig={applyConfig}
             />
           )}
         </div>
