@@ -19,8 +19,10 @@ import { Pin } from "./Icons";
  * spinner, then a single summed duration line.
  */
 type ConsoleRow =
-  | { kind: "thinking"; ts: string; durationMs: number; pending: boolean }
+  | { kind: "thinking"; ts: string; durationMs: number; pending: boolean; pendingSince: number }
   | { kind: "event"; event: Exclude<RunEvent, { type: "thinking" }> };
+
+type ThinkingRowData = Extract<ConsoleRow, { kind: "thinking" }>;
 
 export function Console({
   runId,
@@ -63,6 +65,10 @@ export function Console({
   const rows = useMemo(() => {
     const out: ConsoleRow[] = [];
     for (const event of events) {
+      // Agent events that render no blocks (noise types recorded before the
+      // runner-side filter, thinking-only messages) get no row at all, so
+      // they cannot sit between two thinking events and defeat coalescing.
+      if (event.type === "agent" && toAgentBlocks(event.event).length === 0) continue;
       if (event.type !== "thinking") {
         out.push({ kind: "event", event });
         continue;
@@ -71,6 +77,7 @@ export function Console({
       const finished = event.phase === "finished";
       if (last?.kind === "thinking") {
         if (finished) last.durationMs += event.durationMs ?? 0;
+        else last.pendingSince = Date.parse(event.ts);
         last.pending = !finished;
       } else {
         out.push({
@@ -78,6 +85,7 @@ export function Console({
           ts: event.ts,
           durationMs: finished ? (event.durationMs ?? 0) : 0,
           pending: !finished,
+          pendingSince: finished ? 0 : Date.parse(event.ts),
         });
       }
     }
@@ -175,17 +183,7 @@ function Row({ row, thinking }: { row: ConsoleRow; thinking?: boolean }) {
   if (row.kind === "thinking") {
     // The spinner runs while the coalesced spell is still open; once it closes
     // (or the run ends), the single summed duration line is the whole story.
-    if (thinking) {
-      return (
-        <div className="flex gap-2.5 py-[2px]">
-          <Gutter ts={row.ts} />
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="size-3 shrink-0 animate-spin rounded-full border border-haze-600 border-t-transparent" />
-            <span className="font-mono text-[11.5px] text-haze-500 italic">Thinking…</span>
-          </span>
-        </div>
-      );
-    }
+    if (thinking) return <ThinkingRow row={row} />;
     if (row.pending && row.durationMs === 0) return null;
     return (
       <div className="flex gap-2.5 py-[2px]">
@@ -262,6 +260,30 @@ function Row({ row, thinking }: { row: ConsoleRow; thinking?: boolean }) {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * The live spinner row, ticking once a second: "Thinking… 23s". The count is
+ * this row's finished spells plus the wall-clock age of the still-open one.
+ */
+function ThinkingRow({ row }: { row: ThinkingRowData }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const ms = row.durationMs + Math.max(0, now - row.pendingSince);
+  return (
+    <div className="flex gap-2.5 py-[2px]">
+      <Gutter ts={row.ts} />
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="size-3 shrink-0 animate-spin rounded-full border border-haze-600 border-t-transparent" />
+        <span className="font-mono text-[11.5px] text-haze-500 italic tabular-nums">
+          Thinking… {elapsed(Math.max(1000, ms))}
+        </span>
+      </span>
     </div>
   );
 }
