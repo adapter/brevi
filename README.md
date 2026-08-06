@@ -1,5 +1,7 @@
 # brevi
 
+[![npm](https://img.shields.io/npm/v/@brevi/cli)](https://www.npmjs.com/package/@brevi/cli)
+
 > [!WARNING]
 > brevi is under active development. Expect breaking changes between releases, rough edges, and APIs that move without notice — pin exact versions if you depend on it.
 
@@ -96,7 +98,7 @@ GitHub Actions on [Blacksmith](https://blacksmith.sh) runners (`.github/workflow
 - **`ci.yml`** — lint, typecheck, and build on every PR and push to main, then deploy the docs and the api to Cloudflare Workers:
   - Pull requests → the **preview** environment (`brevi-docs-preview` / `brevi-api-preview` on the account's `workers.dev` subdomain). Forked PRs skip deploys.
   - Pushes to main → **production** ([brevi.dev](https://brevi.dev) and api.brevi.dev, attached as custom domains).
-- **`release.yml`** — releases `@brevi/cli` via [Changesets](https://github.com/changesets/changesets) and [npm staged publishing](https://docs.npmjs.com/staged-publishing). When main has pending changesets, the workflow opens (or updates) a **Release packages** PR; merging it **stages** the new version on npm. Nothing goes live until a maintainer approves the staged version with 2FA (npmjs.com → **Staged Packages**, or `npm stage approve <stage-id>`).
+- **`release.yml`** — releases `@brevi/cli` via [Changesets](https://github.com/changesets/changesets) and [npm staged publishing](https://docs.npmjs.com/staged-publishing). When main has pending changesets, the workflow opens (or updates) a **Release packages** PR; merging it **stages** the new version on npm. Nothing goes live until a maintainer approves the staged version with 2FA (npmjs.com → **Staged Packages**, or `npm stage approve <stage-id>`). Each release is also mirrored to GitHub Packages (`npm.pkg.github.com`, via `scripts/publish-github-packages.ts`) so the package shows up in the repo's **Packages** sidebar — [registry.npmjs.org](https://registry.npmjs.org) remains the canonical install source.
 
 Releasing a change:
 
