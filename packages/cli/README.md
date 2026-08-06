@@ -1,5 +1,7 @@
 # @brevi/cli
 
+[![npm](https://img.shields.io/npm/v/%40brevi%2Fcli)](https://www.npmjs.com/package/@brevi/cli)
+
 The brevi command line — a local sandbox and orchestrator for coding agents. Add the `brevi` label to a Linear ticket, get back a pull request.
 
 ```sh
