@@ -7,10 +7,11 @@ import { Separator } from "@/components/ui/separator";
 import { clock, elapsed, relative } from "../lib/format";
 import { isActive } from "../lib/status";
 import { Artifacts } from "./Artifacts";
+import { AttachTerminal } from "./AttachTerminal";
 import { KindChip, Plate, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { CostBadge } from "./CostBadge";
-import { Check, Copy, External, Play, Stop, Terminal } from "./Icons";
+import { External, Play, Stop, Terminal } from "./Icons";
 import { PhaseSpine } from "./PhaseSpine";
 import { ResultCard } from "./ResultCard";
 
@@ -79,9 +80,14 @@ export function RunDetail({
           )}
           {finished &&
             (resumable ? (
-              <Button variant="outline" size="plate" onClick={() => setShowAttach((v) => !v)}>
+              <Button
+                variant="outline"
+                size="plate"
+                onClick={() => setShowAttach((v) => !v)}
+                title="Resume the agent conversation in this run's sandbox, right here"
+              >
                 <Terminal className="size-3" />
-                Continue in CLI
+                {showAttach ? "Close terminal" : "Open terminal"}
               </Button>
             ) : (
               <Button
@@ -139,7 +145,12 @@ export function RunDetail({
           )}
 
           {resumable && showAttach && (
-            <AttachBanner runId={run.id} retainedUntil={run.sandbox.retainedUntil as string} now={now} />
+            <AttachTerminal
+              runId={run.id}
+              retainedUntil={run.sandbox.retainedUntil as string}
+              now={now}
+              onClose={() => setShowAttach(false)}
+            />
           )}
 
           <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
@@ -223,49 +234,6 @@ function WaitingBanner({
           {limit.message}
         </p>
       )}
-    </div>
-  );
-}
-
-/** The run is finished but its sandbox is still retained; hand over the CLI command to resume it. */
-function AttachBanner({
-  runId,
-  retainedUntil,
-  now,
-}: {
-  runId: string;
-  retainedUntil: string;
-  now: number;
-}) {
-  const [copied, setCopied] = useState(false);
-  const command = `brevi attach ${runId}`;
-  const retainedMs = Date.parse(retainedUntil);
-
-  function onCopy() {
-    void navigator.clipboard.writeText(command);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
-
-  return (
-    <div className="rounded-[5px] border border-ink-700/70 bg-ink-800/40 p-3">
-      <span className="plate text-haze-200">Continue this run in your terminal</span>
-      <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-haze-600">
-        Boots the run's sandbox with the checkout, dependencies, and credentials still in place, and
-        resumes the agent conversation.
-      </p>
-      <div className="mt-2 flex items-center gap-2">
-        <code className="flex-1 truncate rounded-[4px] border border-ink-700 bg-ink-900 px-2.5 py-1.5 font-mono text-[11px] text-haze-200">
-          {command}
-        </code>
-        <Button variant="outline" size="plate" onClick={onCopy}>
-          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-          {copied ? "Copied" : "Copy"}
-        </Button>
-      </div>
-      <p className="mt-1.5 font-mono text-[11px] text-haze-700">
-        Sandbox available until {clock(retainedUntil)} (in {elapsed(retainedMs - now)})
-      </p>
     </div>
   );
 }

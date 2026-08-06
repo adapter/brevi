@@ -25,6 +25,10 @@ import type { Run, RunEvent, Ticket } from "./types.js";
  *        Stop the resumed sandbox's compute again, keeping its disk until the
  *        retention window ends. Called by `brevi attach` on detach; a no-op
  *        when nothing is booted.
+ *   WS   /ws/runs/:id/attach             -> AttachServerMessage / AttachClientMessage
+ *        Web-terminal bridge for the dashboard: booting the retained sandbox
+ *        and releasing it on disconnect happen server-side, so this works
+ *        when the orchestrator runs on a different machine than the browser.
  *   PUT  /api/settings/credentials       -> CredentialsUpdateResponse
  *        body: CredentialsUpdateRequest. Each provided key is validated against
  *        its provider before being saved; invalid keys are rejected per-field
@@ -271,3 +275,17 @@ export type ServerMessage =
 export type ClientMessage =
   | { type: "subscribe"; runId: string }
   | { type: "unsubscribe"; runId: string };
+
+/**
+ * Messages on the interactive attach socket (`/ws/runs/:id/attach`), which
+ * bridges the dashboard's web terminal to a PTY running the run's resume
+ * session inside its retained sandbox. Terminal bytes travel as UTF-8 strings.
+ */
+export type AttachServerMessage =
+  | { type: "data"; data: string }
+  | { type: "exit"; code: number }
+  | { type: "error"; message: string };
+
+export type AttachClientMessage =
+  | { type: "input"; data: string }
+  | { type: "resize"; cols: number; rows: number };

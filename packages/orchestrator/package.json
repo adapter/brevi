@@ -32,6 +32,7 @@
     "@brevi/shared": "*",
     "@hono/node-server": "^2.1.0",
     "@linear/sdk": "^89.0.0",
+    "@lydell/node-pty": "^1.1.0",
     "execa": "^10.0.1",
     "hono": "^4.13.0",
     "octokit": "^5.0.5",

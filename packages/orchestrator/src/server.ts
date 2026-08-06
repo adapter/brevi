@@ -23,6 +23,7 @@ import {
 } from "@brevi/shared";
 import { loadConfig } from "./config.js";
 import { Orchestrator, OrchestratorError } from "./scheduler.js";
+import { handleAttachSocket } from "./terminal.js";
 
 export interface StartOptions {
   /** Pre-loaded config; when omitted, loaded from configPath. */
@@ -396,6 +397,13 @@ function attachWebSockets(
 
   const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
     const { pathname } = new URL(request.url ?? "/", "http://localhost");
+    // Interactive web-terminal sockets for a run's retained sandbox.
+    const attachMatch = /^\/ws\/runs\/([^/]+)\/attach$/.exec(pathname);
+    if (attachMatch) {
+      const runId = decodeURIComponent(attachMatch[1] ?? "");
+      wss.handleUpgrade(request, socket, head, (ws) => handleAttachSocket(ws, orchestrator, runId));
+      return;
+    }
     if (pathname !== "/ws") {
       socket.destroy();
       return;

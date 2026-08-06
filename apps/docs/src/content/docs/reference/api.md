@@ -22,6 +22,7 @@ There is no authentication: the server is loopback-only and anything reaching it
 | `POST` | `/api/runs/:id/cancel` | `Run` |
 | `POST` | `/api/runs/:id/resume` | `ResumeRunResponse` |
 | `POST` | `/api/runs/:id/release` | `Run` |
+| `WS` | `/ws/runs/:id/attach` | Web-terminal bridge into the retained sandbox |
 | `PUT` | `/api/settings/credentials` | `CredentialsUpdateResponse` |
 | `POST` | `/api/connect/:provider` | `ConnectResponse` |
 | `POST` | `/api/connect/github/poll` | `DevicePollResponse` |
@@ -91,11 +92,30 @@ type RunAttachInfo =
   | { kind: "ssh"; scriptPath: string; host: string; user: string; keyPath: string };
 ```
 
-`attach` tells the caller how to open the session: `"local"` runs `scriptPath` directly on the host (process sandboxes), `"ssh"` runs it in the guest over ssh with the given `host` / `user` / `keyPath` (Firecracker sandboxes). `brevi attach <runId>` calls this endpoint and opens whichever it gets back; it's also what powers the "Continue in CLI" button on the run detail page.
+`attach` tells the caller how to open the session: `"local"` runs `scriptPath` directly on the host (process sandboxes), `"ssh"` runs it in the guest over ssh with the given `host` / `user` / `keyPath` (Firecracker sandboxes). `brevi attach <runId>` calls this endpoint and opens whichever it gets back.
 
 Errors: `404` when the run doesn't exist, `409` when the run hasn't finished yet or the configured sandbox provider has changed since it did, `410` once the retention window has passed and the disk was reclaimed, `400` when the run has no captured agent session id (resume is Claude-only for now; Codex runs don't report one).
 
 `POST /api/runs/:id/release` stops a resumed sandbox's compute again, keeping its disk until the retention window ends, and returns the updated `Run`. `brevi attach` calls it on detach; it's a no-op when nothing is booted.
+
+### Web terminal
+
+`WS /ws/runs/:id/attach` is what the run detail page's "Open terminal" button connects to: the server performs the whole resume flow itself (boot, session script, release on disconnect) and bridges the session to the socket through a PTY, so the browser needs no ssh access and the orchestrator can live on a different machine. Messages are JSON in both directions:
+
+```ts
+// server -> client
+type AttachServerMessage =
+  | { type: "data"; data: string }      // terminal output
+  | { type: "exit"; code: number }      // the session process ended
+  | { type: "error"; message: string }; // resume failed (same reasons as POST /resume)
+
+// client -> server
+type AttachClientMessage =
+  | { type: "input"; data: string }
+  | { type: "resize"; cols: number; rows: number };
+```
+
+Multiple clients (web terminals, `brevi attach` sessions) share one booted sandbox; it stops again when the last one disconnects.
 
 ### Credentials
 

@@ -70,7 +70,7 @@ Exits `0` when the orchestrator answers, and `1` when it doesn't (or when there 
 
 ## `brevi attach <runId>`
 
-Resumes a finished run's agent conversation, right where it left off, inside its retained sandbox. This is what the dashboard's "Continue in CLI" button on the run detail page reveals.
+Resumes a finished run's agent conversation, right where it left off, inside its retained sandbox. The dashboard's "Open terminal" button opens the same session as an embedded web terminal.
 
 Calls `POST /api/runs/:id/resume`, which boots the sandbox back up from its retained disk if it isn't already running, and prepares an interactive `claude --resume` session with the run's full history, working directory at the run's checkout. `attach` then opens that session in your terminal: over ssh for Firecracker sandboxes, directly on the host for the process provider.
 
