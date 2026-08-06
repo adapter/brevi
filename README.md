@@ -1,5 +1,9 @@
 # brevi
 
+[![npm](https://img.shields.io/npm/v/%40brevi%2Fcli)](https://www.npmjs.com/package/@brevi/cli)
+[![CI](https://img.shields.io/github/actions/workflow/status/adapter/brevi/ci.yml?branch=main&label=CI)](https://github.com/adapter/brevi/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/%40brevi%2Fcli)](LICENSE)
+
 > [!WARNING]
 > brevi is under active development. Expect breaking changes between releases, rough edges, and APIs that move without notice — pin exact versions if you depend on it.
 
