@@ -114,7 +114,7 @@ export function AttachTerminal({
         : state.detail;
 
   return (
-    <Card className="flex h-[calc(100svh-8.5rem)] flex-col gap-0 overflow-hidden py-0">
+    <Card className="flex h-full min-h-[320px] flex-col gap-0 overflow-hidden py-0">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
         <Plate className="text-haze-400">Terminal</Plate>
         <span

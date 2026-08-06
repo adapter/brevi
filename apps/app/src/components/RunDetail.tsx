@@ -1,9 +1,10 @@
 import type { LimitInfo, Run, RunEvent } from "@brevi/shared";
 import { useEffect, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { clock, elapsed, relative } from "../lib/format";
+import { clock, duration, elapsed, relative } from "../lib/format";
 import { isActive } from "../lib/status";
 import { Artifacts } from "./Artifacts";
 import { AttachTerminal } from "./AttachTerminal";
@@ -11,7 +12,6 @@ import { KindChip, Plate, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { CostBadge } from "./CostBadge";
 import { External, Play, Stop } from "./Icons";
-import { PhaseSpine } from "./PhaseSpine";
 import { ResultCard } from "./ResultCard";
 
 export function RunDetail({
@@ -38,12 +38,13 @@ export function RunDetail({
   const retainedMs = run.sandbox.retainedUntil ? Date.parse(run.sandbox.retainedUntil) : Number.NaN;
   const sandboxRetained = retainedMs > now;
   const resumable = finished && sandboxRetained && Boolean(run.agentSessionId);
-  const [tab, setTab] = useState<LeftTab>(run.result ? "result" : "console");
+  const [tab, setTab] = useState<LeftTab>(run.result || run.error ? "result" : "console");
   const [terminalStarted, setTerminalStarted] = useState(false);
-  // Selecting a different run resets the view: result-first when one exists,
-  // the console while the run is still producing it.
+  // Selecting a different run resets the view: result-first when there is an
+  // outcome to show (a result or a failure), the console while the run is
+  // still producing it.
   useEffect(() => {
-    setTab(run.result ? "result" : "console");
+    setTab(run.result || run.error ? "result" : "console");
     setTerminalStarted(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run.id]);
@@ -53,8 +54,8 @@ export function RunDetail({
   const shipped = run.status === "completed";
 
   return (
-    <div className="flex flex-col">
-      <div className="sticky top-0 z-10 flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/70 bg-ink-900/90 px-4 py-2 backdrop-blur-md">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/70 bg-ink-900/90 px-4 py-2">
         <a
           href={run.ticket.url}
           target="_blank"
@@ -88,31 +89,43 @@ export function RunDetail({
         </span>
       </div>
 
-      <div>
-        <div className="flex flex-col gap-4 p-4">
-          <div>
-            <h2 className="text-[17px] leading-snug font-medium text-haze-50">
-              {run.ticket.title}
-            </h2>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <RepoChip repo={repoName} />
-              <Badge variant="secondary">
-                <span className="text-haze-700">State</span>
-                <span className="font-mono text-[11px] leading-none tracking-normal normal-case text-haze-300">
-                  {run.ticket.state}
-                </span>
+      <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
+        <div className="shrink-0">
+          <h2 className="text-[17px] leading-snug font-medium text-haze-50">
+            {run.ticket.title}
+          </h2>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <RepoChip repo={repoName} />
+            <Badge variant="secondary">
+              <span className="text-haze-700">State</span>
+              <span className="font-mono text-[11px] leading-none tracking-normal normal-case text-haze-300">
+                {run.ticket.state}
+              </span>
+            </Badge>
+            {run.ticket.labels.slice(0, 4).map((label) => (
+              <Badge
+                key={label}
+                variant="outline"
+                className="border-ink-700 font-mono text-[10.5px] tracking-normal normal-case"
+              >
+                {label}
               </Badge>
-              {run.ticket.labels.slice(0, 4).map((label) => (
-                <Badge
-                  key={label}
-                  variant="outline"
-                  className="border-ink-700 font-mono text-[10.5px] tracking-normal normal-case"
-                >
-                  {label}
-                </Badge>
-              ))}
-            </div>
+            ))}
           </div>
+          {/* The key figures the phase spine used to carry; the phase-by-phase
+              timeline itself is gone. */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-5 gap-y-1.5">
+            <Field label="Elapsed">
+              {run.finishedAt && run.startedAt
+                ? duration(run.startedAt, Date.parse(run.finishedAt))
+                : duration(run.startedAt ?? run.createdAt, now)}
+            </Field>
+            {run.attempts.length > 1 && <Field label="Attempts">{run.attempts.length}</Field>}
+            <Field label="Sandbox">{run.sandbox.provider}</Field>
+            {run.sandbox.id && <Field label="VM">{run.sandbox.id}</Field>}
+            <Field label="Run">{run.id}</Field>
+          </div>
+        </div>
 
           {run.status === "waiting" && (
             <WaitingBanner
@@ -125,11 +138,9 @@ export function RunDetail({
             />
           )}
 
-          <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
-            <div className="min-w-0">
-              <PhaseSpine run={run} events={events} now={now} />
-
-              <div className="mt-4 flex items-end gap-1 border-b border-ink-700/70" role="tablist">
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
+            <div className="flex min-h-0 min-w-0 flex-col">
+              <div className="flex shrink-0 items-end gap-1 border-b border-ink-700/70" role="tablist">
                 <TabButton active={tab === "result"} onClick={() => setTab("result")}>
                   Result
                 </TabButton>
@@ -159,16 +170,27 @@ export function RunDetail({
 
               {/* Inactive panels hide instead of unmounting: the console keeps
                   its scroll position and the terminal keeps its live session. */}
-              <div className="mt-3">
-                <div className={tab === "result" ? "" : "hidden"}>
-                  <Card className="flex h-[calc(100svh-8.5rem)] flex-col gap-0 overflow-hidden py-0">
+              <div className="mt-3 min-h-0 flex-1">
+                <div className={tab === "result" ? "h-full" : "hidden"}>
+                  <Card className="flex h-full min-h-[320px] flex-col gap-0 overflow-hidden py-0">
                     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
                       <Plate className="text-haze-400">Result</Plate>
                       {hasResult && shipped && <span className="plate text-mint-400">Shipped</span>}
                     </div>
                     <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                      {run.error && (
+                        <Alert
+                          variant="destructive"
+                          className="mb-4 rounded-[5px] border-rust-500/35 bg-rust-500/8 p-3"
+                        >
+                          <AlertTitle className="plate text-rust-400">Error</AlertTitle>
+                          <AlertDescription className="mt-1 font-mono text-[11.5px] leading-relaxed text-wrap break-words whitespace-pre-wrap text-rust-400/90 md:text-wrap">
+                            {run.error}
+                          </AlertDescription>
+                        </Alert>
+                      )}
                       <ResultCard run={run} />
-                      {!hasResult && (
+                      {!hasResult && !run.error && (
                         <p className="text-[12.5px] leading-relaxed text-haze-600">
                           The run's outcome lands here once it finishes.
                         </p>
@@ -176,11 +198,11 @@ export function RunDetail({
                     </div>
                   </Card>
                 </div>
-                <div className={tab === "console" ? "" : "hidden"}>
+                <div className={tab === "console" ? "h-full" : "hidden"}>
                   <Console runId={run.id} events={events} live={live} fill />
                 </div>
                 {terminalStarted && resumable && (
-                  <div className={tab === "terminal" ? "" : "hidden"}>
+                  <div className={tab === "terminal" ? "h-full" : "hidden"}>
                     <AttachTerminal
                       runId={run.id}
                       retainedUntil={run.sandbox.retainedUntil as string}
@@ -195,28 +217,42 @@ export function RunDetail({
               </div>
             </div>
 
-            <aside className="min-w-0 xl:sticky xl:top-14 xl:max-h-[calc(100svh-8.5rem)] xl:overflow-y-auto">
-              <Card className="block animate-rise border-l-2 border-ink-700 p-4">
-                <Artifacts runId={run.id} artifacts={artifacts} />
-
-                {!hasArtifacts && (
-                  <div>
-                    <Plate className="text-haze-700">Evidence</Plate>
-                    <p className="mt-2 text-[12.5px] leading-relaxed text-haze-600">
+            <aside className="min-h-0 min-w-0">
+              <Card className="flex h-full min-h-[280px] flex-col gap-0 overflow-hidden py-0">
+                <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
+                  <Plate className="text-haze-400">Evidence</Plate>
+                  {hasArtifacts && (
+                    <span className="font-mono text-[11px] leading-none text-haze-700">
+                      {artifacts.length}
+                    </span>
+                  )}
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                  <Artifacts runId={run.id} artifacts={artifacts} />
+                  {!hasArtifacts && (
+                    <p className="text-[12.5px] leading-relaxed text-haze-600">
                       Screenshots and recordings appear here as the run captures them.
                     </p>
-                  </div>
-                )}
+                  )}
+                </div>
               </Card>
             </aside>
           </div>
-        </div>
       </div>
     </div>
   );
 }
 
 type LeftTab = "result" | "console" | "terminal";
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <span className="flex min-w-0 items-baseline gap-2">
+      <span className="plate shrink-0 text-haze-700">{label}</span>
+      <span className="truncate font-mono text-[11px] text-haze-300">{children}</span>
+    </span>
+  );
+}
 
 function TabButton({
   active,

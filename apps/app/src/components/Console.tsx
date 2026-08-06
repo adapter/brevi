@@ -113,7 +113,7 @@ export function Console({
     <Card
       className={`flex flex-col gap-0 overflow-hidden py-0 ${
         fill
-          ? "h-[calc(100svh-8.5rem)]"
+          ? "h-full min-h-[320px]"
           : expanded
             ? "max-h-[clamp(320px,52vh,680px)] min-h-[180px]"
             : ""
