@@ -5,13 +5,14 @@ import {
   RUNS_DIR,
   type ArtifactRef,
   type Run,
+  type RunAttempt,
   type RunEvent,
   type RunStatus,
   type SandboxProviderName,
   type Ticket,
 } from "@brevi/shared";
 
-/** Statuses for runs that are still doing (or waiting to do) work. */
+/** Statuses for runs with an agent execution in flight (or about to start). */
 export const ACTIVE_STATUSES: ReadonlySet<RunStatus> = new Set([
   "queued",
   "preparing",
@@ -19,8 +20,11 @@ export const ACTIVE_STATUSES: ReadonlySet<RunStatus> = new Set([
   "finalizing",
 ]);
 
+const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set(["completed", "failed", "cancelled"]);
+
+/** Terminal = no further work will happen without a manual retry. "waiting" is neither active nor terminal. */
 export function isTerminal(status: RunStatus): boolean {
-  return !ACTIVE_STATUSES.has(status);
+  return TERMINAL_STATUSES.has(status);
 }
 
 /** Short, sortable run id: time prefix + random suffix, e.g. "20260804-153012-k3f9". */
@@ -54,7 +58,11 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
     this.runsDir = runsDir;
   }
 
-  /** Load persisted runs; mark runs interrupted by a previous process as failed. */
+  /**
+   * Load persisted runs; mark runs interrupted by a previous process as
+   * failed. Runs waiting on a usage-limit reset survive restarts — the
+   * orchestrator reschedules their resume on boot.
+   */
   async init(): Promise<void> {
     await mkdir(this.runsDir, { recursive: true });
     const entries = await readdir(this.runsDir, { withFileTypes: true });
@@ -67,7 +75,9 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
       } catch {
         continue; // unreadable run dir; skip rather than crash
       }
-      if (!isTerminal(run.status)) {
+      // Runs persisted before attempts existed.
+      if (!Array.isArray(run.attempts)) run = { ...run, attempts: [] };
+      if (!isTerminal(run.status) && run.status !== "waiting") {
         run = {
           ...run,
           status: "failed",
@@ -87,6 +97,7 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
       status: "queued",
       sandbox: { provider },
       createdAt: new Date().toISOString(),
+      attempts: [],
     };
     await mkdir(this.artifactsDir(run.id), { recursive: true });
     await this.#persist(run);
@@ -124,6 +135,25 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
     const run = await this.update(id, { ...patch, status });
     this.appendEvent({ runId: id, ts: new Date().toISOString(), type: "status", status });
     return run;
+  }
+
+  /** Open a new attempt on the run and mark its start in the event log. */
+  async beginAttempt(runId: string): Promise<RunAttempt> {
+    const run = this.#runs.get(runId);
+    if (!run) throw new Error(`unknown run ${runId}`);
+    const attempt: RunAttempt = { number: run.attempts.length + 1, startedAt: new Date().toISOString() };
+    await this.update(runId, { attempts: [...run.attempts, attempt] });
+    this.appendEvent({ runId, ts: attempt.startedAt, type: "attempt", number: attempt.number });
+    return attempt;
+  }
+
+  /** Close the run's latest attempt with its outcome. */
+  async endAttempt(runId: string, patch: Partial<Omit<RunAttempt, "number" | "startedAt">>): Promise<void> {
+    const run = this.#runs.get(runId);
+    const last = run?.attempts.at(-1);
+    if (!run || !last || last.finishedAt) return;
+    const closed: RunAttempt = { ...last, finishedAt: new Date().toISOString(), ...patch };
+    await this.update(runId, { attempts: [...run.attempts.slice(0, -1), closed] });
   }
 
   /** Append an event to the run's log. Emits synchronously; disk write is queued. */
