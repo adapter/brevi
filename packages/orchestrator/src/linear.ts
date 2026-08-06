@@ -112,7 +112,7 @@ export class LinearService {
     // The GitHub integration's PR-opened automation may knock the issue back
     // to In Progress moments after the update above; wait out the webhook and
     // re-assert the review state if it no longer holds. Only a revert to
-    // another "started"-type state is treated as the automation's doing — a
+    // another "started"-type state is treated as the automation's doing; a
     // move to Done, Canceled, or the like is a legitimate concurrent
     // transition and is left alone.
     for (const wait of REVIEW_REASSERT_DELAYS_MS) {
