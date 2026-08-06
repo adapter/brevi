@@ -1,10 +1,12 @@
 import type { LimitInfo, Run, RunEvent } from "@brevi/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import { clock, elapsed, relative } from "../lib/format";
 import { isActive } from "../lib/status";
 import { Artifacts } from "./Artifacts";
-import { KindChip, RepoChip, StatusChip } from "./Bits";
+import { KindChip, Plate, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { CostBadge } from "./CostBadge";
 import { External, Play, Stop } from "./Icons";
@@ -32,6 +34,9 @@ export function RunDetail({
   const live = isActive(run.status);
   const retryable = run.status === "failed" || run.status === "cancelled";
   const artifacts = run.result?.artifacts ?? collectArtifacts(events);
+  const hasResult = Boolean(run.result);
+  const hasArtifacts = artifacts.length > 0;
+  const shipped = run.status === "completed";
 
   return (
     <div className="flex flex-col">
@@ -106,13 +111,36 @@ export function RunDetail({
             />
           )}
 
-          <PhaseSpine run={run} events={events} now={now} />
+          <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
+            <div className="flex min-w-0 flex-col gap-4">
+              <PhaseSpine run={run} events={events} now={now} />
 
-          <Console runId={run.id} events={events} live={live} />
+              <Console runId={run.id} events={events} live={live} />
+            </div>
 
-          <ResultCard run={run} />
+            <aside className="min-w-0 xl:sticky xl:top-14 xl:max-h-[calc(100svh-8.5rem)] xl:overflow-y-auto">
+              <Card
+                className={`block animate-rise border-l-2 ${
+                  hasResult && shipped ? "border-mint-500/30" : "border-ink-700"
+                } p-4`}
+              >
+                <ResultCard run={run} />
 
-          <Artifacts runId={run.id} artifacts={artifacts} />
+                {hasResult && hasArtifacts && <Separator className="my-4" />}
+
+                <Artifacts runId={run.id} artifacts={artifacts} />
+
+                {!hasResult && !hasArtifacts && (
+                  <div>
+                    <Plate className="text-haze-700">Output</Plate>
+                    <p className="mt-2 text-[12.5px] leading-relaxed text-haze-600">
+                      Results and evidence appear here as the run produces them.
+                    </p>
+                  </div>
+                )}
+              </Card>
+            </aside>
+          </div>
         </div>
       </div>
     </div>
