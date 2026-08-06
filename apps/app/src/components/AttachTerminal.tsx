@@ -4,8 +4,10 @@ import { Terminal as Xterm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import type { AttachClientMessage, AttachServerMessage } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { attachWsUrl } from "../lib/api";
 import { clock, elapsed } from "../lib/format";
+import { Plate } from "./Bits";
 import { Stop } from "./Icons";
 
 type SessionState =
@@ -112,25 +114,27 @@ export function AttachTerminal({
         : state.detail;
 
   return (
-    <div className="flex h-[calc(100svh-8.5rem)] flex-col overflow-hidden rounded-[5px] border border-ink-700/70">
-      <div className="flex h-9 shrink-0 items-center gap-2.5 border-b border-ink-700/70 bg-ink-800/60 px-3">
-        <span className="plate text-haze-200">Sandbox terminal</span>
+    <Card className="flex h-[calc(100svh-8.5rem)] flex-col gap-0 overflow-hidden py-0">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
+        <Plate className="text-haze-400">Terminal</Plate>
         <span
           className={`font-mono text-[11px] ${state.phase === "error" ? "text-rust-400" : "text-haze-600"}`}
         >
           {status}
         </span>
-        <span className="ml-auto hidden font-mono text-[11px] text-haze-700 sm:inline">
-          available until {clock(retainedUntil)} (in {elapsed(Math.max(0, retainedMs - now))})
+        <span className="ml-auto flex items-center gap-2.5">
+          <span className="hidden font-mono text-[11px] text-haze-700 sm:inline">
+            available until {clock(retainedUntil)} (in {elapsed(Math.max(0, retainedMs - now))})
+          </span>
+          <Button variant="outline" size="plate" onClick={onClose}>
+            <Stop className="size-3" />
+            {state.phase === "connected" ? "Disconnect" : "Close"}
+          </Button>
         </span>
-        <Button variant="outline" size="plate" onClick={onClose}>
-          <Stop className="size-3" />
-          {state.phase === "connected" ? "Disconnect" : "Close"}
-        </Button>
       </div>
       {/* font-mono matters: the xterm theme lifts this container's computed
           font, and a proportional face breaks the terminal's cell grid. */}
       <div ref={host} className="min-h-0 flex-1 bg-ink-900 p-2 font-mono text-haze-200" />
-    </div>
+    </Card>
   );
 }

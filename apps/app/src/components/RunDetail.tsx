@@ -161,24 +161,23 @@ export function RunDetail({
                   its scroll position and the terminal keeps its live session. */}
               <div className="mt-3">
                 <div className={tab === "result" ? "" : "hidden"}>
-                  <Card
-                    className={`block animate-rise border-l-2 ${
-                      hasResult && shipped ? "border-mint-500/30" : "border-ink-700"
-                    } p-4`}
-                  >
-                    <ResultCard run={run} />
-                    {!hasResult && (
-                      <div>
-                        <Plate className="text-haze-700">Result</Plate>
-                        <p className="mt-2 text-[12.5px] leading-relaxed text-haze-600">
+                  <Card className="flex h-[calc(100svh-8.5rem)] flex-col gap-0 overflow-hidden py-0">
+                    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
+                      <Plate className="text-haze-400">Result</Plate>
+                      {hasResult && shipped && <span className="plate text-mint-400">Shipped</span>}
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                      <ResultCard run={run} />
+                      {!hasResult && (
+                        <p className="text-[12.5px] leading-relaxed text-haze-600">
                           The run's outcome lands here once it finishes.
                         </p>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </Card>
                 </div>
                 <div className={tab === "console" ? "" : "hidden"}>
-                  <Console runId={run.id} events={events} live={live} />
+                  <Console runId={run.id} events={events} live={live} fill />
                 </div>
                 {terminalStarted && resumable && (
                   <div className={tab === "terminal" ? "" : "hidden"}>
