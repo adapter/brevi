@@ -33,8 +33,8 @@ Whenever the config is sent to the dashboard (`GET /api/config`, the WebSocket `
 Used to clone repositories, push branches, open pull requests, and list the repos in the dashboard's picker.
 
 1. **`gh` CLI**: brevi runs `gh auth token`. If it returns a token, the token is validated with `GET https://api.github.com/user` and saved. The detail reads `Connected as <login> (via gh CLI)`.
-2. **OAuth device flow**: otherwise brevi starts a device authorization with scope `repo` and returns a user code plus a verification URL. The dashboard shows the code, opens GitHub, and polls `POST /api/connect/github/poll` until GitHub issues a token (or the code expires).
-3. **Manual**: paste a personal access token with the `repo` scope.
+2. **OAuth device flow**: otherwise brevi starts a device authorization with scopes `repo` and `workflow` and returns a user code plus a verification URL. The dashboard shows the code, opens GitHub, and polls `POST /api/connect/github/poll` until GitHub issues a token (or the code expires).
+3. **Manual**: paste a personal access token with the `repo` and `workflow` scopes.
 
 ## Claude
 

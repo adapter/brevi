@@ -53,7 +53,7 @@ app.post("/oauth/github/device/code", async (c) => {
   const res = await fetch("https://github.com/login/device/code", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ client_id: c.env.GITHUB_CLIENT_ID, scope: "repo" }),
+    body: JSON.stringify({ client_id: c.env.GITHUB_CLIENT_ID, scope: "repo workflow" }),
   });
   if (!res.ok) return c.json({ error: `GitHub returned ${res.status}` }, 502);
   // Passes through: device_code, user_code, verification_uri, expires_in, interval.
