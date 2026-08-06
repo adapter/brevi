@@ -205,7 +205,7 @@ export function RunDetail({
                 )}
               </div>
 
-            <aside className="flex min-h-0 min-w-0 flex-col gap-3 xl:col-start-2 xl:row-start-1 xl:row-span-2">
+            <aside className="flex min-h-0 min-w-0 flex-col gap-3 xl:col-start-2 xl:row-start-2">
               {/* The key figures the phase spine used to carry. */}
               <Card className="block shrink-0 px-4 py-3.5">
                 <div className="grid grid-cols-2 gap-x-5 gap-y-3">
