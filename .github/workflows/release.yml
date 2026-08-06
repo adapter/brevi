@@ -4,9 +4,10 @@
 # *stages* the new versions on npm (no OTP needed), and a maintainer
 # approves them with 2FA on npmjs.com → Staged Packages.
 #
-# @brevi/cli is also mirrored to GitHub Packages (npm.pkg.github.com) so it
-# appears in the repo's Packages sidebar; registry.npmjs.org remains the
-# canonical install source.
+# Released @brevi/cli versions are also mirrored to GitHub Packages as
+# @adapter/brevi-cli (GitHub requires the npm scope to match the repo owner)
+# so they appear in the repo's Packages sidebar; registry.npmjs.org remains
+# the canonical install source.
 #
 # Required repository secrets:
 #   NPM_TOKEN — npm token with publish rights to the @brevi scope
@@ -65,10 +66,11 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
 
-      # Mirror @brevi/cli to GitHub Packages so the repo's Packages sidebar
-      # lists it. Versions already mirrored are skipped, so this is a no-op
-      # on most pushes. The mirror goes live immediately — it does not wait
-      # for the npm staged-publish approval.
+      # Mirror the latest npm release of @brevi/cli to GitHub Packages (as
+      # @adapter/brevi-cli) so the repo's Packages sidebar lists it. The
+      # released tarball is re-published as-is — nothing is rebuilt — and a
+      # staged version is invisible until approved, so this is a no-op on
+      # most pushes and only fires once a new release is live on npm.
       - name: Mirror to GitHub Packages
         run: bun scripts/publish-github-packages.ts
         env:
