@@ -4,7 +4,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { clock, duration, elapsed, relative } from "../lib/format";
+import { clock, duration, elapsed } from "../lib/format";
 import { isActive } from "../lib/status";
 import { Artifacts } from "./Artifacts";
 import { AttachTerminal } from "./AttachTerminal";
@@ -68,11 +68,16 @@ export function RunDetail({
 
         <StatusChip status={run.status} />
 
-        <span className="ml-auto flex items-center gap-2.5">
+        <span className="ml-auto flex flex-wrap items-center justify-end gap-x-2.5 gap-y-2">
           <CostBadge costs={run.costs} totals={run.costTotals} align="end" className="text-[11px]" />
-          <span className="hidden font-mono text-[11px] text-haze-700 sm:inline">
-            started {relative(run.startedAt ?? run.createdAt, now)}
-          </span>
+          <RepoChip repo={repoName} />
+          <Badge variant="secondary">
+            <span className="text-haze-700">State</span>
+            <span className="font-mono text-[11px] leading-none tracking-normal normal-case text-haze-300">
+              {run.ticket.state}
+            </span>
+          </Badge>
+          {(live || retryable) && <span aria-hidden className="h-4 w-px shrink-0 bg-ink-700" />}
           {live && (
             <Button variant="destructive" size="plate" onClick={onCancel} disabled={busy}>
               <Stop className="size-3" />
@@ -93,24 +98,6 @@ export function RunDetail({
           <h2 className="text-[17px] leading-snug font-medium text-haze-50">
             {run.ticket.title}
           </h2>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <RepoChip repo={repoName} />
-            <Badge variant="secondary">
-              <span className="text-haze-700">State</span>
-              <span className="font-mono text-[11px] leading-none tracking-normal normal-case text-haze-300">
-                {run.ticket.state}
-              </span>
-            </Badge>
-            {run.ticket.labels.slice(0, 4).map((label) => (
-              <Badge
-                key={label}
-                variant="outline"
-                className="border-ink-700 font-mono text-[10.5px] tracking-normal normal-case"
-              >
-                {label}
-              </Badge>
-            ))}
-          </div>
         </div>
 
           {run.status === "waiting" && (
