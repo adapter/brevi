@@ -109,8 +109,8 @@ export function AttachTerminal({
         : state.detail;
 
   return (
-    <div className="overflow-hidden rounded-[5px] border border-ink-700/70">
-      <div className="flex h-9 items-center gap-2.5 border-b border-ink-700/70 bg-ink-800/60 px-3">
+    <div className="flex h-[calc(100svh-8.5rem)] flex-col overflow-hidden rounded-[5px] border border-ink-700/70">
+      <div className="flex h-9 shrink-0 items-center gap-2.5 border-b border-ink-700/70 bg-ink-800/60 px-3">
         <span className="plate text-haze-200">Sandbox terminal</span>
         <span
           className={`font-mono text-[11px] ${state.phase === "error" ? "text-rust-400" : "text-haze-600"}`}
@@ -127,7 +127,7 @@ export function AttachTerminal({
       </div>
       {/* font-mono matters: the xterm theme lifts this container's computed
           font, and a proportional face breaks the terminal's cell grid. */}
-      <div ref={host} className="h-[420px] bg-ink-900 p-2 font-mono text-haze-200" />
+      <div ref={host} className="min-h-0 flex-1 bg-ink-900 p-2 font-mono text-haze-200" />
     </div>
   );
 }
