@@ -1,6 +1,6 @@
 # @brevi/orchestrator
 
-The brevi engine, consumed by `@brevi/cli`. Polls Linear for `brevi`-labeled issues assigned to the user, classifies each as SPIKE (research) or implementation, runs a coding agent in a sandbox against a checkout of the mapped repo, then opens a PR (implementation) or posts a Linear comment (SPIKE). Also serves the dashboard and its HTTP + WebSocket API on :4400.
+The brevi engine, consumed by `@brevi/cli`. Polls Linear for `brevi`-labeled issues assigned to the user, runs a coding agent in a sandbox against a checkout of the mapped repo, then pushes a branch and opens a PR. Also serves the dashboard and its HTTP + WebSocket API on :4400.
 
 ## Layout (src/)
 

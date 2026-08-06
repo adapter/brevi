@@ -212,10 +212,10 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         `ticket ${ticket.identifier} has no repo mapping: add a "repo:<key>" label or set defaultRepo`,
       );
     }
-    if (ticket.kind === "implementation" && !this.config.github.token) {
+    if (!this.config.github.token) {
       throw new OrchestratorError(
         "invalid",
-        "GitHub is not connected: add a token in the dashboard's Connections panel before running implementation tickets",
+        "GitHub is not connected: add a token in the dashboard's Connections panel before running tickets",
       );
     }
     if (this.#activeOrQueuedRun(ticket.id)) {
@@ -996,7 +996,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       }
       return;
     }
-    if (ticket.kind === "implementation" && !this.config.github.token) {
+    if (!this.config.github.token) {
       if (!this.#warnedNoRepo.has(`github:${ticket.id}`)) {
         this.#warnedNoRepo.add(`github:${ticket.id}`);
         console.warn(

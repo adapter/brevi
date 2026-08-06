@@ -1,9 +1,6 @@
 # @brevi/orchestrator
 
-The brevi engine. It polls Linear for `brevi`-labeled issues assigned to you, classifies each as research (SPIKE) or implementation, runs a coding agent against a checkout of the mapped repository inside a sandbox ([`@brevi/sandbox`](https://www.npmjs.com/package/@brevi/sandbox)), and delivers the result:
-
-- **Implementation** → a `brevi/<ticket-id>` branch is pushed and a GitHub pull request is opened; a demo (screenshots or a recording) captured by the agent stays with the run in the dashboard.
-- **SPIKE** → the research is posted back to the Linear issue as a comment.
+The brevi engine. It polls Linear for `brevi`-labeled issues assigned to you, runs a coding agent against a checkout of the mapped repository inside a sandbox ([`@brevi/sandbox`](https://www.npmjs.com/package/@brevi/sandbox)), pushes a `brevi/<ticket-id>` branch, and opens a GitHub pull request; a demo (screenshots or a recording) captured by the agent stays with the run in the dashboard.
 
 It also serves the dashboard ([`@brevi/app`](https://www.npmjs.com/package/@brevi/app)) and exposes the HTTP + WebSocket API the dashboard talks to (run streaming, connections, repository mapping).
 

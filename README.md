@@ -9,10 +9,7 @@
 
 A local sandbox and orchestrator for coding agents.
 
-Connect your machine to Linear and GitHub, add the **`brevi`** label to a ticket, and brevi picks it up:
-
-- **SPIKE tickets** → runs a coding agent to research the question and posts the findings back to the Linear issue as a comment.
-- **Implementation tickets** → runs a coding agent on a checkout of the mapped repo, pushes a branch, and opens a GitHub PR. A demo (screenshots or a screen recording) captured by the agent is kept with the run in the local dashboard.
+Connect your machine to Linear and GitHub, add the **`brevi`** label to a ticket, and brevi picks it up: it runs a coding agent on a checkout of the mapped repo, pushes a branch, and opens a GitHub PR. A demo (screenshots or a screen recording) captured by the agent is kept with the run in the local dashboard.
 
 Every execution runs in an isolated sandbox. On Linux with KVM, sandboxes are [Firecracker](https://firecracker-microvm.github.io/) microVMs; elsewhere a local process sandbox is used for development.
 
@@ -29,7 +26,7 @@ On a fresh machine this runs the init flow (one question: the sandbox provider),
 - **Codex**: found on this machine, either `OPENAI_API_KEY` or the Codex CLI login (`~/.codex/auth.json`).
 - **Linear**: browser OAuth (with `connect.linearClientId`/`Secret` configured), else a pasted API key.
 
-Every credential is verified live before saving and stored in `~/.brevi/config.json`; agent keys are checked with a 1-token probe on the provider's cheapest model (`claude-haiku-4-5` / `gpt-5-nano`). All brevi state lives under `~/.brevi/`; the orchestrator reads no environment variables. Manual key entry remains as a fallback on every provider. Then pick repositories straight from your GitHub account, assign yourself a Linear issue, and add the `brevi` label; add `SPIKE` for research-only tickets.
+Every credential is verified live before saving and stored in `~/.brevi/config.json`; agent keys are checked with a 1-token probe on the provider's cheapest model (`claude-haiku-4-5` / `gpt-5-nano`). All brevi state lives under `~/.brevi/`; the orchestrator reads no environment variables. Manual key entry remains as a fallback on every provider. Then pick repositories straight from your GitHub account, assign yourself a Linear issue, and add the `brevi` label.
 
 Other commands: `brevi start` (headless, no browser), `brevi stop` (shut down a running instance), `brevi status`, `brevi update` (update an installed CLI to the latest release on npm, restarting a running instance so the new version takes effect), and `brevi init` (rerun the sandbox provider pick any time).
 
@@ -39,13 +36,13 @@ Other commands: `brevi start` (headless, no browser), `brevi stop` (shut down a 
 Linear (assigned issues with the brevi label)
    │  poll
    ▼
-orchestrator ──► classify: SPIKE │ implementation
+orchestrator ──► queue eligible tickets
    │
    ▼
 sandbox (Firecracker microVM / process)
    │  git checkout of the mapped repo + coding agent (Claude Code, headless)
    ▼
-implementation → branch + PR (demo stays local)       SPIKE → research comment on the issue
+branch + PR (demo stays local)
 ```
 
 State lives in `~/.brevi/`: `config.json`, run history + artifacts under `runs/`, VM images under `images/`.

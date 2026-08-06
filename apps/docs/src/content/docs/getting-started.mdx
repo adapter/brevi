@@ -65,11 +65,11 @@ Working on brevi itself? Clone [adapter/brevi](https://github.com/adapter/brevi)
 
 4. **Label a Linear ticket**
 
-   Assign an issue to yourself, leave it in an unstarted/backlog state, and add the `brevi` label. Add `SPIKE` to the title (or as a label) for research-only tickets.
+   Assign an issue to yourself, leave it in an unstarted/backlog state, and add the `brevi` label.
 
 5. **Watch the run**
 
-   brevi polls Linear every 60 seconds, queues eligible tickets, and runs them one at a time. The dashboard streams the agent's output live. For Claude implementation runs, an adversarial Codex review and fix pass can run before the branch is pushed (see [Configuration](/reference/configuration/#codex-review)); when the run finishes you get a pull request (with the agent's demo kept on the run's page), or a research comment on the issue for a SPIKE.
+   brevi polls Linear every 60 seconds, queues eligible tickets, and runs them one at a time. The dashboard streams the agent's output live. For Claude runs, an adversarial Codex review and fix pass can run before the branch is pushed (see [Configuration](/reference/configuration/#codex-review)); when the run finishes you get a pull request, with the agent's demo kept on the run's page.
 
 </Steps>
 
@@ -79,13 +79,13 @@ Working on brevi itself? Clone [adapter/brevi](https://github.com/adapter/brevi)
 Linear (issues assigned to you with the brevi label)
    │  poll every pollIntervalSeconds
    ▼
-orchestrator ──► classify: SPIKE │ implementation
+orchestrator ──► queue eligible tickets
    │
    ▼
 sandbox (Firecracker microVM / process)
    │  clone of the mapped repo + the coding agent, headless
    ▼
-implementation → branch + PR with demo artifacts      SPIKE → research comment
+branch + PR with demo artifacts
 ```
 
 State lives under `~/.brevi/`:

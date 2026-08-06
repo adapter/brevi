@@ -21,10 +21,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 ## What brevi does
 
-You connect your machine to Linear and GitHub, then add the **`brevi`** label to a ticket and assign it to yourself. brevi polls Linear, picks the ticket up, and runs a coding agent against a checkout of the mapped repository inside a sandbox:
-
-- **Implementation tickets** → a branch `brevi/<ticket-id>` is force-pushed and a pull request is opened; the demo the agent captured (screenshots or a recording) stays with the run in the dashboard.
-- **SPIKE tickets** → no code changes; the research is posted back to the Linear issue as a comment.
+You connect your machine to Linear and GitHub, then add the **`brevi`** label to a ticket and assign it to yourself. brevi polls Linear, picks the ticket up, and runs a coding agent against a checkout of the mapped repository inside a sandbox. A branch `brevi/<ticket-id>` is force-pushed and a pull request is opened; the demo the agent captured (screenshots or a recording) stays with the run in the dashboard.
 
 Everything runs locally. All state lives under `~/.brevi/`: config, run history, artifacts, and VM images.
 
@@ -39,8 +36,8 @@ Everything runs locally. All state lives under `~/.brevi/`: config, run history,
 		network. Elsewhere a process sandbox keeps development moving.
 	</Card>
 	<Card title="Demos, not just diffs" icon="laptop">
-		Implementation runs are required to produce evidence under `.brevi/demo/` (real
-		screenshots or a recording), kept with the run and viewable in the dashboard.
+		Runs are required to produce evidence under `.brevi/demo/` (real screenshots
+		or a recording), kept with the run and viewable in the dashboard.
 	</Card>
 	<Card title="A live dashboard" icon="rocket">
 		`brevi` serves a dashboard on `localhost:4400`: the eligible ticket queue,

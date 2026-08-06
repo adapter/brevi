@@ -1,6 +1,6 @@
 # brevi
 
-A local sandbox and orchestrator for coding agents: label a Linear ticket `brevi`, get back a GitHub PR (implementation tickets) or a research comment on the issue (SPIKE tickets). Runs execute in Firecracker microVMs (isolated) on Linux with KVM; elsewhere a process provider is used as a fallback, which provides no isolation (commands run directly on the host as the current user).
+A local sandbox and orchestrator for coding agents: label a Linear ticket `brevi`, get back a GitHub PR. Runs execute in Firecracker microVMs (isolated) on Linux with KVM; elsewhere a process provider is used as a fallback, which provides no isolation (commands run directly on the host as the current user).
 
 ## Workspaces
 
