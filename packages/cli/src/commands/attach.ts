@@ -42,6 +42,25 @@ export function registerAttachCommand(program: Command): void {
       console.log(pc.dim(`Attaching to run ${runId} (${run.ticket.identifier})...`));
 
       const exitCode = await new Promise<number>((resolve) => {
+        // Ctrl+C goes to the whole foreground process group: the interactive
+        // session receives it directly and decides what it means. The wrapper
+        // ignores it so it survives to release the sandbox once the child
+        // exits; without this, Node's default SIGINT exit would skip the
+        // /release below and leave a rehydrated VM running until the reaper.
+        // SIGTERM targets the wrapper alone, so it is forwarded to the child;
+        // the exit handler then resolves and the release still runs.
+        const onSigint = (): void => {};
+        const onSigterm = (): void => {
+          child.kill("SIGTERM");
+        };
+        process.on("SIGINT", onSigint);
+        process.on("SIGTERM", onSigterm);
+        const settle = (code: number): void => {
+          process.off("SIGINT", onSigint);
+          process.off("SIGTERM", onSigterm);
+          resolve(code);
+        };
+
         const child =
           attach.kind === "local"
             ? spawn("/bin/sh", [attach.scriptPath], { stdio: "inherit" })
@@ -66,9 +85,9 @@ export function registerAttachCommand(program: Command): void {
 
         child.on("error", (err) => {
           console.error(pc.red(`✖ ${errorMessage(err)}`));
-          resolve(1);
+          settle(1);
         });
-        child.on("exit", (code) => resolve(code ?? 0));
+        child.on("exit", (code) => settle(code ?? 0));
       });
 
       // Stop the VM again; the disk stays until the retention window ends.

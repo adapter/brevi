@@ -99,8 +99,13 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #pollTimer?: NodeJS.Timeout;
   /** One pending resume timer per run waiting on a usage-limit reset. */
   #resumeTimers = new Map<string, NodeJS.Timeout>();
-  /** Sandboxes rehydrated for interactive resume, keyed by run id; a promise so concurrent resume calls share one boot. */
-  #attached = new Map<string, Promise<Sandbox>>();
+  /**
+   * Sandboxes rehydrated for interactive resume, keyed by run id; a promise so
+   * concurrent resume calls share one boot. `clients` counts the attach
+   * sessions sharing it, so a release only stops the VM when the last one
+   * detaches.
+   */
+  #attached = new Map<string, { pending: Promise<Sandbox>; clients: number }>();
   /** One pending reap timer per run with a retained sandbox, keyed by run id. */
   #reapTimers = new Map<string, NodeJS.Timeout>();
   #stopped = false;
@@ -678,14 +683,15 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       );
     }
 
-    let pending = this.#attached.get(runId);
-    if (!pending) {
-      pending = (async () => {
+    let entry = this.#attached.get(runId);
+    if (!entry) {
+      const pending = (async () => {
         const env = collectAgentEnv(this.config);
         env.PLAYWRIGHT_BROWSERS_PATH = await playwrightBrowsersPath(provider.name);
         return provider.rehydrate({ id: runId, env });
       })();
-      this.#attached.set(runId, pending);
+      entry = { pending, clients: 0 };
+      this.#attached.set(runId, entry);
       pending.catch(() => this.#attached.delete(runId)); // a failed boot must not poison later resumes
       this.store.appendEvent({
         runId,
@@ -695,7 +701,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         text: "booting retained sandbox for interactive resume",
       });
     }
-    const sandbox = await pending;
+    const sandbox = await entry.pending;
+    entry.clients += 1;
 
     // Installed fresh on every resume call: cheap, and keeps credentials
     // current if they changed since the sandbox was retained.
@@ -727,16 +734,19 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   }
 
   /**
-   * Stop a resumed sandbox's compute again, keeping its disk until the
-   * retention window ends. A no-op when nothing is currently attached.
+   * Detach one resume client; stops the sandbox's compute again (keeping its
+   * disk until the retention window ends) once the last client is gone. A
+   * no-op when nothing is currently attached.
    */
   async releaseRun(runId: string): Promise<Run> {
     const run = this.store.get(runId);
     if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
-    const pending = this.#attached.get(runId);
-    if (pending) {
+    const entry = this.#attached.get(runId);
+    if (entry) {
+      entry.clients = Math.max(0, entry.clients - 1);
+      if (entry.clients > 0) return this.store.get(runId) ?? run;
       this.#attached.delete(runId);
-      const sandbox = await pending.catch(() => undefined);
+      const sandbox = await entry.pending.catch(() => undefined);
       await sandbox?.release().catch(() => undefined);
       const retainedUntil = this.store.get(runId)?.sandbox.retainedUntil;
       if (retainedUntil) {
@@ -769,8 +779,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     await Promise.allSettled(this.#running.values());
     for (const timer of this.#reapTimers.values()) clearTimeout(timer);
     this.#reapTimers.clear();
-    for (const pending of this.#attached.values()) {
-      const sandbox = await pending.catch(() => undefined);
+    for (const entry of this.#attached.values()) {
+      const sandbox = await entry.pending.catch(() => undefined);
       await sandbox?.release().catch(() => undefined);
     }
     this.#attached.clear();
@@ -818,10 +828,10 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     if (timer) clearTimeout(timer);
     this.#reapTimers.delete(runId);
 
-    const pending = this.#attached.get(runId);
-    if (pending) {
+    const entry = this.#attached.get(runId);
+    if (entry) {
       this.#attached.delete(runId);
-      const sandbox = await pending.catch(() => undefined);
+      const sandbox = await entry.pending.catch(() => undefined);
       await sandbox?.destroy().catch(() => undefined);
     } else if (this.store.get(runId)?.sandbox.retainedUntil) {
       await this.#provider?.discard(runId).catch(() => undefined);
