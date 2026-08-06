@@ -20,7 +20,7 @@ import { Pin } from "./Icons";
  */
 type ConsoleRow =
   | { kind: "thinking"; ts: string; durationMs: number; pending: boolean; pendingSince: number }
-  | { kind: "event"; event: Exclude<RunEvent, { type: "thinking" }> };
+  | { kind: "event"; event: Exclude<RunEvent, { type: "thinking" } | { type: "cost" }> };
 
 type ThinkingRowData = Extract<ConsoleRow, { kind: "thinking" }>;
 
@@ -69,6 +69,8 @@ export function Console({
       // runner-side filter, thinking-only messages) get no row at all, so
       // they cannot sit between two thinking events and defeat coalescing.
       if (event.type === "agent" && toAgentBlocks(event.event).length === 0) continue;
+      // Usage reports have no console-visible content; the run's CostBadge surfaces them instead.
+      if (event.type === "cost") continue;
       if (event.type !== "thinking") {
         out.push({ kind: "event", event });
         continue;

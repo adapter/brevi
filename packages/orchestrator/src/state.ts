@@ -3,7 +3,9 @@ import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promise
 import { join } from "node:path";
 import {
   RUNS_DIR,
+  summarizeCosts,
   type ArtifactRef,
+  type CostEntry,
   type Run,
   type RunAttempt,
   type RunEvent,
@@ -77,6 +79,8 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
       }
       // Runs persisted before attempts existed.
       if (!Array.isArray(run.attempts)) run = { ...run, attempts: [] };
+      // Runs persisted before costs existed.
+      if (!Array.isArray(run.costs)) run = { ...run, costs: [] };
       if (!isTerminal(run.status) && run.status !== "waiting") {
         run = {
           ...run,
@@ -98,6 +102,7 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
       sandbox: { provider },
       createdAt: new Date().toISOString(),
       attempts: [],
+      costs: [],
     };
     await mkdir(this.artifactsDir(run.id), { recursive: true });
     await this.#persist(run);
@@ -175,6 +180,15 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
       });
     }
     this.appendEvent({ runId, ts: new Date().toISOString(), type: "artifact", artifact });
+  }
+
+  /** Append a cost entry, recompute the run's totals, and log the event. */
+  async addCost(runId: string, entry: CostEntry): Promise<void> {
+    const run = this.#runs.get(runId);
+    if (!run) throw new Error(`unknown run ${runId}`);
+    const costs = [...run.costs, entry];
+    await this.update(runId, { costs, costTotals: summarizeCosts(costs) });
+    this.appendEvent({ runId, ts: new Date().toISOString(), type: "cost", entry });
   }
 
   async readEvents(runId: string): Promise<RunEvent[]> {

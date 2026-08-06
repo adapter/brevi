@@ -3,6 +3,7 @@ import { join, sep } from "node:path";
 import { execa, type Result as ExecaResult } from "execa";
 import { BREVI_HOME, WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type LimitInfo, type RepoConfig, type RunResult, type Ticket } from "@brevi/shared";
 import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
+import { usageCollector } from "./costs.js";
 import { authenticatedRemote, createPullRequest, plainRemote } from "./github.js";
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
@@ -57,6 +58,11 @@ export async function executeRun(ctx: RunContext): Promise<void> {
   const noteLimit = (line: string): void => {
     detectedLimit = detectLimit(line, limitProvider) ?? detectedLimit;
   };
+
+  // Assigned once the agent sinks exist; persists an in-flight execution's
+  // usage on paths that never reach the post-exec snapshot in runAgent
+  // (cancellation, a sandbox that dies mid-exec).
+  let recordPendingCost = async (): Promise<void> => {};
 
   const attempt = await store.beginAttempt(run.id);
   try {
@@ -121,6 +127,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     const trackThinking = thinkingTracker((phase, durationMs) => {
       store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "thinking", phase, durationMs });
     });
+    let usage = usageCollector();
     const stdoutSink = lineSink((line) => {
       let event: unknown;
       try {
@@ -130,6 +137,10 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         log("stdout", line);
         return;
       }
+      // Observed before the stream_event/noise filtering below: token_count
+      // and result events must reach the collector even though most other
+      // event types are dropped from the persisted log.
+      usage.observe(event);
       if (isDict(event) && event.type === "stream_event") {
         // Subagent streams (parent_tool_use_id set) carry their own thinking
         // block boundaries; only the top-level assistant stream drives the
@@ -146,6 +157,20 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       log("stderr", line);
     });
 
+    let pendingCostLabel: string | undefined;
+    recordPendingCost = async () => {
+      if (!pendingCostLabel) return;
+      const label = pendingCostLabel;
+      pendingCostLabel = undefined;
+      stdoutSink.flush();
+      stderrSink.flush();
+      const provider = agentProvider(config);
+      const subscription = provider === "claude" ? !config.agent.anthropicApiKey : !config.agent.codexApiKey;
+      const entry = usage.snapshot({ label, provider, subscription });
+      if (entry) await store.addCost(run.id, entry);
+      usage = usageCollector();
+    };
+
     const activeSandbox = sandbox;
     const runAgent = async (prompt: string, model: string | undefined, label: string, extraArgs: string[] = []): Promise<void> => {
       // --include-partial-messages exists only so the stream carries thinking
@@ -155,6 +180,9 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       if (model) args.push("--model", model);
       args.push(...extraArgs, ...config.agent.args);
       log("system", `running ${config.agent.command} (${label}${model ? ` on ${model}` : ""}, timeout ${config.sandbox.timeoutMinutes}m)`);
+      // Labeled before the racing await so an abort still knows which
+      // execution's usage to persist.
+      pendingCostLabel = attempt.number > 1 ? `${label} (attempt ${attempt.number})` : label;
       const exec = await raceWithAbort(
         activeSandbox.exec(config.agent.command, args, {
           cwd: activeSandbox.workspacePath,
@@ -165,8 +193,9 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         }),
         signal,
       );
-      stdoutSink.flush();
-      stderrSink.flush();
+      // Recorded before the exitCode check so failed and limit-ended
+      // executions still keep whatever usage they burned.
+      await recordPendingCost();
       if (exec.exitCode !== 0) {
         if (detectedLimit) throw new AgentLimitError(detectedLimit);
         throw new Error(`agent exited with code ${exec.exitCode} (${label})`);
@@ -218,9 +247,15 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     }
     throwIfAborted(signal);
     await store.endAttempt(run.id, { outcome: "completed" });
-    await store.setStatus(run.id, "completed", { finishedAt: new Date().toISOString(), result });
+    await store.setStatus(run.id, "completed", {
+      finishedAt: new Date().toISOString(),
+      result: { ...result, costTotals: store.get(run.id)?.costTotals },
+    });
     log("system", `run completed: ${result.prUrl ?? result.commentUrl ?? "done"}`);
   } catch (error) {
+    // An execution interrupted mid-flight (cancellation, a sandbox failure)
+    // never reached its snapshot in runAgent; keep the spend it burned.
+    await recordPendingCost().catch(() => undefined);
     const cancelled = signal.aborted || error instanceof RunCancelledError;
     const message = error instanceof Error ? error.message : String(error);
     const current = store.get(run.id);
