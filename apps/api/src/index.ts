@@ -7,7 +7,7 @@ import { cors } from "hono/cors";
  * Local brevi orchestrators use these endpoints so one-click Connect works
  * without every user registering their own OAuth apps. This worker holds
  * brevi's registered app credentials; the Linear client secret never leaves
- * it. No user tokens are stored — every response goes straight back to the
+ * it. No user tokens are stored; every response goes straight back to the
  * requesting orchestrator, which persists them in the user's ~/.brevi.
  */
 

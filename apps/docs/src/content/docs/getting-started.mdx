@@ -17,7 +17,7 @@ brevi runs on your machine: a CLI, an orchestrator that polls Linear, and a dash
 
 ## Install
 
-The CLI is published as [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli) — run it with `npx`:
+The CLI is published as [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli); run it with `npx`:
 
 ```sh
 npx @brevi/cli
@@ -40,28 +40,28 @@ Working on brevi itself? Clone [adapter/brevi](https://github.com/adapter/brevi)
 
 1. **Run `brevi`**
 
-   The first launch (no `~/.brevi/config.json` yet) starts with the init flow, which asks one question — the sandbox provider:
+   The first launch (no `~/.brevi/config.json` yet) starts with the init flow, which asks a single question, the sandbox provider:
 
-   - `auto` (recommended) — Firecracker on Linux with KVM, the process sandbox everywhere else.
-   - `firecracker` — fails fast at startup if the host isn't ready.
-   - `process` — no isolation, development only.
+   - `auto` (recommended): Firecracker on Linux with KVM, the process sandbox everywhere else.
+   - `firecracker`: fails fast at startup if the host isn't ready.
+   - `process`: no isolation, development only.
 
-   The orchestrator then binds `http://localhost:4400`, serves the dashboard, and opens it in your browser. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up. To change the sandbox provider later, run `brevi init` — it keeps everything else in the config (credentials, repositories) untouched.
+   The orchestrator then binds `http://localhost:4400`, serves the dashboard, and opens it in your browser. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up. To change the sandbox provider later, run `brevi init`; it keeps everything else in the config (credentials, repositories) untouched.
 
 2. **Open the Connections rail**
 
    The dashboard's **Connections** panel is where every credential is set. Each provider has a **Connect** button that tries automatic strategies first and only falls back to a manual key input:
 
-   - **GitHub** — your `gh` CLI login, otherwise an OAuth device code (a code to type on github.com).
-   - **Claude** — a Claude Code login discovered on this machine (macOS Keychain or `~/.claude`), or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` in the orchestrator's environment.
-   - **Codex** — `OPENAI_API_KEY`, or the Codex CLI login at `~/.codex/auth.json` (including ChatGPT logins).
-   - **Linear** — a browser OAuth round trip, otherwise a pasted personal API key.
+   - **GitHub**: your `gh` CLI login, otherwise an OAuth device code (a code to type on github.com).
+   - **Claude**: a Claude Code login discovered on this machine (macOS Keychain or `~/.claude`), or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` in the orchestrator's environment.
+   - **Codex**: `OPENAI_API_KEY`, or the Codex CLI login at `~/.codex/auth.json` (including ChatGPT logins).
+   - **Linear**: a browser OAuth round trip, otherwise a pasted personal API key.
 
    Every credential is verified against its provider before it is saved, so "Connected" means the agent can actually run. Details in [Connections](/guides/connections/).
 
 3. **Pick repositories**
 
-   Once GitHub is connected, the **Repositories** section lists the repos your token can see, most recently pushed first. Add the ones brevi may work on. Each becomes a repo *key* (the repo name) mapped to `owner/name` and its default branch. One repo is the default — unmatched tickets run against it.
+   Once GitHub is connected, the **Repositories** section lists the repos your token can see, most recently pushed first. Add the ones brevi may work on. Each becomes a repo *key* (the repo name) mapped to `owner/name` and its default branch. One repo is the default; unmatched tickets run against it.
 
 4. **Label a Linear ticket**
 
@@ -98,12 +98,12 @@ State lives under `~/.brevi/`:
 | `~/.brevi/workspaces/` | Per-run scratch space (removed when a run ends) |
 
 <Aside type="tip">
-brevi reads no environment variables of its own for configuration — everything is in `~/.brevi/config.json`. Env vars like `ANTHROPIC_API_KEY` are only ever *discovered* by a Connect button and then stored.
+brevi reads no environment variables of its own for configuration: everything is in `~/.brevi/config.json`. Env vars like `ANTHROPIC_API_KEY` are only ever *discovered* by a Connect button and then stored.
 </Aside>
 
 ## Next steps
 
-- [Connections](/guides/connections/) — the full strategy chain per provider.
-- [Tickets and runs](/guides/tickets/) — eligibility, repo routing, rerun semantics.
-- [Sandboxes](/guides/sandboxes/) — provider selection and the Firecracker host setup.
-- [Configuration](/reference/configuration/) — every config field.
+- [Connections](/guides/connections/): the full strategy chain per provider.
+- [Tickets and runs](/guides/tickets/): eligibility, repo routing, rerun semantics.
+- [Sandboxes](/guides/sandboxes/): provider selection and the Firecracker host setup.
+- [Configuration](/reference/configuration/): every config field.

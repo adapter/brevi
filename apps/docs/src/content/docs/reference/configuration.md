@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Every field in ~/.brevi/config.json — Linear, GitHub, repositories, agent, sandbox, connect, triggers and server settings.
+description: "Every field in ~/.brevi/config.json: Linear, GitHub, repositories, agent, sandbox, connect, triggers and server settings."
 ---
 
 brevi's entire configuration is one JSON file at **`~/.brevi/config.json`**. It is created by `brevi init` and then mostly written for you by the dashboard. The file is validated on load; an unknown shape or an out-of-range value makes brevi refuse to start rather than run with a surprise.
@@ -69,7 +69,7 @@ Implementation tickets will not run without it. SPIKEs will.
 
 ## `repos` and `defaultRepo`
 
-`repos` maps a **repo key** to a repository. The key is what tickets route on — a `repo:<key>` label, a bare label, or a Linear project name. The dashboard uses the repository name as the key when you add a repo.
+`repos` maps a **repo key** to a repository. The key is what tickets route on: a `repo:<key>` label, a bare label, or a Linear project name. The dashboard uses the repository name as the key when you add a repo.
 
 ```json
 {
@@ -96,9 +96,9 @@ Implementation tickets will not run without it. SPIKEs will.
 | `remote` | string | required | `"owner/name"`. Validated against that shape. |
 | `defaultBranch` | string | `"main"` | Cloned from, and the base branch of the PR. |
 | `projects` | string[] | `[]` | Linear project names whose tickets run against this repo. Matched case-insensitively; editable per repo in the dashboard's Connections panel. |
-| `path` | string | – | Local checkout to clone from instead of the network. |
-| `devCommand` | string | – | Command that starts a dev server; makes the agent capture Playwright screenshots for the demo. |
-| `devUrl` | string | – | URL the dev server listens on, so the agent knows when it's up and what to screenshot. |
+| `path` | string | - | Local checkout to clone from instead of the network. |
+| `devCommand` | string | - | Command that starts a dev server; makes the agent capture Playwright screenshots for the demo. |
+| `devUrl` | string | - | URL the dev server listens on, so the agent knows when it's up and what to screenshot. |
 
 `defaultRepo` is the key used when a ticket matches no mapping. It must name an existing entry. If you clear it, brevi falls back to the first repo rather than stranding tickets.
 
@@ -110,7 +110,7 @@ The coding agent executed inside the sandbox.
 | --- | --- | --- | --- |
 | `command` | string | `"claude"` | The agent CLI to run inside the sandbox. |
 | `args` | string[] | `[]` | Extra arguments appended after brevi's own. |
-| `model` | string | – | Passed as `--model` when set. |
+| `model` | string | - | Passed as `--model` when set. |
 | `anthropicApiKey` | string | `""` | Exported into the sandbox as `ANTHROPIC_API_KEY`. |
 | `claudeCodeOauthToken` | string | `""` | Claude Code login, exported as `CLAUDE_CODE_OAUTH_TOKEN`. |
 | `codexApiKey` | string | `""` | Exported as `OPENAI_API_KEY`. |
@@ -118,7 +118,7 @@ The coding agent executed inside the sandbox.
 
 brevi always invokes the agent as `<command> -p <prompt> --output-format stream-json --verbose --dangerously-skip-permissions`, then `--model <model>` if set, then `args`. Those are Claude Code's flags, so a different `command` has to accept the same shape.
 
-At least one of the four credential fields must be set or every run fails at startup with `no agent credentials configured`. Populate them with the Connections rail rather than by hand — the dashboard verifies keys before saving.
+At least one of the four credential fields must be set or every run fails at startup with `no agent credentials configured`. Populate them with the Connections rail rather than by hand; the dashboard verifies keys before saving.
 
 ## `sandbox`
 

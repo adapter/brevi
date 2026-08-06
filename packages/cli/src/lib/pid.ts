@@ -33,7 +33,7 @@ export function removePidFile(): void {
 
 /**
  * Pid recorded in the pid file, or null when there is no file or the pid no
- * longer refers to the server that wrote it — the process is dead, or the OS
+ * longer refers to the server that wrote it: the process is dead, or the OS
  * has reused the pid and its start time no longer matches the recorded one.
  * Stale files are removed on read.
  */

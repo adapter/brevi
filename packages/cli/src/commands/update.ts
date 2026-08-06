@@ -46,7 +46,7 @@ async function runUpdate(checkOnly: boolean): Promise<void> {
   console.log(
     pc.yellow(`! Update available: ${pc.bold(current)} → ${pc.bold(latest)}`),
   );
-  // brevi has breaking changes between releases — always point at the changelog.
+  // brevi has breaking changes between releases, so always point at the changelog.
   console.log(pc.dim(`  What changed: ${CHANGELOG_URL}`));
 
   if (checkOnly) {
@@ -89,7 +89,7 @@ async function runUpdate(checkOnly: boolean): Promise<void> {
 /**
  * Restarts a running server so the freshly installed version takes effect:
  * graceful stop (same escalation as `brevi stop`), then a detached headless
- * `brevi start` from our own bin path — the install replaced its contents in
+ * `brevi start` from our own bin path. The install replaced its contents in
  * place, so the new process runs the new version. No-op when nothing is
  * running.
  */
@@ -99,13 +99,13 @@ async function restartIfRunning(latest: string): Promise<void> {
 
   console.log(`\nbrevi is running (pid ${pid}); restarting it on ${pc.bold(latest)}...`);
   if (!(await stopServer(pid))) {
-    console.error(pc.red("✖ Could not stop the running instance — restart it manually with `brevi start`."));
+    console.error(pc.red("✖ Could not stop the running instance; restart it manually with `brevi start`."));
     process.exit(1);
   }
 
   const entry = process.argv[1];
   if (!entry) {
-    console.error(pc.red("✖ Could not work out how to relaunch brevi — start it with `brevi start`."));
+    console.error(pc.red("✖ Could not work out how to relaunch brevi; start it with `brevi start`."));
     process.exit(1);
   }
 
@@ -119,7 +119,7 @@ async function restartIfRunning(latest: string): Promise<void> {
 
   const newPid = await waitForPidFile(RESTART_TIMEOUT_MS);
   if (newPid === null) {
-    console.log(pc.yellow("! Started the new version but couldn't confirm it's up — check `brevi status`."));
+    console.log(pc.yellow("! Started the new version but couldn't confirm it's up; check `brevi status`."));
     return;
   }
   console.log(pc.green(`✔ Restarted brevi on ${latest} (pid ${newPid}).`));

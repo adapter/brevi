@@ -52,7 +52,7 @@
 }
 
 /*
-  brevi dashboard — "cold room, warm signal"
+  brevi dashboard: "cold room, warm signal"
 
   The chrome is a cold indigo-ink. The ONLY warm colour on the screen is work that
   is happening right now, so the eye lands on the live run before anything else.
@@ -301,7 +301,7 @@
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
 }
-/* The dashboard is permanently dark — one theme, straight off the palette. */
+/* The dashboard is permanently dark: one theme, straight off the palette. */
 :root,
 .dark {
   --background: var(--color-ink-950);

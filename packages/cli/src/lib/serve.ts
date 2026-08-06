@@ -48,7 +48,7 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
     try {
       await open(handle.url);
     } catch {
-      console.log(pc.dim("  Could not open a browser automatically — open the URL above manually."));
+      console.log(pc.dim("  Could not open a browser automatically; open the URL above manually."));
     }
   } else {
     console.log(pc.dim("  Open that URL in a browser to view the dashboard."));

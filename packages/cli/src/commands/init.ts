@@ -36,7 +36,7 @@ export async function runInit({ firstRun = false }: RunInitOptions = {}): Promis
   intro(pc.bgCyan(pc.black(firstRun ? " brevi " : " brevi init ")));
 
   if (firstRun) {
-    log.info(`No config found at ${pc.dim(CONFIG_PATH)} — running first-time setup.`);
+    log.info(`No config found at ${pc.dim(CONFIG_PATH)}, so running first-time setup.`);
   }
 
   const existing = await loadExisting();
@@ -91,7 +91,7 @@ export async function runInit({ firstRun = false }: RunInitOptions = {}): Promis
 
   outro(
     firstRun
-      ? "Setup complete — starting brevi..."
+      ? "Setup complete. Starting brevi..."
       : [
           "Next steps:",
           `  1. Run ${pc.cyan("npx @brevi/cli")} to start brevi and open the dashboard.`,
@@ -121,14 +121,14 @@ async function collectSandboxProvider(existing: BreviConfig | undefined): Promis
         {
           value: "auto" as const,
           label: "auto",
-          hint: "recommended — firecracker on Linux with KVM, process otherwise",
+          hint: "recommended: firecracker on Linux with KVM, process otherwise",
         },
         {
           value: "firecracker" as const,
           label: "firecracker",
-          hint: "Linux + KVM required — strongest isolation",
+          hint: "strongest isolation; requires Linux + KVM",
         },
-        { value: "process" as const, label: "process", hint: "no isolation — dev only" },
+        { value: "process" as const, label: "process", hint: "no isolation, dev only" },
       ],
     }),
   );
@@ -144,7 +144,7 @@ async function collectSandboxProvider(existing: BreviConfig | undefined): Promis
 
 function summarize(provider: string, existing: BreviConfig | undefined): string {
   const connection = (label: string, connected: boolean | undefined): string =>
-    `${label}: ${connected ? "connected" : "not connected — use the dashboard"}`;
+    `${label}: ${connected ? "connected" : "not connected (use the dashboard)"}`;
   const repoKeys = existing ? Object.keys(existing.repos) : [];
 
   return [
@@ -155,6 +155,6 @@ function summarize(provider: string, existing: BreviConfig | undefined): string 
     connection("Codex", Boolean(existing?.agent.codexApiKey)),
     repoKeys.length > 0
       ? `Repositories: ${repoKeys.join(", ")}`
-      : "Repositories: none — pick them in the dashboard once GitHub is connected",
+      : "Repositories: none; pick them in the dashboard once GitHub is connected",
   ].join("\n");
 }

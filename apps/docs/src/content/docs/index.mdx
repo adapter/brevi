@@ -1,9 +1,9 @@
 ---
 title: brevi
-description: A local sandbox and orchestrator for coding agents — add the brevi label to a Linear ticket and get back a pull request.
+description: A local sandbox and orchestrator for coding agents. Add the brevi label to a Linear ticket and get back a pull request.
 template: splash
 hero:
-  tagline: A local sandbox and orchestrator for coding agents. Linear tickets in, pull requests with demos out — all executed on your own machine.
+  tagline: A local sandbox and orchestrator for coding agents. Linear tickets in, pull requests with demos out, all executed on your own machine.
   image:
     file: ../../assets/logo.png
     alt: brevi
@@ -26,12 +26,12 @@ You connect your machine to Linear and GitHub, then add the **`brevi`** label to
 - **Implementation tickets** → a branch `brevi/<ticket-id>` is force-pushed and a pull request is opened; the demo the agent captured (screenshots or a recording) stays with the run in the dashboard.
 - **SPIKE tickets** → no code changes; the research is posted back to the Linear issue as a comment.
 
-Everything runs locally. All state lives under `~/.brevi/` — config, run history, artifacts, and VM images.
+Everything runs locally. All state lives under `~/.brevi/`: config, run history, artifacts, and VM images.
 
 <CardGrid>
 	<Card title="One-click connections" icon="approve-check">
-		brevi finds credentials that are already on your machine — the `gh` CLI, your Claude
-		Code login, a Codex/ChatGPT login — verifies them live, and stores them. No copying
+		brevi finds credentials that are already on your machine (the `gh` CLI, your Claude
+		Code login, a Codex/ChatGPT login), verifies them live, and stores them. No copying
 		keys, no environment variables.
 	</Card>
 	<Card title="Real isolation" icon="seti:shell">
@@ -39,8 +39,8 @@ Everything runs locally. All state lives under `~/.brevi/` — config, run histo
 		network. Elsewhere a process sandbox keeps development moving.
 	</Card>
 	<Card title="Demos, not just diffs" icon="laptop">
-		Implementation runs are required to produce evidence under `.brevi/demo/` — real
-		screenshots or a recording — kept with the run and viewable in the dashboard.
+		Implementation runs are required to produce evidence under `.brevi/demo/` (real
+		screenshots or a recording), kept with the run and viewable in the dashboard.
 	</Card>
 	<Card title="A live dashboard" icon="rocket">
 		`brevi` serves a dashboard on `localhost:4400`: the eligible ticket queue,

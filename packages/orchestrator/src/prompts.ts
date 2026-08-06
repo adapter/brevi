@@ -19,8 +19,8 @@ export function buildImplementationPrompt(
 ): string {
   const summaryInstruction =
     prDescription === "concise"
-      ? "2. `.brevi/summary.md` — a very concise pull-request description: one or two sentences on what changed and why, then at most five short bullets covering how you verified it and anything reviewers must not miss. No headings, no restating the ticket."
-      : "2. `.brevi/summary.md` — a pull-request-ready description of the change: what changed and why, how you verified it, and anything reviewers should pay attention to.";
+      ? "2. `.brevi/summary.md`: a very concise pull-request description with one or two sentences on what changed and why, then at most five short bullets covering how you verified it and anything reviewers must not miss. No headings, no restating the ticket."
+      : "2. `.brevi/summary.md`: a pull-request-ready description of the change covering what changed and why, how you verified it, and anything reviewers should pay attention to.";
   const demoInstructions = repo.devCommand
     ? [
         `- This repo has a dev server. Start it with \`${repo.devCommand}\`${
@@ -41,7 +41,8 @@ export function buildImplementationPrompt(
     "## Rules",
     "- Follow the repository's existing conventions (read its README, package manifests, and lint/test setup first).",
     "- Run the repo's tests/linters relevant to your change and fix what you break.",
-    "- Leave all changes uncommitted in the working tree. Do NOT run `git commit`, `git push`, or create branches — committing is handled for you.",
+    "- Leave all changes uncommitted in the working tree. Do NOT run `git commit`, `git push`, or create branches; committing is handled for you.",
+    "- Never use em dashes (\u2014) or spaced hyphens standing in for them in anything you write: code, comments, docs, `.brevi/summary.md`, PR titles or bodies, and ticket comments. Reword the sentence instead: split it, or use a comma, colon, or parentheses.",
     "",
     "## Required outputs (all three are mandatory)",
     "1. Code changes in the working tree that implement the ticket.",
@@ -60,10 +61,11 @@ export function buildSpikePrompt(ticket: Ticket): string {
     ticketSection(ticket),
     "",
     "## Required output",
-    "Write your research to `.brevi/research.md` — the only file you may create or modify. Structure it as:",
-    "- `## Context` — what the question is and why it matters here",
-    "- `## Findings` — what you learned, with concrete file references from this codebase",
-    "- `## Options` — viable approaches with their tradeoffs",
-    "- `## Recommendation` — what you would do and why",
+    "Never use em dashes (\u2014) or spaced hyphens standing in for them anywhere in your writing. Reword the sentence instead: split it, or use a comma, colon, or parentheses.",
+    "Write your research to `.brevi/research.md`, the only file you may create or modify. Structure it as:",
+    "- `## Context`: what the question is and why it matters here",
+    "- `## Findings`: what you learned, with concrete file references from this codebase",
+    "- `## Options`: viable approaches with their tradeoffs",
+    "- `## Recommendation`: what you would do and why",
   ].join("\n");
 }

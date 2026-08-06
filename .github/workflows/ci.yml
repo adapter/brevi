@@ -1,9 +1,9 @@
-# CI: checks on every push/PR, then Cloudflare deploys — PRs go to the
+# CI: checks on every push/PR, then Cloudflare deploys. PRs go to the
 # preview environment, main goes to production.
 #
 # Required repository secrets:
-#   CLOUDFLARE_API_TOKEN   — API token with Workers Scripts:Edit (deploys)
-#   CLOUDFLARE_ACCOUNT_ID  — the Cloudflare account to deploy into
+#   CLOUDFLARE_API_TOKEN:  API token with Workers Scripts:Edit (deploys)
+#   CLOUDFLARE_ACCOUNT_ID: the Cloudflare account to deploy into
 name: CI
 
 on:
@@ -47,6 +47,16 @@ jobs:
             bun-turbo-${{ runner.os }}-
 
       - run: bun install --frozen-lockfile
+
+      # Em dashes read as AI-generated tells; keep them out of tracked files.
+      # printf builds the U+2014 character so this file stays free of it.
+      - name: Check for em dashes (U+2014)
+        run: |
+          if git grep -nI "$(printf '\342\200\224')" -- ':!**/CHANGELOG.md'; then
+            echo "Em dashes (U+2014) found in the files above. Use a comma, colon, or hyphen instead." >&2
+            exit 1
+          fi
+
       - run: bun run lint
       - run: bun run check-types
       - run: bun run build
@@ -123,9 +133,9 @@ jobs:
           marker="<!-- brevi-preview-urls -->"
           # Empty until the worker has preview URLs enabled (applied by the
           # next production deploy after preview_urls lands in the config).
-          DOCS_URL="${DOCS_URL:-_pending — preview URLs enable on the next production deploy_}"
-          API_URL="${API_URL:-_pending — preview URLs enable on the next production deploy_}"
-          body="$(printf '%s\n### Preview deployments\n\n| App | Preview URL (this commit) |\n| --- | --- |\n| docs | %s |\n| api | %s |\n\n_Version preview for %s — production traffic is unaffected._' "$marker" "$DOCS_URL" "$API_URL" "$HEAD_SHA")"
+          DOCS_URL="${DOCS_URL:-_pending: preview URLs enable on the next production deploy_}"
+          API_URL="${API_URL:-_pending: preview URLs enable on the next production deploy_}"
+          body="$(printf '%s\n### Preview deployments\n\n| App | Preview URL (this commit) |\n| --- | --- |\n| docs | %s |\n| api | %s |\n\n_Version preview for %s; production traffic is unaffected._' "$marker" "$DOCS_URL" "$API_URL" "$HEAD_SHA")"
           cid=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
             --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
           if [ -n "$cid" ]; then

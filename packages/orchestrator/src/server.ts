@@ -103,7 +103,7 @@ function resolveAppDist(): string | null {
 function connectResultPage(ok: boolean, detail: string): string {
   const title = ok ? "Linear connected" : "Connection failed";
   return `<!doctype html>
-<html><head><meta charset="utf-8"><title>brevi — ${title}</title></head>
+<html><head><meta charset="utf-8"><title>brevi: ${title}</title></head>
 <body style="font-family: system-ui; padding: 4rem; background: #101014; color: #e8e8ee">
 <h1 style="font-size: 1.2rem">${title}</h1>
 <p>${detail.replace(/</g, "&lt;")}</p>
