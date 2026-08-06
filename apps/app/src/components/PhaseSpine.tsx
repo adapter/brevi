@@ -104,6 +104,7 @@ export function PhaseSpine({
             ? duration(run.startedAt, Date.parse(run.finishedAt))
             : duration(run.startedAt ?? run.createdAt, now)}
         </Field>
+        {run.attempts.length > 1 && <Field label="Attempts">{run.attempts.length}</Field>}
         <Field label="Sandbox">{run.sandbox.provider}</Field>
         {run.sandbox.id && <Field label="VM">{run.sandbox.id}</Field>}
         <Field label="Run">{run.id}</Field>

@@ -343,6 +343,18 @@ export function useOrchestrator() {
     }
   }, []);
 
+  const retryRun = useCallback(async (runId: string) => {
+    dispatch({ t: "busy", key: runId, on: true });
+    dispatch({ t: "notice", notice: null });
+    try {
+      dispatch({ t: "run", run: await api.retryRun(runId) });
+    } catch (err) {
+      dispatch({ t: "notice", notice: `Could not retry the run. ${errorText(err)}` });
+    } finally {
+      dispatch({ t: "busy", key: runId, on: false });
+    }
+  }, []);
+
   const dismissNotice = useCallback(() => dispatch({ t: "notice", notice: null }), []);
 
   /** Adopt a redacted config returned by a settings mutation. */
@@ -363,6 +375,7 @@ export function useOrchestrator() {
     openRun,
     runTicket,
     cancelRun,
+    retryRun,
     dismissNotice,
     applyConfig,
   };

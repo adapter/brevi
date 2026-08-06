@@ -109,6 +109,19 @@ export const configSchema = z.object({
       spikeMarker: z.string().default("SPIKE"),
     })
     .prefault({}),
+  restart: z
+    .object({
+      /** Automatically wait out agent usage limits and start a new attempt. */
+      auto: z.boolean().default(true),
+      /** Cap on agent executions per run, counting the first. */
+      maxAttempts: z.number().int().min(1).default(5),
+      /**
+       * Minutes between liveness probes while waiting on a limit whose reset
+       * time the agent didn't report (and after a probe that is still limited).
+       */
+      probeIntervalMinutes: z.number().int().min(1).default(15),
+    })
+    .prefault({}),
   server: z.object({ port: z.number().int().default(DEFAULT_PORT) }).prefault({}),
   pollIntervalSeconds: z.number().int().min(10).default(60),
 });

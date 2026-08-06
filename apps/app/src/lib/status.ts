@@ -52,6 +52,14 @@ export const STATUS_TONE: Record<RunStatus, StatusTone> = {
     edge: "border-ember-300/35",
     active: true,
   },
+  waiting: {
+    label: "Waiting",
+    fg: "text-iris-400",
+    fill: "bg-iris-400",
+    wash: "bg-iris-400/12",
+    edge: "border-iris-400/35",
+    active: true,
+  },
   completed: {
     label: "Completed",
     fg: "text-mint-400",

@@ -30,6 +30,7 @@ export default function App() {
     openRun,
     runTicket,
     cancelRun,
+    retryRun,
     dismissNotice,
     applyConfig,
   } = useOrchestrator();
@@ -111,6 +112,7 @@ export default function App() {
               now={now}
               busy={busy[selectedRun.id] === true}
               onCancel={() => void cancelRun(selectedRun.id)}
+              onRetry={() => void retryRun(selectedRun.id)}
             />
           ) : (
             <Overview

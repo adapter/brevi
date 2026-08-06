@@ -1,12 +1,13 @@
 import { copyFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { execa, type Result as ExecaResult } from "execa";
-import { WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type RepoConfig, type RunResult, type Ticket } from "@brevi/shared";
+import { WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type LimitInfo, type RepoConfig, type RunResult, type Ticket } from "@brevi/shared";
 import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
 import { authenticatedRemote, createPullRequest, plainRemote } from "./github.js";
+import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
 import { buildImplementationPrompt, buildSpikePrompt } from "./prompts.js";
-import type { RunStore } from "./state.js";
+import { isTerminal, type RunStore } from "./state.js";
 
 const MAX_COMMENT_BYTES = 60 * 1024;
 const BREVI_FOOTER = "🤖 Automated by [brevi]";
@@ -28,11 +29,13 @@ export interface RunContext {
 }
 
 /**
- * The full run pipeline: prepare a checkout + sandbox, run the coding agent,
- * then finalize (PR for implementations, Linear comment for spikes).
+ * One attempt of the run pipeline: prepare a checkout + sandbox, run the
+ * coding agent, then finalize (PR for implementations, Linear comment for
+ * spikes). An attempt ended by an agent usage limit parks the run as
+ * "waiting" (when auto-restart applies) instead of failing it.
  *
  * Never throws for run failures: every outcome lands in the store as a
- * terminal status. Only truly unexpected store errors can escape.
+ * run status. Only truly unexpected store errors can escape.
  */
 export async function executeRun(ctx: RunContext): Promise<void> {
   const { config, store, provider, linear, signal } = ctx;
@@ -49,9 +52,24 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "log", stream, text });
   };
 
+  const limitProvider = agentProvider(config);
+  let detectedLimit: LimitInfo | undefined;
+  const noteLimit = (line: string): void => {
+    detectedLimit = detectLimit(line, limitProvider) ?? detectedLimit;
+  };
+
+  const attempt = await store.beginAttempt(run.id);
   try {
     // ---- preparing -------------------------------------------------------
-    await store.setStatus(run.id, "preparing", { startedAt: new Date().toISOString() });
+    await store.setStatus(run.id, "preparing", {
+      startedAt: run.startedAt ?? new Date().toISOString(),
+      // A retried run sheds the residue of its previous attempt.
+      finishedAt: undefined,
+      error: undefined,
+      resumeAt: undefined,
+      limit: undefined,
+      result: undefined,
+    });
     throwIfAborted(signal);
 
     const repoKey = ticket.repo;
@@ -110,6 +128,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       try {
         event = JSON.parse(line);
       } catch {
+        noteLimit(line);
         log("stdout", line);
         return;
       }
@@ -117,9 +136,13 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         trackThinking(event.event);
         return;
       }
+      if (isAgentFailureEvent(event)) noteLimit(line);
       store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "agent", event });
     });
-    const stderrSink = lineSink((line) => log("stderr", line));
+    const stderrSink = lineSink((line) => {
+      noteLimit(line);
+      log("stderr", line);
+    });
 
     log("system", `running ${config.agent.command} (timeout ${config.sandbox.timeoutMinutes}m)`);
     const exec = await raceWithAbort(
@@ -135,6 +158,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     stdoutSink.flush();
     stderrSink.flush();
     if (exec.exitCode !== 0) {
+      if (detectedLimit) throw new AgentLimitError(detectedLimit);
       throw new Error(`agent exited with code ${exec.exitCode}`);
     }
 
@@ -154,22 +178,50 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         : await finalizeImplementation({ ticket, repo, branch, pulledDir, artifacts, config, linear, log });
 
     await linear.moveToReview(ticket.id);
+    await store.endAttempt(run.id, { outcome: "completed" });
     await store.setStatus(run.id, "completed", { finishedAt: new Date().toISOString(), result });
     log("system", `run completed: ${result.prUrl ?? result.commentUrl ?? "done"}`);
   } catch (error) {
     const cancelled = signal.aborted || error instanceof RunCancelledError;
     const message = error instanceof Error ? error.message : String(error);
     const current = store.get(run.id);
-    if (current && !["completed", "failed", "cancelled"].includes(current.status)) {
+    if (current && !isTerminal(current.status)) {
       if (cancelled) {
+        await store.endAttempt(run.id, { outcome: "cancelled" });
         await store.setStatus(run.id, "cancelled", { finishedAt: new Date().toISOString() });
         log("system", "run cancelled");
-      } else {
+        return;
+      }
+      // A limit can surface as a thrown AgentLimitError or as a generic
+      // failure (e.g. "agent made no changes") after a limit message was seen.
+      const limit = error instanceof AgentLimitError ? error.limit : detectedLimit;
+      if (!limit) {
+        await store.endAttempt(run.id, { outcome: "failed", error: message });
         await store.setStatus(run.id, "failed", {
           finishedAt: new Date().toISOString(),
           error: message,
         });
         log("system", `run failed: ${message}`);
+        return;
+      }
+      await store.endAttempt(run.id, { outcome: "limit", limit });
+      if (config.restart.auto && attempt.number < config.restart.maxAttempts) {
+        const resumeAt = resumeTimeFor(limit, config).toISOString();
+        await store.setStatus(run.id, "waiting", { resumeAt, limit });
+        log(
+          "system",
+          `${limitLabel(limit)}; waiting until ${resumeAt} to start attempt ${attempt.number + 1} of ${config.restart.maxAttempts}`,
+        );
+      } else {
+        const reason = config.restart.auto
+          ? `after ${attempt.number} attempts (restart.maxAttempts)`
+          : "and auto-restart is off (restart.auto)";
+        await store.setStatus(run.id, "failed", {
+          finishedAt: new Date().toISOString(),
+          error: `${limitLabel(limit)} ${reason}`,
+          limit,
+        });
+        log("system", `run failed: ${limitLabel(limit)} ${reason}`);
       }
     }
   } finally {
@@ -178,6 +230,13 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     }
     await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+/** Human line for logs and failure reasons, e.g. "Claude five-hour limit reached". */
+function limitLabel(limit: LimitInfo): string {
+  const provider = limit.provider === "claude" ? "Claude" : "Codex";
+  const kind = limit.kind === "unknown" ? "usage limit" : `${limit.kind} limit`;
+  return `${provider} ${kind} reached`;
 }
 
 function branchNameFor(ticket: Ticket): string {

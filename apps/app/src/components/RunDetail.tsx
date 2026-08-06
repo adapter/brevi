@@ -1,12 +1,12 @@
-import type { Run, RunEvent } from "@brevi/shared";
+import type { LimitInfo, Run, RunEvent } from "@brevi/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { relative } from "../lib/format";
+import { clock, elapsed, relative } from "../lib/format";
 import { isActive } from "../lib/status";
 import { Artifacts } from "./Artifacts";
 import { KindChip, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
-import { External, Stop } from "./Icons";
+import { External, Play, Stop } from "./Icons";
 import { PhaseSpine } from "./PhaseSpine";
 import { ResultCard } from "./ResultCard";
 
@@ -17,6 +17,7 @@ export function RunDetail({
   now,
   busy,
   onCancel,
+  onRetry,
 }: {
   run: Run;
   /** owner/name of the mapped repo, resolved from config. */
@@ -25,8 +26,10 @@ export function RunDetail({
   now: number;
   busy: boolean;
   onCancel: () => void;
+  onRetry: () => void;
 }) {
   const live = isActive(run.status);
+  const retryable = run.status === "failed" || run.status === "cancelled";
   const artifacts = run.result?.artifacts ?? collectArtifacts(events);
 
   return (
@@ -53,6 +56,12 @@ export function RunDetail({
             <Button variant="destructive" size="plate" onClick={onCancel} disabled={busy}>
               <Stop className="size-3" />
               {busy ? "Cancelling" : "Cancel run"}
+            </Button>
+          )}
+          {retryable && (
+            <Button variant="outline" size="plate" onClick={onRetry} disabled={busy}>
+              <Play className="size-3" />
+              {busy ? "Retrying" : "Retry run"}
             </Button>
           )}
         </span>
@@ -84,6 +93,17 @@ export function RunDetail({
             </div>
           </div>
 
+          {run.status === "waiting" && (
+            <WaitingBanner
+              limit={run.limit}
+              resumeAt={run.resumeAt}
+              attempts={run.attempts.length}
+              now={now}
+              busy={busy}
+              onResume={onRetry}
+            />
+          )}
+
           <PhaseSpine run={run} events={events} now={now} />
 
           <Console runId={run.id} events={events} live={live} />
@@ -95,6 +115,61 @@ export function RunDetail({
       </div>
     </div>
   );
+}
+
+/** The run is parked on an agent usage limit; say why, until when, and offer to skip the wait. */
+function WaitingBanner({
+  limit,
+  resumeAt,
+  attempts,
+  now,
+  busy,
+  onResume,
+}: {
+  limit: LimitInfo | undefined;
+  resumeAt: string | undefined;
+  attempts: number;
+  now: number;
+  busy: boolean;
+  onResume: () => void;
+}) {
+  const resumeMs = resumeAt ? Date.parse(resumeAt) : Number.NaN;
+  const eta = Number.isNaN(resumeMs)
+    ? "soon"
+    : resumeMs > now
+      ? `at ${clock(resumeAt as string)} (in ${elapsed(resumeMs - now)})`
+      : "any moment now";
+  return (
+    <div className="rounded-[5px] border border-iris-400/35 bg-iris-400/8 p-3">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+        <span className="plate text-iris-400">{limit ? limitLabel(limit) : "Usage limit reached"}</span>
+        <span className="font-mono text-[11px] text-haze-400">
+          attempt {attempts + 1} starts {eta}
+        </span>
+        <Button
+          variant="outline"
+          size="plate"
+          onClick={onResume}
+          disabled={busy}
+          className="ml-auto"
+        >
+          <Play className="size-3" />
+          {busy ? "Resuming" : "Resume now"}
+        </Button>
+      </div>
+      {limit?.message && (
+        <p className="mt-1.5 font-mono text-[11px] leading-relaxed break-words text-haze-600">
+          {limit.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function limitLabel(limit: LimitInfo): string {
+  const provider = limit.provider === "claude" ? "Claude" : "Codex";
+  const kind = limit.kind === "unknown" ? "usage limit" : `${limit.kind} limit`;
+  return `${provider} ${kind} reached`;
 }
 
 /** Before a run finishes there is no result, but artifact events still arrive. */

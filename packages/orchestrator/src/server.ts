@@ -188,6 +188,14 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
     }
   });
 
+  app.post("/api/runs/:id/retry", async (c) => {
+    try {
+      return c.json(await orchestrator.retryRun(c.req.param("id")));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
   app.put("/api/settings/credentials", async (c) => {
     let body: CredentialsUpdateRequest;
     try {
