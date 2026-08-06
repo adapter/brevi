@@ -152,6 +152,8 @@ export interface Run {
     id?: string;
   };
   createdAt: string;
+  /** Time the run last entered the scheduler's FIFO queue (refreshed on requeue); queued runs start in ascending queuedAt order. */
+  queuedAt?: string;
   startedAt?: string;
   finishedAt?: string;
   result?: RunResult;

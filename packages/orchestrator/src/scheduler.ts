@@ -580,7 +580,10 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   /** Put a run back in the queue for its next attempt. */
   async #requeue(runId: string): Promise<Run> {
     this.#clearResume(runId);
-    const run = await this.store.setStatus(runId, "queued", { resumeAt: undefined });
+    const run = await this.store.setStatus(runId, "queued", {
+      resumeAt: undefined,
+      queuedAt: new Date().toISOString(),
+    });
     this.#queue.push(runId);
     this.#kickWorker();
     return run;

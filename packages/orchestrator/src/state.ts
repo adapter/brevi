@@ -95,12 +95,14 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
   }
 
   async createRun(ticket: Ticket, provider: SandboxProviderName): Promise<Run> {
+    const now = new Date().toISOString();
     const run: Run = {
       id: newRunId(),
       ticket,
       status: "queued",
       sandbox: { provider },
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      queuedAt: now,
       attempts: [],
       costs: [],
     };
