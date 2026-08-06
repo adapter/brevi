@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import type { Command } from "commander";
 import pc from "picocolors";
+import { waitForPidFile } from "../lib/pid.js";
+import { findRunningServer, stopServer } from "../lib/stop.js";
 import {
   CHANGELOG_URL,
   PACKAGE_NAME,
@@ -10,6 +12,9 @@ import {
 } from "../lib/update.js";
 import { errorMessage } from "../lib/util.js";
 import { readPackageVersion } from "../lib/version.js";
+
+/** How long a restarted server gets to come up and write its pid file. */
+const RESTART_TIMEOUT_MS = 15_000;
 
 export function registerUpdateCommand(program: Command): void {
   program
@@ -77,6 +82,47 @@ async function runUpdate(checkOnly: boolean): Promise<void> {
 
   console.log(pc.green(`\n✔ Updated ${PACKAGE_NAME} ${current} → ${pc.bold(latest)}`));
   console.log(pc.dim(`  Changelog: ${CHANGELOG_URL}`));
+
+  await restartIfRunning(latest);
+}
+
+/**
+ * Restarts a running server so the freshly installed version takes effect:
+ * graceful stop (same escalation as `brevi stop`), then a detached headless
+ * `brevi start` from our own bin path — the install replaced its contents in
+ * place, so the new process runs the new version. No-op when nothing is
+ * running.
+ */
+async function restartIfRunning(latest: string): Promise<void> {
+  const pid = await findRunningServer();
+  if (pid === null) return;
+
+  console.log(`\nbrevi is running (pid ${pid}); restarting it on ${pc.bold(latest)}...`);
+  if (!(await stopServer(pid))) {
+    console.error(pc.red("✖ Could not stop the running instance — restart it manually with `brevi start`."));
+    process.exit(1);
+  }
+
+  const entry = process.argv[1];
+  if (!entry) {
+    console.error(pc.red("✖ Could not work out how to relaunch brevi — start it with `brevi start`."));
+    process.exit(1);
+  }
+
+  // Detached with no stdio so the server outlives this command, like a
+  // freshly run `brevi start` in another terminal.
+  const child = spawn(process.execPath, [entry, "start"], { detached: true, stdio: "ignore" });
+  child.on("error", (err) => {
+    console.error(pc.red(`✖ Could not start the new version: ${errorMessage(err)}`));
+  });
+  child.unref();
+
+  const newPid = await waitForPidFile(RESTART_TIMEOUT_MS);
+  if (newPid === null) {
+    console.log(pc.yellow("! Started the new version but couldn't confirm it's up — check `brevi status`."));
+    return;
+  }
+  console.log(pc.green(`✔ Restarted brevi on ${latest} (pid ${newPid}).`));
 }
 
 /** Runs the package manager with inherited stdio, resolving to its exit code. */
