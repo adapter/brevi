@@ -43,8 +43,13 @@ import type { Run, RunEvent, Ticket } from "./types.js";
  *        Live state of the Cloudflare R2 evidence connector: is wrangler
  *        installed and logged in, and is a bucket configured.
  *   POST /api/connect/r2                 -> R2ConnectResponse
- *        Start `wrangler login` on the host (interactive OAuth in the
- *        browser); the dashboard polls GET /api/connect/r2 until logged in.
+ *        One-click connect. Logged out: starts `wrangler login` on the host
+ *        (interactive OAuth in the browser); the dashboard polls
+ *        GET /api/connect/r2 until logged in, then calls this again. Logged
+ *        in with no bucket configured: provisions automatically (creates or
+ *        reuses the default evidence bucket, enables its r2.dev public URL)
+ *        and persists the result to config. Already configured: reports
+ *        connected without touching anything.
  *   PUT  /api/settings/r2                -> R2SettingsUpdateResponse
  *        body: R2SettingsUpdateRequest. Sets the evidence bucket and its
  *        public base URL.
@@ -169,17 +174,32 @@ export interface R2Status {
 /** Result of a one-click R2 connect attempt. */
 export type R2ConnectResponse =
   | {
-      /** Wrangler is already authenticated; nothing to do. */
+      /**
+       * Wrangler is authenticated and a bucket is configured. When the
+       * bucket or public URL were unset, they were just provisioned (bucket
+       * created or reused, r2.dev URL enabled) and saved to config.
+       */
       status: "connected";
       r2: R2Status;
     }
   | {
       /**
        * `wrangler login` was started on the host and is opening a browser.
-       * Poll GET /api/connect/r2 until loggedIn flips.
+       * Poll GET /api/connect/r2 until loggedIn flips, then POST again to
+       * provision the bucket.
        */
       status: "login-started";
       detail: string;
+    }
+  | {
+      /**
+       * Wrangler is logged in but automatic provisioning failed (bucket
+       * create or dev-url enable rejected). Config was left untouched; the
+       * dashboard should surface the reason and offer manual entry.
+       */
+      status: "provision-failed";
+      reason: string;
+      r2: R2Status;
     }
   | {
       /** No automatic path (wrangler missing); reason says what to install. */

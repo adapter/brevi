@@ -89,7 +89,7 @@ There is no credential field here. Authentication goes through the host's `wrang
 
 At the end of a successful run, once artifacts are collected on the host, each screenshot (`png`/`jpg`) and recording (`webm`/`mp4`/`mov`/`gif`) is uploaded to `<bucket>/<runId>/<name>`, keyed by run id so names never collide across runs. Uploads are strictly best-effort: a failure is logged in the run's console and never fails the run. If wrangler is logged out, missing, or either field is unset, runs behave exactly as before and evidence stays local.
 
-brevi never creates the bucket or manages its public access. You create the bucket yourself and either enable its r2.dev public development URL or attach a custom domain.
+Connecting from the dashboard provisions both fields automatically: it creates the `brevi-evidence` bucket (reusing it if it already exists) and enables its r2.dev development URL. Edit the fields by hand only if you want a different bucket name or a custom domain.
 
 :::caution
 The bucket is public: anyone with a URL can view any screenshot or recording brevi has uploaded, which may include your codebase or product. Leave both fields empty to keep all evidence local.

@@ -61,6 +61,73 @@ export function startWranglerLogin(): Promise<unknown> {
   return execa("wrangler", ["login"], { timeout: 5 * 60_000, reject: false });
 }
 
+/** Deterministic default bucket name used by one-click provisioning. */
+export const DEFAULT_EVIDENCE_BUCKET = "brevi-evidence";
+
+export type ProvisionResult =
+  | { ok: true; bucket: string; publicBaseUrl: string }
+  | { ok: false; reason: string };
+
+const PUBLIC_URL_RE = /https:\/\/pub-[0-9a-z]+\.r2\.dev/i;
+
+/** First non-empty line of stderr, else stdout, else a generic exit-code message. */
+function firstErrorLine(result: { stdout: string; stderr: string; exitCode?: number }): string {
+  const stderrLine = result.stderr.split("\n").find((line) => line.trim());
+  if (stderrLine) return stderrLine;
+  const stdoutLine = result.stdout.split("\n").find((line) => line.trim());
+  if (stdoutLine) return stdoutLine;
+  return `exit code ${result.exitCode}`;
+}
+
+/**
+ * One-click bucket provisioning for the R2 evidence connector: creates (or
+ * reuses) the bucket and enables its r2.dev public URL, returning the URL to
+ * persist to config. Assumes the caller already confirmed wrangler is
+ * installed and logged in; never throws, degrading to a failure reason
+ * instead so the dashboard can surface it.
+ */
+export async function provisionBucket(bucket: string = DEFAULT_EVIDENCE_BUCKET): Promise<ProvisionResult> {
+  let createResult: { stdout: string; stderr: string; exitCode?: number; code?: string };
+  try {
+    createResult = await execa("wrangler", ["r2", "bucket", "create", bucket], { timeout: 60_000, reject: false });
+  } catch {
+    return { ok: false, reason: "The wrangler CLI is not installed on this machine." };
+  }
+  if (createResult.code === "ENOENT") {
+    return { ok: false, reason: "The wrangler CLI is not installed on this machine." };
+  }
+  if (createResult.exitCode !== 0) {
+    const output = `${createResult.stdout}\n${createResult.stderr}`;
+    if (!/already exists/i.test(output)) {
+      return { ok: false, reason: `Could not create bucket "${bucket}": ${firstErrorLine(createResult)}` };
+    }
+    // A previous brevi setup (or the user) already owns the bucket; reuse it.
+  }
+
+  const enableResult = await execa("wrangler", ["r2", "bucket", "dev-url", "enable", bucket, "-y"], {
+    timeout: 60_000,
+    reject: false,
+  });
+  const enableOutput = `${enableResult.stdout}\n${enableResult.stderr}`;
+  const enabledUrl = PUBLIC_URL_RE.exec(enableOutput)?.[0];
+  if (enabledUrl) return { ok: true, bucket, publicBaseUrl: enabledUrl };
+
+  // Enabling may fail (or print nothing useful) if the dev URL was already
+  // enabled by a previous run; fall back to reading it back explicitly.
+  const getResult = await execa("wrangler", ["r2", "bucket", "dev-url", "get", bucket], {
+    timeout: 60_000,
+    reject: false,
+  });
+  const getOutput = `${getResult.stdout}\n${getResult.stderr}`;
+  const existingUrl = PUBLIC_URL_RE.exec(getOutput)?.[0];
+  if (existingUrl) return { ok: true, bucket, publicBaseUrl: existingUrl };
+
+  if (enableResult.exitCode !== 0) {
+    return { ok: false, reason: firstErrorLine(enableResult) };
+  }
+  return { ok: false, reason: "Could not read the bucket's r2.dev public URL from wrangler output." };
+}
+
 export interface UploadedEvidence {
   name: string;
   kind: "image" | "video";

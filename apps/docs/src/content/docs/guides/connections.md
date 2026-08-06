@@ -83,16 +83,17 @@ The Connect button:
 
 1. Probes `wrangler whoami`. If it already reports an authenticated identity, the card shows connected immediately.
 2. Otherwise, if wrangler is installed, it starts `wrangler login` on the host, which opens a browser for interactive OAuth. The dashboard polls the live status until `wrangler whoami` succeeds.
-3. If wrangler isn't installed at all, there's no automatic path; the card tells you to install it.
+3. Once logged in, it provisions automatically: creates the `brevi-evidence` bucket (or reuses it if it already exists from a previous setup) and enables its r2.dev public development URL, then saves both settings.
+4. If wrangler isn't installed at all, there's no automatic path; the card tells you to install it.
 
-The card surfaces three distinct not-ready states, so you always know what's missing: wrangler not installed, wrangler installed but not logged in, and logged in but the bucket or public base URL not yet configured.
+The card surfaces three distinct not-ready states, so you always know what's missing: wrangler not installed, wrangler installed but not logged in, and logged in but provisioning not yet run or failed (a failure shows its reason in the card).
 
 Setup:
 
 1. Install the `wrangler` CLI on the host running the orchestrator.
-2. Create an R2 bucket in your Cloudflare account (brevi does not create it for you).
-3. Enable the bucket's r2.dev public development URL, or attach a custom domain to it.
-4. Click Connect to authenticate, then set the bucket name and its public base URL in the panel. Both are saved via `PUT /api/settings/r2`.
+2. Click Connect and approve the browser login. brevi does the rest: the bucket and public URL are created and saved for you.
+
+The provisioned bucket and URL then appear as read-only values on the card, with a small Edit affordance if you want to point at a custom domain or a pre-existing bucket instead; edits are still saved via `PUT /api/settings/r2`.
 
 Runs triggered while R2 isn't fully configured, logged out, or wrangler is missing behave exactly as before: evidence stays local and a note appears in the run's console instead of a failure.
 
