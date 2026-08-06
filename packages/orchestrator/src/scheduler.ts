@@ -551,7 +551,10 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
 
   /** Apply and persist the R2 evidence bucket settings from the dashboard. */
   async updateR2Settings(request: R2SettingsUpdateRequest): Promise<R2SettingsUpdateResponse> {
-    if (typeof request.bucket === "string") this.config.r2.bucket = request.bucket.trim();
+    // Validate every field before touching the live config: a rejected save
+    // must not leave a half-applied state behind for the next run to read.
+    const bucket = typeof request.bucket === "string" ? request.bucket.trim() : undefined;
+    let publicBaseUrl: string | undefined;
     if (typeof request.publicBaseUrl === "string") {
       const trimmed = request.publicBaseUrl.trim().replace(/\/+$/, "");
       if (trimmed) {
@@ -562,8 +565,10 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
           throw new OrchestratorError("invalid", "publicBaseUrl must be an http(s) URL");
         }
       }
-      this.config.r2.publicBaseUrl = trimmed;
+      publicBaseUrl = trimmed;
     }
+    if (bucket !== undefined) this.config.r2.bucket = bucket;
+    if (publicBaseUrl !== undefined) this.config.r2.publicBaseUrl = publicBaseUrl;
     await saveConfig(this.config, this.#configPath);
     this.emit("config", redactConfig(this.config));
     return { config: redactConfig(this.config), r2: await this.r2Status() };

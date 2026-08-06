@@ -479,15 +479,25 @@ function R2Row({
     setPublicBaseUrl(config.r2.publicBaseUrl);
   }, [config.r2.bucket, config.r2.publicBaseUrl]);
 
+  // Give up on a wrangler login that never completed: re-enable Connect and
+  // say why, rather than leaving the button dead until a page reload.
+  const expireLogin = () => {
+    setConnectDetail(null);
+    setLoadError("The Cloudflare login was not completed in time. Connect again to retry.");
+  };
+
   const pollStatus = (deadline: number) => {
     pollTimer.current = setTimeout(() => {
       void api.r2Status().then(
         (next) => {
           setStatus(next);
-          if (!next.loggedIn && Date.now() < deadline) pollStatus(deadline);
+          if (next.loggedIn) return;
+          if (Date.now() < deadline) pollStatus(deadline);
+          else expireLogin();
         },
         () => {
           if (Date.now() < deadline) pollStatus(deadline);
+          else expireLogin();
         },
       );
     }, R2_POLL_INTERVAL_MS);
