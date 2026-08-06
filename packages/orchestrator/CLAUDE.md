@@ -16,6 +16,6 @@ The brevi engine, consumed by `@brevi/cli`. Polls Linear for `brevi`-labeled iss
 
 ## Gotchas
 
-- The orchestrator reads no environment variables; everything comes from `~/.brevi/config.json`. Agent credentials are passed into the sandbox env explicitly.
+- The orchestrator reads no environment variables for persistent configuration; everything comes from `~/.brevi/config.json`. The exception is `connect.ts` credential discovery, which checks `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Anthropic) and `OPENAI_API_KEY` (Codex) before falling back to stored CLI logins. Agent credentials are passed into the sandbox env explicitly.
 - Agent output is parsed as stream-json events; limit detection only inspects error-typed events to avoid false positives.
 - Protocol and config types are ground truth in `@brevi/shared`; update `apps/docs` reference pages when they change.

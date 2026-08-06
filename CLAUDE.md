@@ -1,6 +1,6 @@
 # brevi
 
-A local sandbox and orchestrator for coding agents: label a Linear ticket `brevi`, get back a GitHub PR (implementation tickets) or a research comment on the issue (SPIKE tickets). Runs are executed in isolated sandboxes (Firecracker microVMs on Linux with KVM, a process sandbox elsewhere).
+A local sandbox and orchestrator for coding agents: label a Linear ticket `brevi`, get back a GitHub PR (implementation tickets) or a research comment on the issue (SPIKE tickets). Runs execute in Firecracker microVMs (isolated) on Linux with KVM; elsewhere a process provider is used as a fallback, which provides no isolation (commands run directly on the host as the current user).
 
 ## Workspaces
 
@@ -32,7 +32,7 @@ bun run brevi -- <cmd>  # run the CLI from the repo (executes the built dist/)
 
 - Never use em dashes (U+2014) in any file or generated text; CI fails on them everywhere except CHANGELOG.md files. Use a comma, colon, parentheses, or split the sentence.
 - The CLI and the linked `brevi` bin execute built output: rerun `bun run build` after changing CLI/orchestrator code before testing via `bun run brevi`.
-- All runtime state lives under `~/.brevi/` (config at `~/.brevi/config.json`). The orchestrator reads no environment variables.
+- All runtime state lives under `~/.brevi/` (config at `~/.brevi/config.json`). The orchestrator reads no environment variables for persistent configuration; the one exception is credential discovery in the Connect flow (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`).
 - Commit/PR title convention: `PD-<n>: <description>` (Linear ticket ID first).
-- Releases use changesets (`bun run changeset`); `bun run release` builds and stages publishing. Add a changeset when changing a published package (`@brevi/cli`, `@brevi/orchestrator`, `@brevi/sandbox`, `@brevi/shared`, `@brevi/app`).
+- Releases use changesets (`bun run changeset`); `bun run release` builds and stages publishing. Only `@brevi/cli` is published; the other workspaces are `private: true` and get bundled into its `dist/`. Add a changeset for `@brevi/cli` whenever a change in any bundled workspace (`orchestrator`, `sandbox`, `shared`, `app`) affects what ships.
 - CI (`.github/workflows/ci.yml`) runs lint, check-types, build, and the em-dash check on every PR.
