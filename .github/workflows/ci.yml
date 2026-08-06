@@ -19,6 +19,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changeset:
+    name: Changeset present
+    # Every PR must add a changeset (an empty one is fine: bun run changeset
+    # --empty). The changesets release PR consumes them instead of adding one,
+    # so it is exempt.
+    if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'changeset-release/')
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Require a changeset file
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          added="$(git diff --name-only --diff-filter=A "origin/${BASE_REF}...HEAD" -- '.changeset/*.md' | grep -v '^\.changeset/README\.md$' || true)"
+          if [ -z "$added" ]; then
+            echo "No changeset found. Every PR needs one: run 'bun run changeset' (or 'bun run changeset --empty' when there is nothing to release) and commit the generated .changeset/*.md file." >&2
+            exit 1
+          fi
+          echo "Found changeset(s):"
+          echo "$added"
+
   checks:
     name: Lint, typecheck, build
     runs-on: blacksmith-4vcpu-ubuntu-2404
