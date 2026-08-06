@@ -1,5 +1,6 @@
 import type { CostEntry, CostTotals } from "@brevi/shared";
 import { useState } from "react";
+import { badgeVariants } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { tokens, usd } from "../lib/format";
@@ -30,7 +31,7 @@ export function CostBadge({
 
   const label =
     sums?.costUsd !== undefined
-      ? `${sums.estimated ? "~" : ""}${usd(sums.costUsd)}`
+      ? usd(sums.costUsd)
       : sums
         ? `${tokens(sums.inputTokens + sums.outputTokens)} tok`
         : undefined;
@@ -66,7 +67,11 @@ export function CostBadge({
           event.stopPropagation();
           setPinned((p) => !p);
         }}
-        className={cn("font-mono text-[10px] text-haze-700 tabular-nums hover:text-haze-400", className)}
+        className={cn(
+          badgeVariants({ variant: "secondary" }),
+          "font-mono text-[10px] tracking-normal normal-case tabular-nums",
+          className,
+        )}
       >
         {label}
       </TooltipTrigger>

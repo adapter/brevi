@@ -15,6 +15,7 @@ import { isActive, isTerminal, STATUS_TONE } from "../lib/status";
 import { KindChip, Plate, RepoChip, StatusDot } from "./Bits";
 import { CostBadge } from "./CostBadge";
 import { External, Play } from "./Icons";
+import { ThemeToggle } from "./ThemeToggle";
 
 export function AppSidebar({
   tickets,
@@ -78,6 +79,9 @@ export function AppSidebar({
               v{health.version}
             </span>
           )}
+          <span className="ml-auto">
+            <ThemeToggle />
+          </span>
         </div>
       </SidebarHeader>
 
@@ -268,7 +272,9 @@ function RunStrip({
   const tone = STATUS_TONE[run.status];
   const live = isActive(run.status);
   const span = live
-    ? duration(run.startedAt ?? run.createdAt, now)
+    ? run.startedAt
+      ? duration(run.startedAt, now)
+      : "-"
     : run.finishedAt && run.startedAt
       ? duration(run.startedAt, Date.parse(run.finishedAt))
       : "-";

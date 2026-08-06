@@ -1,20 +1,19 @@
 import type { Run } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Plate } from "./Bits";
 import { Branch, Comment, External, Merge } from "./Icons";
 import { Markdown } from "./Markdown";
 
+/** The result summary, links, and branch chip for a run. Frameless: the caller supplies the card. */
 export function ResultCard({ run }: { run: Run }) {
   const result = run.result;
   if (!result) return null;
 
   const shipped = run.status === "completed";
-  const accent = shipped ? "border-mint-500/30" : "border-ink-700";
 
   return (
-    <Card className={`block animate-rise border-l-2 ${accent} p-4`}>
+    <div>
       <div className="flex items-center gap-2">
         <Plate className={shipped ? "text-mint-400" : "text-haze-600"}>
           {result.kind === "spike" ? "Research delivered" : "Result"}
@@ -50,7 +49,7 @@ export function ResultCard({ run }: { run: Run }) {
           </span>
         )}
       </div>
-    </Card>
+    </div>
   );
 }
 
