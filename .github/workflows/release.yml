@@ -5,7 +5,7 @@
 # approves them with 2FA on npmjs.com → Staged Packages.
 #
 # Released @brevi/cli versions are also mirrored to GitHub Packages as
-# @adapter/brevi-cli (GitHub requires the npm scope to match the repo owner)
+# @adapter/brevi (GitHub requires the npm scope to match the repo owner)
 # so they appear in the repo's Packages sidebar; registry.npmjs.org remains
 # the canonical install source.
 #
@@ -67,7 +67,7 @@ jobs:
           NPM_CONFIG_PROVENANCE: "true"
 
       # Mirror the latest npm release of @brevi/cli to GitHub Packages (as
-      # @adapter/brevi-cli) so the repo's Packages sidebar lists it. The
+      # @adapter/brevi) so the repo's Packages sidebar lists it. The
       # released tarball is re-published as-is — nothing is rebuilt — and a
       # staged version is invisible until approved, so this is a no-op on
       # most pushes and only fires once a new release is live on npm.

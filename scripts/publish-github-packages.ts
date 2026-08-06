@@ -3,7 +3,7 @@
  * Packages (npm.pkg.github.com) so it shows up in the repo's Packages
  * sidebar.
  *
- * The mirror is published as @adapter/brevi-cli because GitHub requires an
+ * The mirror is published as @adapter/brevi because GitHub requires an
  * npm package's scope to match the account that owns the repository
  * (adapter); npm's @brevi/cli stays the canonical install source
  * (`npx @brevi/cli`), this copy exists for visibility only.
@@ -31,7 +31,7 @@ const MIRROR_REGISTRY =
   process.env.GITHUB_PACKAGES_REGISTRY ?? "https://npm.pkg.github.com";
 
 // The CLI is the only published package — keep in sync with stage-publish.ts.
-const PACKAGES = [{ source: "@brevi/cli", mirror: "@adapter/brevi-cli" }];
+const PACKAGES = [{ source: "@brevi/cli", mirror: "@adapter/brevi" }];
 
 if (!process.env.NODE_AUTH_TOKEN) {
   console.error(
