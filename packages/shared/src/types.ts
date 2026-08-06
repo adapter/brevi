@@ -26,9 +26,44 @@ export type RunStatus =
   | "preparing"
   | "running"
   | "finalizing"
+  /** Blocked on an agent usage limit; a new attempt starts once it lifts. */
+  | "waiting"
   | "completed"
   | "failed"
   | "cancelled";
+
+/** Which coding agent's usage limit was hit. */
+export type LimitProvider = "claude" | "codex";
+
+/** A usage limit reported by the coding agent during an attempt. */
+export interface LimitInfo {
+  provider: LimitProvider;
+  /** Which limit window was exhausted, when the agent said so. */
+  kind: "five-hour" | "weekly" | "unknown";
+  /** ISO time the limit lifts, when the agent reported one. */
+  resetsAt?: string;
+  /** The agent output line that triggered detection. */
+  message: string;
+}
+
+export type AttemptOutcome = "completed" | "failed" | "cancelled" | "limit";
+
+/**
+ * One agent execution within a run. A run retried after a usage limit (or
+ * manually) accumulates attempts; each attempt's output is preserved in the
+ * run's event log between its "attempt" markers.
+ */
+export interface RunAttempt {
+  /** 1-based sequence number within the run. */
+  number: number;
+  startedAt: string;
+  finishedAt?: string;
+  outcome?: AttemptOutcome;
+  /** Failure detail when the outcome is "failed". */
+  error?: string;
+  /** The usage limit that ended this attempt, when the outcome is "limit". */
+  limit?: LimitInfo;
+}
 
 export type SandboxProviderName = "firecracker" | "process";
 
@@ -66,6 +101,12 @@ export interface Run {
   finishedAt?: string;
   result?: RunResult;
   error?: string;
+  /** One entry per agent execution, oldest first. */
+  attempts: RunAttempt[];
+  /** When status is "waiting", the earliest time the next attempt may start. */
+  resumeAt?: string;
+  /** The most recent usage limit that interrupted this run. */
+  limit?: LimitInfo;
 }
 
 /** A single line of run activity, persisted as JSONL and streamed to the dashboard. */
@@ -88,4 +129,6 @@ export type RunEvent =
       /** How long the block took, present on "finished". */
       durationMs?: number;
     }
-  | { runId: string; ts: string; type: "artifact"; artifact: ArtifactRef };
+  | { runId: string; ts: string; type: "artifact"; artifact: ArtifactRef }
+  /** Marks the start of an agent execution; events that follow belong to it. */
+  | { runId: string; ts: string; type: "attempt"; number: number };

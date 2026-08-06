@@ -13,6 +13,9 @@ import type { Run, RunEvent, Ticket } from "./types.js";
  *   GET  /api/runs/:id/artifacts/:name   -> raw artifact bytes
  *   POST /api/tickets/:id/run            -> Run             (manually queue a ticket)
  *   POST /api/runs/:id/cancel            -> Run
+ *   POST /api/runs/:id/retry             -> Run
+ *        Start a new attempt of a failed, cancelled, or waiting run. A waiting
+ *        run resumes immediately instead of waiting for its limit to lift.
  *   PUT  /api/settings/credentials       -> CredentialsUpdateResponse
  *        body: CredentialsUpdateRequest. Each provided key is validated against
  *        its provider before being saved; invalid keys are rejected per-field
