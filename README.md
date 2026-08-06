@@ -16,7 +16,7 @@ Every execution runs in an isolated sandbox. On Linux with KVM, sandboxes are [F
 ## Quick start
 
 ```sh
-npx @brevi/cli   # first run: pick a sandbox provider, then the dashboard opens
+npx @brevi/cli
 ```
 
 On a fresh machine this runs the init flow (one question: the sandbox provider), then starts the orchestrator and opens the dashboard. Everything else happens in the dashboard's **Connections** panel with one-click **Connect** buttons, with no keys to copy:
