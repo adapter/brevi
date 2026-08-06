@@ -41,6 +41,20 @@ export interface HealthResponse {
   sandboxProvider: string;
 }
 
+/**
+ * Runtime shape check for /api/health payloads, for callers that must confirm
+ * a listener really is the brevi server before acting on it.
+ */
+export function isHealthResponse(value: unknown): value is HealthResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const health = value as Record<string, unknown>;
+  return (
+    typeof health.ok === "boolean" &&
+    typeof health.version === "string" &&
+    typeof health.sandboxProvider === "string"
+  );
+}
+
 /** Credential providers configurable from the dashboard. */
 export type CredentialProvider = "linear" | "github" | "anthropic" | "codex";
 
