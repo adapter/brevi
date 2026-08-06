@@ -1,7 +1,4 @@
 ---
-"@brevi/shared": minor
-"@brevi/orchestrator": minor
-"@brevi/app": minor
 "@brevi/cli": minor
 ---
 
