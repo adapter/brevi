@@ -46,9 +46,10 @@ import type { Run, RunEvent, Ticket } from "./types.js";
  *        One-click connect. Logged out: starts `wrangler login` on the host
  *        (interactive OAuth in the browser); the dashboard polls
  *        GET /api/connect/r2 until logged in, then calls this again. Logged
- *        in with no bucket configured: provisions automatically (creates or
- *        reuses the default evidence bucket, enables its r2.dev public URL)
- *        and persists the result to config. Already configured: reports
+ *        in with no bucket configured: provisions automatically (creates the
+ *        default evidence bucket and enables its r2.dev public URL; a
+ *        pre-existing bucket is reused only when already public) and
+ *        persists the result to config. Already configured: reports
  *        connected without touching anything.
  *   PUT  /api/settings/r2                -> R2SettingsUpdateResponse
  *        body: R2SettingsUpdateRequest. Sets the evidence bucket and its
@@ -194,8 +195,10 @@ export type R2ConnectResponse =
   | {
       /**
        * Wrangler is logged in but automatic provisioning failed (bucket
-       * create or dev-url enable rejected). Config was left untouched; the
-       * dashboard should surface the reason and offer manual entry.
+       * create or dev-url enable rejected, or the bucket pre-exists without
+       * public access, which brevi refuses to enable on its own). Config was
+       * left untouched; the dashboard should surface the reason and offer
+       * manual entry.
        */
       status: "provision-failed";
       reason: string;

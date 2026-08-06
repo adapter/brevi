@@ -80,11 +80,14 @@ function firstErrorLine(result: { stdout: string; stderr: string; exitCode?: num
 }
 
 /**
- * One-click bucket provisioning for the R2 evidence connector: creates (or
- * reuses) the bucket and enables its r2.dev public URL, returning the URL to
- * persist to config. Assumes the caller already confirmed wrangler is
- * installed and logged in; never throws, degrading to a failure reason
- * instead so the dashboard can surface it.
+ * One-click bucket provisioning for the R2 evidence connector: creates the
+ * bucket and enables its r2.dev public URL, returning the URL to persist to
+ * config. A bucket that already exists is reused only when its dev URL is
+ * already enabled; public access is never turned on for a bucket this call
+ * did not create, so pre-existing private contents cannot be exposed by a
+ * click. Assumes the caller already confirmed wrangler is installed and
+ * logged in; never throws, degrading to a failure reason instead so the
+ * dashboard can surface it.
  */
 export async function provisionBucket(bucket: string = DEFAULT_EVIDENCE_BUCKET): Promise<ProvisionResult> {
   let createResult: { stdout: string; stderr: string; exitCode?: number; code?: string };
@@ -101,7 +104,24 @@ export async function provisionBucket(bucket: string = DEFAULT_EVIDENCE_BUCKET):
     if (!/already exists/i.test(output)) {
       return { ok: false, reason: `Could not create bucket "${bucket}": ${firstErrorLine(createResult)}` };
     }
-    // A previous brevi setup (or the user) already owns the bucket; reuse it.
+    // The bucket already exists. Public access is only ever enabled on a
+    // bucket this function just created: a pre-existing one may predate
+    // brevi and hold objects the user never meant to publish, so its dev
+    // URL is read back and reused only if it is already public (a previous
+    // brevi setup); otherwise provisioning fails with instructions instead
+    // of silently exposing it.
+    const getResult = await execa("wrangler", ["r2", "bucket", "dev-url", "get", bucket], {
+      timeout: 60_000,
+      reject: false,
+    });
+    const existingUrl = PUBLIC_URL_RE.exec(`${getResult.stdout}\n${getResult.stderr}`)?.[0];
+    if (existingUrl) return { ok: true, bucket, publicBaseUrl: existingUrl };
+    return {
+      ok: false,
+      reason:
+        `Bucket "${bucket}" already exists but is not public, and brevi will not expose an existing bucket's contents. ` +
+        `If publishing it is safe, run wrangler r2 bucket dev-url enable ${bucket} and connect again, or enter a different bucket manually.`,
+    };
   }
 
   const enableResult = await execa("wrangler", ["r2", "bucket", "dev-url", "enable", bucket, "-y"], {
@@ -111,16 +131,6 @@ export async function provisionBucket(bucket: string = DEFAULT_EVIDENCE_BUCKET):
   const enableOutput = `${enableResult.stdout}\n${enableResult.stderr}`;
   const enabledUrl = PUBLIC_URL_RE.exec(enableOutput)?.[0];
   if (enabledUrl) return { ok: true, bucket, publicBaseUrl: enabledUrl };
-
-  // Enabling may fail (or print nothing useful) if the dev URL was already
-  // enabled by a previous run; fall back to reading it back explicitly.
-  const getResult = await execa("wrangler", ["r2", "bucket", "dev-url", "get", bucket], {
-    timeout: 60_000,
-    reject: false,
-  });
-  const getOutput = `${getResult.stdout}\n${getResult.stderr}`;
-  const existingUrl = PUBLIC_URL_RE.exec(getOutput)?.[0];
-  if (existingUrl) return { ok: true, bucket, publicBaseUrl: existingUrl };
 
   if (enableResult.exitCode !== 0) {
     return { ok: false, reason: firstErrorLine(enableResult) };

@@ -528,6 +528,11 @@ function R2Row({
       switch (response.status) {
         case "connected":
           setStatus(response.r2);
+          // Also sync the manual-edit fields from the response: the config
+          // broadcast that would do it can lag or drop, and Edit opening on
+          // stale values could save them over the freshly provisioned ones.
+          setBucket(response.r2.bucket);
+          setPublicBaseUrl(response.r2.publicBaseUrl);
           break;
         case "login-started":
           autoProvisioned.current = false;
@@ -565,8 +570,9 @@ function R2Row({
   }, [status?.loggedIn, status?.ready]);
 
   const cancelEdit = () => {
-    setBucket(config.r2.bucket);
-    setPublicBaseUrl(config.r2.publicBaseUrl);
+    // Live status is fresher than the config prop when the WS broadcast lags.
+    setBucket(status?.bucket ?? config.r2.bucket);
+    setPublicBaseUrl(status?.publicBaseUrl ?? config.r2.publicBaseUrl);
     setSettingsResult(null);
     setEditing(false);
   };

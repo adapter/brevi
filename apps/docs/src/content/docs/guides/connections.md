@@ -83,7 +83,7 @@ The Connect button:
 
 1. Probes `wrangler whoami`. If it already reports an authenticated identity, the card shows connected immediately.
 2. Otherwise, if wrangler is installed, it starts `wrangler login` on the host, which opens a browser for interactive OAuth. The dashboard polls the live status until `wrangler whoami` succeeds.
-3. Once logged in, it provisions automatically: creates the `brevi-evidence` bucket (or reuses it if it already exists from a previous setup) and enables its r2.dev public development URL, then saves both settings.
+3. Once logged in, it provisions automatically: creates the `brevi-evidence` bucket, enables its r2.dev public development URL, and saves both settings. If the bucket already exists it is reused only when its dev URL is already public; brevi never turns on public access for a bucket it did not create, so that case shows a failure with instructions instead.
 4. If wrangler isn't installed at all, there's no automatic path; the card tells you to install it.
 
 The card surfaces three distinct not-ready states, so you always know what's missing: wrangler not installed, wrangler installed but not logged in, and logged in but provisioning not yet run or failed (a failure shows its reason in the card).
