@@ -6,6 +6,7 @@ import { isActive } from "../lib/status";
 import { Artifacts } from "./Artifacts";
 import { KindChip, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
+import { CostBadge } from "./CostBadge";
 import { External, Play, Stop } from "./Icons";
 import { PhaseSpine } from "./PhaseSpine";
 import { ResultCard } from "./ResultCard";
@@ -49,6 +50,7 @@ export function RunDetail({
         <StatusChip status={run.status} />
 
         <span className="ml-auto flex items-center gap-2.5">
+          <CostBadge costs={run.costs} totals={run.costTotals} align="end" className="text-[11px]" />
           <span className="hidden font-mono text-[11px] text-haze-700 sm:inline">
             started {relative(run.startedAt ?? run.createdAt, now)}
           </span>

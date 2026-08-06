@@ -52,3 +52,17 @@ export function oneLine(text: string, max = 120): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
+
+/** A dollar amount, e.g. "$4.83", "$0.032", "<$0.001", "$0.00". */
+export function usd(n: number): string {
+  if (n <= 0) return "$0.00";
+  if (n < 0.0005) return "<$0.001";
+  return `$${n.toFixed(n >= 0.1 ? 2 : 3)}`;
+}
+
+/** A compact token count, e.g. "842", "12.4k", "1.2M". */
+export function tokens(n: number): string {
+  if (n < 1000) return `${Math.round(n)}`;
+  const [value, suffix] = n >= 1_000_000 ? [n / 1_000_000, "M"] : [n / 1_000, "k"];
+  return `${value.toFixed(1).replace(/\.0$/, "")}${suffix}`;
+}

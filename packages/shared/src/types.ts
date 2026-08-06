@@ -75,6 +75,59 @@ export interface ArtifactRef {
   size: number;
 }
 
+/**
+ * LLM usage and cost of one agent execution within a run. Generic over
+ * providers and phases: a run is N executions (attempts today, more phases or
+ * subagents later), and the run's total is the sum over its entries.
+ */
+export interface CostEntry {
+  /** Which execution produced it, e.g. "implementation", "research", "implementation (attempt 2)". */
+  label: string;
+  /** "claude" | "codex" | future providers. */
+  provider: string;
+  model?: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  /** Absent when only tokens are known. */
+  costUsd?: number;
+  /** True when computed from a pricing table (or modeled on a subscription login) instead of reported by the provider. */
+  estimated?: boolean;
+}
+
+/** Derived sums over a run's cost entries. */
+export interface CostTotals {
+  /** Sum of entry costUsd values; absent when no entry carries a cost. */
+  costUsd?: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** True when any contributing entry is estimated rather than provider-reported. */
+  estimated: boolean;
+}
+
+/** Sum cost entries into run-level totals. */
+export function summarizeCosts(entries: CostEntry[]): CostTotals {
+  const totals: CostTotals = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    estimated: false,
+  };
+  for (const entry of entries) {
+    totals.inputTokens += entry.inputTokens;
+    totals.outputTokens += entry.outputTokens;
+    totals.cacheReadTokens += entry.cacheReadTokens ?? 0;
+    totals.cacheWriteTokens += entry.cacheWriteTokens ?? 0;
+    if (entry.costUsd !== undefined) totals.costUsd = (totals.costUsd ?? 0) + entry.costUsd;
+    if (entry.estimated) totals.estimated = true;
+  }
+  return totals;
+}
+
 export interface RunResult {
   kind: TicketKind;
   /** PR opened for implementation runs. */
@@ -85,6 +138,8 @@ export interface RunResult {
   branch?: string;
   summary: string;
   artifacts: ArtifactRef[];
+  /** Total LLM usage of the run at completion, summed across cost entries. */
+  costTotals?: CostTotals;
 }
 
 export interface Run {
@@ -103,6 +158,10 @@ export interface Run {
   error?: string;
   /** One entry per agent execution, oldest first. */
   attempts: RunAttempt[];
+  /** LLM usage per agent execution, oldest first; empty until an execution reports usage. */
+  costs: CostEntry[];
+  /** Derived sums over costs; recomputed whenever an entry is appended. */
+  costTotals?: CostTotals;
   /** When status is "waiting", the earliest time the next attempt may start. */
   resumeAt?: string;
   /** The most recent usage limit that interrupted this run. */
@@ -130,5 +189,7 @@ export type RunEvent =
       durationMs?: number;
     }
   | { runId: string; ts: string; type: "artifact"; artifact: ArtifactRef }
+  /** LLM usage of one finished agent execution. */
+  | { runId: string; ts: string; type: "cost"; entry: CostEntry }
   /** Marks the start of an agent execution; events that follow belong to it. */
   | { runId: string; ts: string; type: "attempt"; number: number };

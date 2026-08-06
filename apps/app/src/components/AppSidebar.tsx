@@ -13,6 +13,7 @@ import { duration, relative } from "../lib/format";
 import { repoDisplay } from "../lib/repo";
 import { isActive, STATUS_TONE } from "../lib/status";
 import { KindChip, Plate, RepoChip, StatusDot } from "./Bits";
+import { CostBadge } from "./CostBadge";
 import { External, Play } from "./Icons";
 
 export function AppSidebar({
@@ -248,6 +249,7 @@ function RunStrip({
         </div>
         <div className="mt-1.5 flex items-center gap-2">
           <RepoChip repo={repoName} />
+          <CostBadge costs={run.costs} totals={run.costTotals} align="end" />
           <span className="ml-auto font-mono text-[10px] text-haze-700">
             {relative(run.createdAt, now)}
           </span>

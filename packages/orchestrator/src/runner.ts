@@ -3,6 +3,7 @@ import { join, sep } from "node:path";
 import { execa, type Result as ExecaResult } from "execa";
 import { BREVI_HOME, WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type LimitInfo, type RepoConfig, type RunResult, type Ticket } from "@brevi/shared";
 import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
+import { usageCollector } from "./costs.js";
 import { authenticatedRemote, createPullRequest, plainRemote } from "./github.js";
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
@@ -121,6 +122,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     const trackThinking = thinkingTracker((phase, durationMs) => {
       store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "thinking", phase, durationMs });
     });
+    let usage = usageCollector();
     const stdoutSink = lineSink((line) => {
       let event: unknown;
       try {
@@ -130,6 +132,10 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         log("stdout", line);
         return;
       }
+      // Observed before the stream_event/noise filtering below: token_count
+      // and result events must reach the collector even though most other
+      // event types are dropped from the persisted log.
+      usage.observe(event);
       if (isDict(event) && event.type === "stream_event") {
         // Subagent streams (parent_tool_use_id set) carry their own thinking
         // block boundaries; only the top-level assistant stream drives the
@@ -167,6 +173,14 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       );
       stdoutSink.flush();
       stderrSink.flush();
+      // Recorded before the exitCode check so failed and limit-ended
+      // executions still keep whatever usage they burned.
+      const costLabel = attempt.number > 1 ? `${label} (attempt ${attempt.number})` : label;
+      const provider = agentProvider(config);
+      const subscription = provider === "claude" ? !config.agent.anthropicApiKey : !config.agent.codexApiKey;
+      const entry = usage.snapshot({ label: costLabel, provider, subscription });
+      if (entry) await store.addCost(run.id, entry);
+      usage = usageCollector();
       if (exec.exitCode !== 0) {
         if (detectedLimit) throw new AgentLimitError(detectedLimit);
         throw new Error(`agent exited with code ${exec.exitCode} (${label})`);
@@ -218,7 +232,10 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     }
     throwIfAborted(signal);
     await store.endAttempt(run.id, { outcome: "completed" });
-    await store.setStatus(run.id, "completed", { finishedAt: new Date().toISOString(), result });
+    await store.setStatus(run.id, "completed", {
+      finishedAt: new Date().toISOString(),
+      result: { ...result, costTotals: store.get(run.id)?.costTotals },
+    });
     log("system", `run completed: ${result.prUrl ?? result.commentUrl ?? "done"}`);
   } catch (error) {
     const cancelled = signal.aborted || error instanceof RunCancelledError;

@@ -56,12 +56,16 @@ interface Run {
   finishedAt?: string;
   result?: RunResult;   // prUrl / commentUrl / branch / summary / artifacts
   error?: string;
+  costs: CostEntry[];
+  costTotals?: CostTotals;
 }
 ```
 
 `GET /api/runs/:id/artifacts/:name` serves a file from the run's artifact directory with a guessed content type. Names that escape the directory are rejected with `400`.
 
 Cancelling a terminal run is a no-op and returns it unchanged; cancelling a queued run marks it `cancelled` immediately; cancelling the active run aborts it.
+
+`costs` has one `CostEntry` per agent execution (an attempt, or a future phase/subagent), each carrying `label`, `provider`, an optional `model`, token counts (`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`), an optional `costUsd` (absent when only tokens are known), and `estimated`, true when the cost is computed from a pricing table or modeled on a subscription login rather than reported by the provider. `costTotals` sums those entries for the whole run.
 
 ### Credentials
 
@@ -144,7 +148,7 @@ type ClientMessage =
 
 Every `config` payload is redacted. By default a client receives `run-event` messages for **all** runs; once it subscribes to at least one run id it receives events only for its subscriptions.
 
-`RunEvent` is one of a status change, a log line (`stdout` / `stderr` / `system`), an `agent` event forwarded from the agent's `stream-json` output, or an artifact reference. Events are also persisted as JSONL, which is what `GET /api/runs/:id/events` replays.
+`RunEvent` is one of a status change, a log line (`stdout` / `stderr` / `system`), an `agent` event forwarded from the agent's `stream-json` output, an artifact reference, or a `cost` entry recording one agent execution's LLM usage. Events are also persisted as JSONL, which is what `GET /api/runs/:id/events` replays.
 
 ## api.brevi.dev
 
