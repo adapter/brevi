@@ -12,6 +12,10 @@ import {
   type DevicePollResponse,
   type GithubRepo,
   type LinearProject,
+  type R2ConnectResponse,
+  type R2SettingsUpdateRequest,
+  type R2SettingsUpdateResponse,
+  type R2Status,
   type RepoConfig,
   type ReposUpdateRequest,
   type ReposUpdateResponse,
@@ -48,6 +52,7 @@ import {
 import { listRepos } from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
 import { LinearService } from "./linear.js";
+import { checkWrangler, startWranglerLogin } from "./r2.js";
 import { executeRun } from "./runner.js";
 import { ACTIVE_STATUSES, RunStore, isTerminal } from "./state.js";
 
@@ -92,6 +97,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #warnedNoRepo = new Set<string>();
   #githubDevice?: GithubDeviceSession;
   #linearOauth?: LinearOauthSession;
+  /** In-flight `wrangler login`, so repeated Connect clicks don't spawn parallel logins. */
+  #r2Login?: Promise<unknown>;
 
   constructor(config: BreviConfig, store: RunStore = new RunStore(), configPath?: string) {
     super();
@@ -504,6 +511,62 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     // affects new starts, already-running sandboxes finish out.
     this.#kickWorker();
     return { config: redactConfig(this.config) };
+  }
+
+  /** Live state of the Cloudflare R2 evidence connector, probed via wrangler on every call. */
+  async r2Status(): Promise<R2Status> {
+    const wrangler = await checkWrangler();
+    const { bucket, publicBaseUrl } = this.config.r2;
+    return {
+      ...wrangler,
+      bucket,
+      publicBaseUrl,
+      ready: wrangler.installed && wrangler.loggedIn && bucket !== "" && publicBaseUrl !== "",
+    };
+  }
+
+  /** One-click R2 connect: start `wrangler login` on the host, or report it's already done. */
+  async connectR2(): Promise<R2ConnectResponse> {
+    const wrangler = await checkWrangler();
+    if (!wrangler.installed) {
+      return {
+        status: "unavailable",
+        reason:
+          "The wrangler CLI is not installed on this machine. Install it with npm install -g wrangler, then connect again.",
+      };
+    }
+    if (wrangler.loggedIn) {
+      return { status: "connected", r2: await this.r2Status() };
+    }
+    if (!this.#r2Login) {
+      this.#r2Login = startWranglerLogin().finally(() => {
+        this.#r2Login = undefined;
+      });
+    }
+    return {
+      status: "login-started",
+      detail: "Finish logging in to Cloudflare in the opened browser tab; this panel updates by itself.",
+    };
+  }
+
+  /** Apply and persist the R2 evidence bucket settings from the dashboard. */
+  async updateR2Settings(request: R2SettingsUpdateRequest): Promise<R2SettingsUpdateResponse> {
+    if (typeof request.bucket === "string") this.config.r2.bucket = request.bucket.trim();
+    if (typeof request.publicBaseUrl === "string") {
+      const trimmed = request.publicBaseUrl.trim().replace(/\/+$/, "");
+      if (trimmed) {
+        try {
+          const url = new URL(trimmed);
+          if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("not http(s)");
+        } catch {
+          throw new OrchestratorError("invalid", "publicBaseUrl must be an http(s) URL");
+        }
+      }
+      this.config.r2.publicBaseUrl = trimmed;
+    }
+    await saveConfig(this.config, this.#configPath);
+    this.emit("config", redactConfig(this.config));
+    return { config: redactConfig(this.config), r2: await this.r2Status() };
   }
 
   /** Cancel a queued, waiting, or active run. Terminal runs are returned unchanged. */

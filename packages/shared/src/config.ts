@@ -60,6 +60,23 @@ export const configSchema = z.object({
       prDescription: z.enum(["concise", "detailed"]).default("concise"),
     })
     .prefault({}),
+  /**
+   * Cloudflare R2 evidence uploads. Authentication and uploads go through the
+   * host's wrangler CLI (`wrangler login` / `wrangler r2 object put`); no
+   * credential is stored here. Both fields must be set for uploads to happen.
+   */
+  r2: z
+    .object({
+      /** Public R2 bucket demo evidence is uploaded to. Empty = uploads disabled. */
+      bucket: z.string().default(""),
+      /**
+       * Public base URL the bucket is served from (its r2.dev development URL
+       * or a custom domain), used verbatim to build the asset links embedded
+       * in PR descriptions.
+       */
+      publicBaseUrl: z.string().default(""),
+    })
+    .prefault({}),
   /** Map of repo key -> repo config. Ticket labels or project names select the key. */
   repos: z.record(z.string(), repoConfigSchema).prefault({}),
   /** Repo key to use when a ticket doesn't match any mapping. */

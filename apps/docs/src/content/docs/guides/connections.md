@@ -75,6 +75,29 @@ Both are validated with a `{ viewer { name email } }` GraphQL query. Keys beginn
 
 Connecting or disconnecting Linear takes effect immediately: brevi rebuilds its Linear client and polls again without a restart.
 
+## Cloudflare R2
+
+Publishes a successful run's demo evidence, screenshots and recordings, to a public bucket so it can be embedded inline in the PR description. Unlike every other provider on this page, brevi stores no credential for it: authentication lives entirely with the host's `wrangler` CLI, the same one you'd use for any other Cloudflare work.
+
+The Connect button:
+
+1. Probes `wrangler whoami`. If it already reports an authenticated identity, the card shows connected immediately.
+2. Otherwise, if wrangler is installed, it starts `wrangler login` on the host, which opens a browser for interactive OAuth. The dashboard polls the live status until `wrangler whoami` succeeds.
+3. If wrangler isn't installed at all, there's no automatic path; the card tells you to install it.
+
+The card surfaces three distinct not-ready states, so you always know what's missing: wrangler not installed, wrangler installed but not logged in, and logged in but the bucket or public base URL not yet configured.
+
+Setup:
+
+1. Install the `wrangler` CLI on the host running the orchestrator.
+2. Create an R2 bucket in your Cloudflare account (brevi does not create it for you).
+3. Enable the bucket's r2.dev public development URL, or attach a custom domain to it.
+4. Click Connect to authenticate, then set the bucket name and its public base URL in the panel. Both are saved via `PUT /api/settings/r2`.
+
+Runs triggered while R2 isn't fully configured, logged out, or wrangler is missing behave exactly as before: evidence stays local and a note appears in the run's console instead of a failure.
+
+To disconnect, run `wrangler logout` on the host; the next probe reports logged out.
+
 ## The role of api.brevi.dev
 
 The GitHub device flow needs a client id, and the Linear code exchange needs a client secret that must not sit on your laptop. brevi hosts those OAuth applications at **`https://api.brevi.dev`**, a small Cloudflare Worker (see `apps/api`). The local orchestrator uses it automatically when you haven't configured your own OAuth app, so one-click Connect works out of the box with nothing to register.

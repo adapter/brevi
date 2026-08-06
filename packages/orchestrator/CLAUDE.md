@@ -12,6 +12,7 @@ The brevi engine, consumed by `@brevi/cli`. Polls Linear for `brevi`-labeled iss
 - `server.ts`: HTTP + WS API and dashboard static serving
 - `state.ts`: run persistence under `~/.brevi/` (events.jsonl per run)
 - `connect.ts` / `credentials.ts`: Connections panel flows and live credential verification
+- `r2.ts`: Cloudflare R2 evidence uploads via the wrangler CLI, GIF previews via ffmpeg
 - `config.ts`: load/save `~/.brevi/config.json` (schema lives in `@brevi/shared`)
 
 ## Gotchas

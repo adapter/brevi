@@ -7,6 +7,10 @@ import type {
   GithubRepo,
   HealthResponse,
   LinearProject,
+  R2ConnectResponse,
+  R2SettingsUpdateRequest,
+  R2SettingsUpdateResponse,
+  R2Status,
   ReposUpdateRequest,
   ReposUpdateResponse,
   Run,
@@ -61,6 +65,14 @@ export const api = {
     }),
   updateSandboxSettings: (request: SandboxSettingsUpdateRequest) =>
     json<SandboxSettingsUpdateResponse>("/api/settings/sandbox", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }),
+  r2Status: () => json<R2Status>("/api/connect/r2"),
+  connectR2: () => json<R2ConnectResponse>("/api/connect/r2", { method: "POST" }),
+  updateR2Settings: (request: R2SettingsUpdateRequest) =>
+    json<R2SettingsUpdateResponse>("/api/settings/r2", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),

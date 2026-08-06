@@ -23,6 +23,9 @@ There is no authentication: the server is loopback-only and anything reaching it
 | `PUT` | `/api/settings/credentials` | `CredentialsUpdateResponse` |
 | `POST` | `/api/connect/:provider` | `ConnectResponse` |
 | `POST` | `/api/connect/github/poll` | `DevicePollResponse` |
+| `GET` | `/api/connect/r2` | `R2Status` |
+| `POST` | `/api/connect/r2` | `R2ConnectResponse` |
+| `PUT` | `/api/settings/r2` | `R2SettingsUpdateResponse` |
 | `GET` | `/api/connect/linear/callback` | HTML (OAuth redirect target) |
 | `GET` | `/api/github/repos` | `GithubRepo[]` |
 | `PUT` | `/api/settings/repos` | `ReposUpdateResponse` |
@@ -129,6 +132,46 @@ Each entry is validated against the repo schema; a bad remote or an unknown `def
 ```
 
 The value is persisted to `~/.brevi/config.json` and takes effect immediately, no restart needed: raising the limit starts queued runs right away, and lowering it lets already-running sandboxes finish out rather than cancelling them. Values outside `1` to `16`, or non-integers, are rejected with `400` and nothing is written.
+
+### R2 connector
+
+There is no stored credential for R2: `GET /api/connect/r2` probes the host's `wrangler` CLI live on every call.
+
+```ts
+interface R2Status {
+  installed: boolean;       // wrangler CLI is on the host
+  loggedIn: boolean;        // `wrangler whoami` reports an identity
+  account?: string;         // account email, when logged in
+  bucket: string;           // config.r2.bucket, "" if unset
+  publicBaseUrl: string;    // config.r2.publicBaseUrl, "" if unset
+  ready: boolean;           // installed && loggedIn && bucket && publicBaseUrl
+}
+```
+
+`POST /api/connect/r2` starts the one-click flow:
+
+```ts
+| { status: "connected"; r2: R2Status }
+| { status: "login-started"; detail: string }
+| { status: "unavailable"; reason: string }
+```
+
+`"connected"` means `wrangler whoami` was already authenticated, nothing to do. `"login-started"` means brevi spawned `wrangler login` on the host, which opens a browser for interactive OAuth; the dashboard should poll `GET /api/connect/r2` until `loggedIn` flips. `"unavailable"` means wrangler isn't installed; `reason` says so.
+
+`PUT /api/settings/r2` sets the bucket and its public base URL:
+
+```json
+{ "bucket": "my-evidence-bucket", "publicBaseUrl": "https://pub-xxxx.r2.dev" }
+```
+
+```ts
+interface R2SettingsUpdateResponse {
+  config: BreviConfig;  // redacted
+  r2: R2Status;          // live state after the update
+}
+```
+
+Only provided fields are touched; each is trimmed, and a trailing slash is stripped from `publicBaseUrl`. A non-empty `publicBaseUrl` must parse as an `http(s)` URL, or the request is rejected with `400` and nothing is written.
 
 ## WebSocket
 
