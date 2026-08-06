@@ -93,8 +93,8 @@ export const configSchema = z.object({
       model: z.string().optional(),
       /**
        * Model the main agent loop runs on: it plans, reviews, and delegates
-       * implementation to subagents. Also used for SPIKE research. Claude
-       * agents only; Codex runs use `model`.
+       * implementation to subagents. Claude agents only; Codex runs use
+       * `model`.
        */
       orchestratorModel: z.string().default("claude-fable-5"),
       /** Model for the `implementer` subagent that executes the coding tasks. */
@@ -172,8 +172,6 @@ export const configSchema = z.object({
     .object({
       /** Label name that opts a ticket in. */
       label: z.string().default("brevi"),
-      /** Label or title prefix marking a ticket as research-only. */
-      spikeMarker: z.string().default("SPIKE"),
     })
     .prefault({}),
   restart: z

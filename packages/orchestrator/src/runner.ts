@@ -7,13 +7,12 @@ import { usageCollector } from "./costs.js";
 import { authenticatedRemote, createPullRequest, plainRemote } from "./github.js";
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
-import { buildImplementationPrompt, buildReviewFixPrompt, buildSpikePrompt, type RepoMap } from "./prompts.js";
+import { buildImplementationPrompt, buildReviewFixPrompt, type RepoMap } from "./prompts.js";
 import { uploadRunEvidence, type UploadedEvidence } from "./r2.js";
 import { codexReviewEnabled, runCodexReview } from "./review.js";
 import { isTerminal, type RunStore } from "./state.js";
 import { lineSink, RunCancelledError, throwIfAborted } from "./util.js";
 
-const MAX_COMMENT_BYTES = 60 * 1024;
 const BREVI_FOOTER = "🤖 Automated by [brevi]";
 
 export { RunCancelledError } from "./util.js";
@@ -29,9 +28,9 @@ export interface RunContext {
 
 /**
  * One attempt of the run pipeline: prepare a checkout + sandbox, run the
- * coding agent, then finalize (PR for implementations, Linear comment for
- * spikes). An attempt ended by an agent usage limit parks the run as
- * "waiting" (when auto-restart applies) instead of failing it.
+ * coding agent, then finalize (push the branch, open the PR). An attempt
+ * ended by an agent usage limit parks the run as "waiting" (when
+ * auto-restart applies) instead of failing it.
  *
  * Never throws for run failures: every outcome lands in the store as a
  * run status. Only truly unexpected store errors can escape.
@@ -223,51 +222,47 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     const claude = agentProvider(config) === "claude";
     const mainModel = config.agent.model || (claude ? config.agent.orchestratorModel : undefined);
     const mainEffort = claude ? config.agent.orchestratorEffort : undefined;
-    const delegate = claude && !config.agent.model && ticket.kind !== "spike";
+    const delegate = claude && !config.agent.model;
 
-    if (ticket.kind === "spike") {
-      await runAgent(buildSpikePrompt(ticket, repoMap), mainModel, mainEffort, "research");
-    } else {
-      await runAgent(
-        buildImplementationPrompt(ticket, repo, config.github.prDescription, { repoMap, delegate }),
-        mainModel,
-        mainEffort,
-        "implementation",
-        delegate ? ["--agents", JSON.stringify(implementerAgent(config.agent.implementModel))] : [],
-      );
+    await runAgent(
+      buildImplementationPrompt(ticket, repo, config.github.prDescription, { repoMap, delegate }),
+      mainModel,
+      mainEffort,
+      "implementation",
+      delegate ? ["--agents", JSON.stringify(implementerAgent(config.agent.implementModel))] : [],
+    );
 
-      // Adversarial review is best-effort and grounded only in the ticket plus
-      // the actual codebase; confirmed findings feed a fix pass on the main
-      // orchestrator model (same runAgent path, so usage limits and cost
-      // tracking behave exactly as they do for the implementation pass) before
-      // the PR opens.
-      if (codexReviewEnabled(config)) {
-        const findings = await runCodexReview({
-          sandbox: activeSandbox,
-          config,
-          ticket,
-          signal,
-          codexHome,
-          log,
-          addCost: (entry) => store.addCost(run.id, entry),
-        });
-        if (findings) {
-          await runAgent(
-            buildReviewFixPrompt({ ticket, findings, delegate }),
-            mainModel,
-            mainEffort,
-            "review fixes",
-            delegate ? ["--agents", JSON.stringify(implementerAgent(config.agent.implementModel))] : [],
-          );
-        }
-      } else if (config.agent.codexReview) {
-        log(
-          "system",
-          claude
-            ? "codex review skipped: no Codex credential configured"
-            : "codex review skipped: the primary agent is already Codex",
+    // Adversarial review is best-effort and grounded only in the ticket plus
+    // the actual codebase; confirmed findings feed a fix pass on the main
+    // orchestrator model (same runAgent path, so usage limits and cost
+    // tracking behave exactly as they do for the implementation pass) before
+    // the PR opens.
+    if (codexReviewEnabled(config)) {
+      const findings = await runCodexReview({
+        sandbox: activeSandbox,
+        config,
+        ticket,
+        signal,
+        codexHome,
+        log,
+        addCost: (entry) => store.addCost(run.id, entry),
+      });
+      if (findings) {
+        await runAgent(
+          buildReviewFixPrompt({ ticket, findings, delegate }),
+          mainModel,
+          mainEffort,
+          "review fixes",
+          delegate ? ["--agents", JSON.stringify(implementerAgent(config.agent.implementModel))] : [],
         );
       }
+    } else if (config.agent.codexReview) {
+      log(
+        "system",
+        claude
+          ? "codex review skipped: no Codex credential configured"
+          : "codex review skipped: the primary agent is already Codex",
+      );
     }
 
     // ---- finalizing ------------------------------------------------------
@@ -282,22 +277,16 @@ export async function executeRun(ctx: RunContext): Promise<void> {
 
     // Best-effort: uploadRunEvidence never throws, so a wrangler hiccup or a
     // failed upload never fails the run, it just leaves the PR without a
-    // demo section. Spikes have no PR to embed evidence in.
-    const evidence =
-      ticket.kind === "spike"
-        ? []
-        : await uploadRunEvidence({
-            runId: run.id,
-            artifactsDir: store.artifactsDir(run.id),
-            artifacts,
-            config,
-            log: (text) => log("system", text),
-          });
+    // demo section.
+    const evidence = await uploadRunEvidence({
+      runId: run.id,
+      artifactsDir: store.artifactsDir(run.id),
+      artifacts,
+      config,
+      log: (text) => log("system", text),
+    });
 
-    const result =
-      ticket.kind === "spike"
-        ? await finalizeSpike({ ticket, pulledDir, artifacts, linear })
-        : await finalizeImplementation({ ticket, repo, branch, pulledDir, artifacts, config, linear, log, evidence });
+    const result = await finalizeImplementation({ ticket, repo, branch, pulledDir, artifacts, config, linear, log, evidence });
 
     try {
       if (await linear.moveToReview(ticket.id, signal)) {
@@ -313,7 +302,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       finishedAt: new Date().toISOString(),
       result: { ...result, costTotals: store.get(run.id)?.costTotals },
     });
-    log("system", `run completed: ${result.prUrl ?? result.commentUrl ?? "done"}`);
+    log("system", `run completed: ${result.prUrl ?? "done"}`);
   } catch (error) {
     // An execution interrupted mid-flight (cancellation, a sandbox failure)
     // never reached its snapshot in runAgent; keep the spend it burned.
@@ -551,7 +540,7 @@ function classifyArtifact(name: string): ArtifactRef["type"] {
 }
 
 /**
- * Copy the agent's outputs (.brevi/demo/* plus summary/research/review docs) into the
+ * Copy the agent's outputs (.brevi/demo/* plus summary/review docs) into the
  * run's artifact directory, flattening nested demo paths into safe names.
  */
 async function collectArtifacts(
@@ -582,7 +571,7 @@ async function collectArtifacts(
     // no demo directory
   }
 
-  for (const doc of ["summary.md", "research.md", "review.md"]) {
+  for (const doc of ["summary.md", "review.md"]) {
     const source = join(pulledDir, ".brevi", doc);
     try {
       await stat(source);
@@ -593,37 +582,6 @@ async function collectArtifacts(
   }
 
   return collected;
-}
-
-interface SpikeFinalizeOptions {
-  ticket: Ticket;
-  pulledDir: string;
-  artifacts: ArtifactRef[];
-  linear: LinearService;
-}
-
-async function finalizeSpike(options: SpikeFinalizeOptions): Promise<RunResult> {
-  const { ticket, pulledDir, artifacts, linear } = options;
-  let research: string;
-  try {
-    research = await readFile(join(pulledDir, ".brevi", "research.md"), "utf8");
-  } catch {
-    throw new Error("agent produced no research output (.brevi/research.md is missing)");
-  }
-
-  let body = research.trim();
-  if (Buffer.byteLength(body, "utf8") > MAX_COMMENT_BYTES) {
-    body = `${truncateUtf8(body, MAX_COMMENT_BYTES)}\n\n---\n*Truncated: the full research is stored with the brevi run's artifacts.*`;
-  }
-  const comment = `${body}\n\n---\n${BREVI_FOOTER}`;
-  const commentUrl = await linear.postComment(ticket.id, comment);
-
-  return {
-    kind: "spike",
-    commentUrl,
-    summary: body,
-    artifacts,
-  };
 }
 
 interface ImplementationFinalizeOptions {
@@ -678,9 +636,8 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
     token,
   });
 
-  let commentUrl: string | undefined;
   try {
-    commentUrl = await linear.postComment(
+    await linear.postComment(
       ticket.id,
       `Opened a pull request for this ticket: ${prUrl}\n\n---\n${BREVI_FOOTER}`,
     );
@@ -689,9 +646,7 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
   }
 
   return {
-    kind: "implementation",
     prUrl,
-    commentUrl,
     branch,
     summary,
     artifacts,
@@ -703,8 +658,8 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
  * the summary and the "Fixes ..." line: images embed directly, videos with a
  * GIF preview become a clickable thumbnail linking to the full recording,
  * and videos without one fall back to a plain link. Otherwise (no evidence
- * uploaded, R2 unconfigured, or a spike) demo evidence stays with the local
- * run's artifacts and the PR carries only the summary.
+ * uploaded, R2 unconfigured) demo evidence stays with the local run's
+ * artifacts and the PR carries only the summary.
  */
 export function buildPrBody(options: { summary: string; ticket: Ticket; evidence: UploadedEvidence[] }): string {
   const { summary, ticket, evidence } = options;
@@ -721,11 +676,3 @@ export function buildPrBody(options: { summary: string; ticket: Ticket; evidence
   return parts.join("\n\n");
 }
 
-/** Truncate a string to at most maxBytes of utf8 without splitting surrogates. */
-function truncateUtf8(text: string, maxBytes: number): string {
-  let sliced = text;
-  while (Buffer.byteLength(sliced, "utf8") > maxBytes) {
-    sliced = sliced.slice(0, Math.floor(sliced.length * 0.9));
-  }
-  return sliced;
-}

@@ -50,7 +50,7 @@ A freshly initialised config, with every default filled in:
     "linearClientId": "",
     "linearClientSecret": ""
   },
-  "trigger": { "label": "brevi", "spikeMarker": "SPIKE" },
+  "trigger": { "label": "brevi" },
   "server": { "port": 4400 },
   "pollIntervalSeconds": 60
 }
@@ -74,11 +74,11 @@ Keys beginning with `lin_api_` are sent as a raw `Authorization` header; anythin
 | `token` | string | `""` | Token with the `repo` and `workflow` scopes. Used to list repos, clone, push, and open PRs. Empty means not connected. |
 | `prDescription` | `"concise"` \| `"detailed"` | `"concise"` | How the agent is told to write the PR description: `concise` asks for a couple of sentences plus a few bullets, `detailed` allows a full write-up. |
 
-Implementation tickets will not run without it. SPIKEs will.
+Tickets will not run without it: every run pushes a branch and opens a pull request.
 
 ## `r2`
 
-Optional. When both fields are set, demo evidence (screenshots and recordings) from successful implementation runs is uploaded to a public Cloudflare R2 bucket and embedded in the PR description.
+Optional. When both fields are set, demo evidence (screenshots and recordings) from successful runs is uploaded to a public Cloudflare R2 bucket and embedded in the PR description.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
@@ -129,7 +129,7 @@ brevi also never deletes uploaded objects. Clean them up yourself, or attach an 
 | `path` | string | - | Local checkout to clone from instead of the network. |
 | `devCommand` | string | - | Command that starts a dev server; makes the agent capture Playwright screenshots for the demo. |
 | `devUrl` | string | - | URL the dev server listens on, so the agent knows when it's up and what to screenshot. |
-| `demo` | `"always"` \| `"auto"` \| `"never"` | `"auto"` | How much demo evidence implementation runs capture. `always` is the full dev-server/screenshot flow; `auto` lets the agent downgrade to test output or a CLI transcript for changes with no visible surface (docs, tests, refactors); `never` skips the demo requirement. |
+| `demo` | `"always"` \| `"auto"` \| `"never"` | `"auto"` | How much demo evidence runs capture. `always` is the full dev-server/screenshot flow; `auto` lets the agent downgrade to test output or a CLI transcript for changes with no visible surface (docs, tests, refactors); `never` skips the demo requirement. |
 
 `defaultRepo` is the key used when a ticket matches no mapping. It must name an existing entry. If you clear it, brevi falls back to the first repo rather than stranding tickets.
 
@@ -142,7 +142,7 @@ The coding agent executed inside the sandbox.
 | `command` | string | `"claude"` | The agent CLI to run inside the sandbox. |
 | `args` | string[] | `[]` | Extra arguments appended after brevi's own. |
 | `model` | string | - | When set, the whole run uses this one model with no subagent delegation, overriding `orchestratorModel` and `implementModel`. |
-| `orchestratorModel` | string | `"claude-fable-5"` | Model the main agent loop runs on (planning, review, delegation), also used for SPIKE research. Claude agents only. |
+| `orchestratorModel` | string | `"claude-fable-5"` | Model the main agent loop runs on (planning, review, delegation). Claude agents only. |
 | `implementModel` | string | `"claude-sonnet-5"` | Model for the `implementer` subagent that executes the coding tasks. Claude agents only. |
 | `orchestratorEffort` | `"low"` \| `"medium"` \| `"high"` | `"high"` | Reasoning effort for the main agent loop, passed to Claude Code as `--effort`. Claude agents only; the `implementer` subagent keeps the CLI's default effort. |
 | `anthropicApiKey` | string | `""` | Exported into the sandbox as `ANTHROPIC_API_KEY`. |
@@ -155,7 +155,7 @@ The coding agent executed inside the sandbox.
 
 brevi always invokes the agent as `<command> -p <prompt> --output-format stream-json --verbose --dangerously-skip-permissions`, then `--model <model>`, then `args`. Those are Claude Code's flags, so a different `command` has to accept the same shape. Claude agents additionally get `--effort <orchestratorEffort>`.
 
-Claude implementation runs are a single agent session with delegation: the main loop runs on `orchestratorModel` and dispatches the coding work to an `implementer` subagent on `implementModel` (defined via Claude Code's `--agents` flag). Setting `model` disables delegation and runs everything on that one model. Commands containing `codex` always run single-model on `model`.
+Claude runs are a single agent session with delegation: the main loop runs on `orchestratorModel` and dispatches the coding work to an `implementer` subagent on `implementModel` (defined via Claude Code's `--agents` flag). Setting `model` disables delegation and runs everything on that one model. Commands containing `codex` always run single-model on `model`.
 
 ### Codex review
 
@@ -205,7 +205,6 @@ A self-hosted Linear OAuth app must register the redirect URI `http://localhost:
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `label` | string | `"brevi"` | Label that opts a ticket in. Matched case-insensitively. |
-| `spikeMarker` | string | `"SPIKE"` | Marks a ticket as research-only when it appears in the title or in a label. Case-insensitive. |
 
 ## `server`
 

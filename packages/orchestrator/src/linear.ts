@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { LinearClient, type Issue, type LinearDocument } from "@linear/sdk";
-import type { BreviConfig, LinearProject, Ticket, TicketKind } from "@brevi/shared";
+import type { BreviConfig, LinearProject, Ticket } from "@brevi/shared";
 
 /** Backoff before the single retry of a failed Linear API call. */
 const RETRY_DELAY_MS = 2_000;
@@ -148,12 +148,6 @@ export class LinearService {
     const hasLabel = labels.some((l) => l.toLowerCase() === trigger.label.toLowerCase());
     if (!hasLabel) return undefined;
 
-    const marker = trigger.spikeMarker.toLowerCase();
-    const isSpike =
-      marker.length > 0 &&
-      (title.toLowerCase().includes(marker) || labels.some((l) => l.toLowerCase().includes(marker)));
-    const kind: TicketKind = isSpike ? "spike" : "implementation";
-
     const state = await issue.state;
     const repo = await this.#resolveRepo(issue, labels);
 
@@ -163,7 +157,6 @@ export class LinearService {
       title,
       description,
       url: issue.url,
-      kind,
       labels,
       state: state?.name ?? "Unknown",
       repo,

@@ -8,7 +8,7 @@ import { clock, duration, elapsed, relative } from "../lib/format";
 import { isActive } from "../lib/status";
 import { Artifacts } from "./Artifacts";
 import { AttachTerminal } from "./AttachTerminal";
-import { KindChip, Plate, RepoChip, StatusChip } from "./Bits";
+import { Plate, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { CostBadge } from "./CostBadge";
 import { External, Play, Stop } from "./Icons";
@@ -66,7 +66,6 @@ export function RunDetail({
           <External className="size-3 text-haze-700 transition-colors group-hover:text-haze-300" />
         </a>
 
-        <KindChip kind={run.ticket.kind} />
         <StatusChip status={run.status} />
 
         <span className="ml-auto flex items-center gap-2.5">

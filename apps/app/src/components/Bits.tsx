@@ -1,4 +1,4 @@
-import type { RunStatus, Ticket } from "@brevi/shared";
+import type { RunStatus } from "@brevi/shared";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
@@ -31,17 +31,6 @@ export function StatusChip({ status, className = "" }: { status: RunStatus; clas
       {tone.label}
     </Badge>
   );
-}
-
-export function KindChip({ kind }: { kind: Ticket["kind"] }) {
-  if (kind === "spike") {
-    return (
-      <Badge variant="outline" className="border-iris-400/35 bg-iris-400/12 text-iris-400">
-        Spike
-      </Badge>
-    );
-  }
-  return <Badge variant="outline">Impl</Badge>;
 }
 
 export function RepoChip({ repo }: { repo?: string }) {

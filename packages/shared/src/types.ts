@@ -1,8 +1,5 @@
 /** Core domain types shared between the orchestrator, sandbox, CLI, and dashboard. */
 
-/** How a ticket should be handled. SPIKEs produce research; everything else produces code. */
-export type TicketKind = "spike" | "implementation";
-
 export interface Ticket {
   /** Provider-scoped id (e.g. Linear issue id). */
   id: string;
@@ -11,7 +8,6 @@ export interface Ticket {
   title: string;
   description: string;
   url: string;
-  kind: TicketKind;
   labels: string[];
   /** Ticket state name in the tracker, e.g. "Todo". */
   state: string;
@@ -81,7 +77,7 @@ export interface ArtifactRef {
  * subagents later), and the run's total is the sum over its entries.
  */
 export interface CostEntry {
-  /** Which execution produced it, e.g. "implementation", "research", "implementation (attempt 2)". */
+  /** Which execution produced it, e.g. "implementation", "review fixes", "implementation (attempt 2)". */
   label: string;
   /** "claude" | "codex" | future providers. */
   provider: string;
@@ -129,12 +125,9 @@ export function summarizeCosts(entries: CostEntry[]): CostTotals {
 }
 
 export interface RunResult {
-  kind: TicketKind;
-  /** PR opened for implementation runs. */
+  /** PR opened for the run. */
   prUrl?: string;
-  /** Linear comment posted for spike runs. */
-  commentUrl?: string;
-  /** Branch pushed for implementation runs. */
+  /** Branch pushed for the run. */
   branch?: string;
   summary: string;
   artifacts: ArtifactRef[];

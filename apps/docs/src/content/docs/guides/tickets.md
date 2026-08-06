@@ -16,18 +16,7 @@ An issue is eligible when **all** of these hold:
 
 The label name is configurable under `trigger` in the config.
 
-## SPIKE versus implementation
-
-A ticket is a **SPIKE** when the spike marker (`SPIKE` by default, case-insensitive) appears in the **title** or in **any label**. Everything else is an implementation ticket.
-
-| | SPIKE | Implementation |
-| --- | --- | --- |
-| Agent instructions | Research only, must not modify code | Implement the ticket end to end |
-| Required output | `.brevi/research.md` | Working-tree changes, `.brevi/summary.md`, a demo under `.brevi/demo/` |
-| Result | Comment on the Linear issue | Branch + pull request, plus a comment linking to it |
-| Needs GitHub connected | No | Yes |
-
-The SPIKE prompt asks for a structured document: `## Context`, `## Findings` (with concrete file references), `## Options`, `## Recommendation`.
+Every run implements its ticket end to end: the agent changes the code, writes `.brevi/summary.md`, and captures a demo under `.brevi/demo/`; brevi pushes a branch and opens a pull request, plus a Linear comment linking to it. Because every run pushes a branch, GitHub must be connected.
 
 ## Which repository a ticket runs against
 
@@ -39,7 +28,7 @@ Repository mappings live in `config.repos` as *key → repo* entries; the dashbo
 4. The issue's **project name** matching a repo key.
 5. **`config.defaultRepo`**, if it names a real entry in `config.repos`.
 
-A ticket that resolves to nothing is still shown in the dashboard queue, but it is never auto-queued; the orchestrator logs a warning once, telling you to add a `repo:<key>` label, rename the project, or set a default. The same is true for implementation tickets while GitHub is disconnected.
+A ticket that resolves to nothing is still shown in the dashboard queue, but it is never auto-queued; the orchestrator logs a warning once, telling you to add a `repo:<key>` label, rename the project, or set a default. The same is true while GitHub is disconnected.
 
 ## What a run does
 
@@ -47,20 +36,17 @@ Runs execute serially (one at a time, FIFO) and move through the statuses `queue
 
 **Preparing.** brevi clones the mapped repo (depth 50, default branch, or from `repo.path` if you configured a local checkout), rewrites `origin` to a token-free URL, creates the branch `brevi/<ticket-identifier>` in lowercase, creates the sandbox, and pushes the checkout into it. Best effort, it also moves the Linear issue to its team's first "started" state.
 
-**Running.** The configured agent command runs headless inside the sandbox with the generated prompt. Structured `stream-json` output is parsed and forwarded to the dashboard as it arrives, so you watch the run live. A run is killed at `sandbox.timeoutMinutes` (60 by default), and a non-zero agent exit fails the run. For Claude implementation runs, once the coding phase finishes, an adversarial Codex review of the uncommitted diff can run in the same sandbox and drive a fix pass before the branch is pushed; see [Codex review](/reference/configuration/#codex-review).
+**Running.** The configured agent command runs headless inside the sandbox with the generated prompt. Structured `stream-json` output is parsed and forwarded to the dashboard as it arrives, so you watch the run live. A run is killed at `sandbox.timeoutMinutes` (60 by default), and a non-zero agent exit fails the run. For Claude runs, once the coding phase finishes, an adversarial Codex review of the uncommitted diff can run in the same sandbox and drive a fix pass before the branch is pushed; see [Codex review](/reference/configuration/#codex-review).
 
-**Finalizing.** The workspace is pulled back out and artifacts collected: everything under `.brevi/demo/` (nested paths flattened, so `demo/web/home.png` is stored as `web__home.png`), plus `.brevi/summary.md` and `.brevi/research.md`. Artifacts are kept with the run under `~/.brevi/runs/` and served by the dashboard.
+**Finalizing.** The workspace is pulled back out and artifacts collected: everything under `.brevi/demo/` (nested paths flattened, so `demo/web/home.png` is stored as `web__home.png`), plus `.brevi/summary.md`. Artifacts are kept with the run under `~/.brevi/runs/` and served by the dashboard.
 
-Then, depending on the kind:
-
-- **Implementation**: brevi removes everything under `.brevi/` (agent outputs stay with the run's artifacts; the mounted Codex login must never leak), stages the rest, and fails with `agent made no changes` if the tree is clean. Otherwise it commits `<ID>: <title>`, force-pushes `brevi/<ticket-id>`, and opens a pull request against the repo's default branch. The PR body is the agent's `summary.md`, `Fixes <ID>`, and a brevi footer. Finally brevi comments on the Linear issue with the PR link (a failure here does not fail the run).
-- **SPIKE**: brevi reads `.brevi/research.md` and posts it as a Linear comment. If the file is missing, the run fails. Comments longer than 60 KB are truncated with a pointer to the full document in the run's artifacts.
+Then brevi removes everything under `.brevi/` (agent outputs stay with the run's artifacts; the mounted Codex login must never leak), stages the rest, and fails with `agent made no changes` if the tree is clean. Otherwise it commits `<ID>: <title>`, force-pushes `brevi/<ticket-id>`, and opens a pull request against the repo's default branch. The PR body is the agent's `summary.md`, `Fixes <ID>`, and a brevi footer. Finally brevi comments on the Linear issue with the PR link (a failure here does not fail the run).
 
 When a run completes successfully, brevi also moves the Linear issue to a review state: the team's first `started`-type state whose name mentions "review" (e.g. **In Review**). Best effort: teams without such a state keep the issue where it is.
 
 ### Demos
 
-The implementation prompt makes a demo mandatory. If the repo config sets `devCommand` (and optionally `devUrl`), the agent is told to start that dev server and capture real screenshots with Playwright. Otherwise it captures the best available evidence: screenshots, else a `.webm` recording, else test output or a CLI transcript as `.txt`. Files go in `.brevi/demo/` and are collected as run artifacts, viewable on the run's page in the dashboard; they are not committed to the branch or attached to the PR.
+The run prompt makes a demo mandatory. If the repo config sets `devCommand` (and optionally `devUrl`), the agent is told to start that dev server and capture real screenshots with Playwright. Otherwise it captures the best available evidence: screenshots, else a `.webm` recording, else test output or a CLI transcript as `.txt`. Files go in `.brevi/demo/` and are collected as run artifacts, viewable on the run's page in the dashboard; they are not committed to the branch or attached to the PR.
 
 ## Reruns
 

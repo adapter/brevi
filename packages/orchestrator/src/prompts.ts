@@ -117,24 +117,6 @@ export function buildImplementationPrompt(
   ].join("\n");
 }
 
-/** Prompt for SPIKE tickets: research only, no code changes. */
-export function buildSpikePrompt(ticket: Ticket, repoMap?: RepoMap): string {
-  return [
-    "You are a research agent. Investigate the question in the ticket below against this repository (checked out in the current directory) and your own knowledge. This is a SPIKE: do NOT modify any code.",
-    "",
-    ticketSection(ticket),
-    ...(repoMap ? ["", repoMapSection(repoMap)] : []),
-    "",
-    "## Required output",
-    NO_EM_DASHES,
-    "Write your research to `.brevi/research.md`, the only file you may create or modify. Structure it as:",
-    "- `## Context`: what the question is and why it matters here",
-    "- `## Findings`: what you learned, with concrete file references from this codebase",
-    "- `## Options`: viable approaches with their tradeoffs",
-    "- `## Recommendation`: what you would do and why",
-  ].join("\n");
-}
-
 /** One independent brief in the adversarial Codex review; the angle list itself lives in review.ts. */
 export interface ReviewAngle {
   key: string;

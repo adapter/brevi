@@ -2,7 +2,7 @@ import type { Run } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Plate } from "./Bits";
-import { Branch, Comment, External, Merge } from "./Icons";
+import { Branch, External, Merge } from "./Icons";
 import { Markdown } from "./Markdown";
 
 /** The result summary, links, and branch chip for a run. Frameless: the caller supplies the card. */
@@ -15,9 +15,7 @@ export function ResultCard({ run }: { run: Run }) {
   return (
     <div>
       <div className="flex items-center gap-2">
-        <Plate className={shipped ? "text-mint-400" : "text-haze-600"}>
-          {result.kind === "spike" ? "Research delivered" : "Result"}
-        </Plate>
+        <Plate className={shipped ? "text-mint-400" : "text-haze-600"}>Result</Plate>
         <Separator className="flex-1" />
       </div>
 
@@ -30,12 +28,6 @@ export function ResultCard({ run }: { run: Run }) {
           <Link href={result.prUrl} tone="mint">
             <Merge className="size-3.5" />
             Open pull request
-          </Link>
-        )}
-        {result.commentUrl && (
-          <Link href={result.commentUrl} tone="iris">
-            <Comment className="size-3.5" />
-            Read the write-up
           </Link>
         )}
         <Link href={run.ticket.url} tone="plain">
@@ -59,12 +51,11 @@ function Link({
   children,
 }: {
   href: string;
-  tone: "mint" | "iris" | "plain";
+  tone: "mint" | "plain";
   children: React.ReactNode;
 }) {
   const tones = {
     mint: "border-mint-500/35 bg-mint-500/10 text-mint-400 hover:border-mint-500/35 hover:bg-mint-500/20 hover:text-mint-400",
-    iris: "border-iris-400/35 bg-iris-400/10 text-iris-400 hover:border-iris-400/35 hover:bg-iris-400/20 hover:text-iris-400",
     plain: "",
   };
   return (
