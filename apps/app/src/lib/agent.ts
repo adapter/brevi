@@ -124,10 +124,15 @@ export function toAgentBlocks(event: unknown): AgentBlock[] {
     const subtype = str(event["subtype"]) ?? "system";
     const model = str(event["model"]);
     const tools = Array.isArray(event["tools"]) ? event["tools"].length : undefined;
-    const bits = [subtype, model, tools !== undefined ? `${tools} tools` : undefined].filter(
-      Boolean,
-    );
-    out.push({ kind: "note", text: bits.join(" · ") });
+    // System events carrying nothing beyond their subtype (thinking_tokens,
+    // status, task_* progress ticks) render nothing; a bare subtype name is
+    // noise. Only substance like init's model and tool count earns a note.
+    if (model !== undefined || tools !== undefined) {
+      const bits = [subtype, model, tools !== undefined ? `${tools} tools` : undefined].filter(
+        Boolean,
+      );
+      out.push({ kind: "note", text: bits.join(" · ") });
+    }
   } else if (type === "result") {
     const ok = event["is_error"] !== true && str(event["subtype"]) !== "error";
     const turns = event["num_turns"];
