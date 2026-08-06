@@ -146,10 +146,23 @@ export function toAgentBlocks(event: unknown): AgentBlock[] {
     });
   } else if (typeof event["text"] === "string") {
     out.push({ kind: "text", text: event["text"] });
-  } else if (type) {
-    out.push({ kind: "note", text: type });
+  } else if (!type || isErrorShaped(event, type)) {
+    // Shapeless payloads and structured errors pretty-print: the former for
+    // debugging, the latter because a failure must stay visible. Any other
+    // unrecognized `type` is a newer low-signal event (status lines, token
+    // progress) and renders nothing rather than a bare type name.
+    out.push({ kind: "note", text: pretty(event) });
   }
 
-  if (out.length === 0) out.push({ kind: "note", text: pretty(event) });
   return out;
+}
+
+/**
+ * Mirrors the orchestrator's isAgentFailureEvent (limits.ts): terminal errors
+ * from Claude Code ({type: "error"}) or Codex ({msg: {type: "*error*"}}).
+ */
+function isErrorShaped(event: Dict, type: string | undefined): boolean {
+  if (type === "error" || event["is_error"] === true) return true;
+  const msg = event["msg"];
+  return isDict(msg) && typeof msg["type"] === "string" && /error/i.test(msg["type"]);
 }

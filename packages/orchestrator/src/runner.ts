@@ -131,9 +131,13 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         return;
       }
       if (isDict(event) && event.type === "stream_event") {
-        trackThinking(event.event);
+        // Subagent streams (parent_tool_use_id set) carry their own thinking
+        // block boundaries; only the top-level assistant stream drives the
+        // spinner, or one visible thinking spell would log several durations.
+        if (!event.parent_tool_use_id) trackThinking(event.event);
         return;
       }
+      if (isDict(event) && typeof event.type === "string" && NOISE_EVENT_TYPES.has(event.type)) return;
       if (isAgentFailureEvent(event)) noteLimit(line);
       store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "agent", event });
     });
@@ -379,6 +383,13 @@ const isDict = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
 /**
+ * Top-level stream-json event types with no replay value: newer Claude Code
+ * versions emit status lines and per-token progress ticks that would bloat
+ * events.jsonl and spam the console if persisted.
+ */
+const NOISE_EVENT_TYPES = new Set(["status", "thinking_tokens"]);
+
+/**
  * Reduces the agent's raw partial-message stream events to thinking-block
  * boundaries: "started" when a (redacted) thinking block opens, "finished"
  * with the elapsed time when it closes. Everything else is ignored.
@@ -395,7 +406,7 @@ function thinkingTracker(
     } else if (rawEvent.type === "content_block_start" && index !== undefined) {
       const block = rawEvent.content_block;
       const kind = isDict(block) ? block.type : undefined;
-      if (kind === "thinking" || kind === "redacted_thinking") {
+      if ((kind === "thinking" || kind === "redacted_thinking") && !startedAt.has(index)) {
         startedAt.set(index, Date.now());
         emit("started");
       }
