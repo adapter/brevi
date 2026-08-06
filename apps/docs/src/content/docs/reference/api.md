@@ -62,7 +62,7 @@ interface Run {
   queuedAt?: string;
   startedAt?: string;
   finishedAt?: string;
-  result?: RunResult;   // prUrl / commentUrl / branch / summary / artifacts
+  result?: RunResult;   // prUrl / branch / summary / artifacts
   error?: string;
   costs: CostEntry[];
   costTotals?: CostTotals;
