@@ -35,7 +35,7 @@ Repository mappings live in `config.repos` as *key → repo* entries; the dashbo
 
 1. A label of the form **`repo:<key>`** (case-insensitive).
 2. A label that **exactly matches a repo key**.
-3. The issue's project appearing in a repo's **`projects` list** (the Linear-project mapping edited in the dashboard's Connections panel).
+3. The issue's project appearing in a repo's **`projects` list** (the Linear-project mapping edited on the dashboard's Configuration page).
 4. The issue's **project name** matching a repo key.
 5. **`config.defaultRepo`**, if it names a real entry in `config.repos`.
 

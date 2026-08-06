@@ -3,7 +3,7 @@ title: Connections
 description: How brevi's one-click Connect buttons acquire GitHub, Claude, Codex and Linear credentials, how they are validated, and where they are stored.
 ---
 
-Every credential brevi uses is set from the dashboard's **Connections** rail. Each provider has one **Connect** button that walks a strategy chain: look for a credential that already exists on this machine, then an OAuth flow, and then, only if both fail, offer manual entry with a reason.
+Every credential brevi uses is set from the dashboard's **Configuration** page, opened with the gear button in the nav bar (or directly at `/config`). A small amber dot on the gear means a provider is disconnected. Each provider has one **Connect** button that walks a strategy chain: look for a credential that already exists on this machine, then an OAuth flow, and then, only if both fail, offer manual entry with a reason.
 
 Nothing is saved until it has been checked against the provider. "Connected" means brevi made a live call with that credential and it worked.
 

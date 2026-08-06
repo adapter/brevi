@@ -48,9 +48,9 @@ Working on brevi itself? Clone [adapter/brevi](https://github.com/adapter/brevi)
 
    The orchestrator then binds `http://localhost:4400`, serves the dashboard, and opens it in your browser. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up. To change the sandbox provider later, run `brevi init`; it keeps everything else in the config (credentials, repositories) untouched.
 
-2. **Open the Connections rail**
+2. **Open the Configuration page**
 
-   The dashboard's **Connections** panel is where every credential is set. Each provider has a **Connect** button that tries automatic strategies first and only falls back to a manual key input:
+   Click the gear button in the dashboard's nav bar (or go to `/config`). The **Configuration** page is where every credential is set. Each provider has a **Connect** button that tries automatic strategies first and only falls back to a manual key input:
 
    - **GitHub**: your `gh` CLI login, otherwise an OAuth device code (a code to type on github.com).
    - **Claude**: a Claude Code login discovered on this machine (macOS Keychain or `~/.claude`), or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` in the orchestrator's environment.

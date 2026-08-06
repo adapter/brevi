@@ -47,7 +47,7 @@ Picking `firecracker` on a non-Linux machine prints a warning; the config is sti
 
 If a config already exists, `init` asks before touching it and **preserves everything else**: credentials, repository mappings, triggers. An unparseable config can be overwritten. A summary is shown before saving, listing the provider, which providers are connected, and the mapped repositories.
 
-Everything except the sandbox provider is configured from the dashboard's Connections rail, and the bare `brevi` invocation runs init automatically on first launch, so an explicit `brevi init` is normally only needed to change the sandbox provider later.
+Everything except the sandbox provider is configured from the dashboard's Configuration page, and the bare `brevi` invocation runs init automatically on first launch, so an explicit `brevi init` is normally only needed to change the sandbox provider later.
 
 ## `brevi start`
 
