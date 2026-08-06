@@ -591,7 +591,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
 
   /**
    * The resume timer fired: confirm the limit has lifted with a 1-token probe,
-   * then re-queue the run — or push resumeAt out one probe interval when the
+   * then re-queue the run, or push resumeAt out one probe interval when the
    * provider is still limited.
    */
   async #tryResume(runId: string): Promise<void> {

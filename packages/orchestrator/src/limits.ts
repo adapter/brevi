@@ -26,7 +26,7 @@ export class AgentLimitError extends Error {
 /**
  * True for stream-json events that can carry a terminal error (result/error
  * shapes from Claude Code, error msgs from Codex). Limit detection only looks
- * inside these — scanning the whole transcript would false-positive whenever
+ * inside these; scanning the whole transcript would false-positive whenever
  * the ticket itself talks about usage limits.
  */
 export function isAgentFailureEvent(event: unknown): boolean {
@@ -79,7 +79,7 @@ export function detectLimit(line: string, provider: LimitProvider, now: Date = n
  * actually emit: an epoch timestamp, a "resets in" duration, or a clock time.
  */
 function parseResetTime(line: string, now: Date): Date | undefined {
-  // "Claude AI usage limit reached|1735689600" — epoch seconds (or ms) after a pipe,
+  // "Claude AI usage limit reached|1735689600": epoch seconds (or ms) after a pipe,
   // or an explicit epoch anywhere near "reset".
   const epoch = /(?:\|\s*|resets?(?:\s+at)?\s+)(\d{10,13})(?!\d)/i.exec(line);
   if (epoch?.[1]) {
@@ -111,7 +111,7 @@ function parseResetTime(line: string, now: Date): Date | undefined {
     if (!Number.isNaN(date.getTime()) && date.getTime() > now.getTime()) return date;
   }
 
-  // "resets 3pm" / "try again at 11:30 AM" — next occurrence of that local time.
+  // "resets 3pm" / "try again at 11:30 AM": next occurrence of that local time.
   const clock = /(?:resets?|try again)(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\b|$)/i.exec(line);
   if (clock?.[3] || clock?.[2]) {
     let hours = Number(clock[1]);
@@ -158,7 +158,7 @@ const STILL_LIMITED = /rate.?limit|usage.?limit|limit (?:reached|exceeded)|excee
  * Check whether the provider will accept work again with a 1-token generation
  * on its cheapest model, using the same credentials the sandboxed agent runs
  * with (so a subscription limit is tested against the same pool). Errors that
- * don't look like limits report ready — the attempt itself will surface them.
+ * don't look like limits report ready; the attempt itself will surface them.
  */
 export async function probeAgentLimit(config: BreviConfig, provider: LimitProvider): Promise<ProbeResult> {
   if (provider === "claude") {

@@ -60,7 +60,7 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
 
   /**
    * Load persisted runs; mark runs interrupted by a previous process as
-   * failed. Runs waiting on a usage-limit reset survive restarts — the
+   * failed. Runs waiting on a usage-limit reset survive restarts; the
    * orchestrator reschedules their resume on boot.
    */
   async init(): Promise<void> {
