@@ -35,7 +35,7 @@ export function SiteHeader({
         variant="ghost"
         size="plate"
         aria-current={onConfig ? "page" : undefined}
-        onClick={onOpenConfig}
+        onClick={() => onOpenConfig()}
         className={onConfig ? "bg-ink-750 text-haze-100 hover:bg-ink-750" : "text-haze-400"}
       >
         <span className="relative inline-flex">

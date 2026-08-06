@@ -61,7 +61,12 @@ export function ConfigurationPage({
 
       {config ? (
         <>
-          {section === "connectors" && <ConnectorsSection config={config} onConfig={onConfig} />}
+          {/* Connectors stays mounted while hidden: an in-flight connect flow
+              (GitHub device polling, redirect or wrangler login waits) must
+              survive a switch to another section, or the grant is lost. */}
+          <div hidden={section !== "connectors"}>
+            <ConnectorsSection config={config} onConfig={onConfig} />
+          </div>
           {section === "repositories" && <RepositoriesSection config={config} onConfig={onConfig} />}
           {section === "sandbox" && <SandboxSection config={config} onConfig={onConfig} />}
         </>
