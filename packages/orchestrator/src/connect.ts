@@ -163,7 +163,7 @@ export async function startGithubDeviceFlow(
       ? await fetch("https://github.com/login/device/code", {
           method: "POST",
           headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ client_id: source.clientId, scope: "repo" }),
+          body: JSON.stringify({ client_id: source.clientId, scope: "repo workflow" }),
         })
       : await fetch(`${source.apiBase}/oauth/github/device/code`, { method: "POST" });
   if (!res.ok) throw new Error(`GitHub device authorization failed (${res.status})`);

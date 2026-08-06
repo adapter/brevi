@@ -63,7 +63,7 @@ Keys beginning with `lin_api_` are sent as a raw `Authorization` header; anythin
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `token` | string | `""` | Token with the `repo` scope. Used to list repos, clone, push, and open PRs. Empty means not connected. |
+| `token` | string | `""` | Token with the `repo` and `workflow` scopes. Used to list repos, clone, push, and open PRs. Empty means not connected. |
 | `prDescription` | `"concise"` \| `"detailed"` | `"concise"` | How the agent is told to write the PR description: `concise` asks for a couple of sentences plus a few bullets, `detailed` allows a full write-up. |
 
 Implementation tickets will not run without it. SPIKEs will.
