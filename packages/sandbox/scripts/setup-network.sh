@@ -15,7 +15,7 @@
 #   brevi-tap<i>  host 172.30.<i/64>.<(i%64)*4 + 1>/30   guest ...+2
 set -euo pipefail
 
-TAPS=8
+TAPS=16
 TAP_USER="${SUDO_USER:-root}"
 EGRESS=""
 CLEAN=0

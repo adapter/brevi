@@ -40,10 +40,10 @@ Four things are needed once per machine. This is a summary; see `packages/sandbo
 3. **Networking**: pre-create tap devices and the NAT rule:
 
    ```sh
-   sudo packages/sandbox/scripts/setup-network.sh --taps 8 --user "$(whoami)"
+   sudo packages/sandbox/scripts/setup-network.sh --taps 16 --user "$(whoami)"
    ```
 
-   brevi never escalates privileges itself: if it has to create a tap device and gets `EPERM`, it fails with a message pointing back at this script. The rules and devices are lost on reboot, so re-run it after restarting. `--clean` removes them.
+   Each concurrent run needs its own tap device, so provision at least as many taps as your `sandbox.concurrency` setting; 16 covers the maximum. brevi never escalates privileges itself: if it has to create a tap device and gets `EPERM`, it fails with a message pointing back at this script. The rules and devices are lost on reboot, so re-run it after restarting. `--clean` removes them.
 
 4. **KVM access**: `/dev/kvm` must be readable and writable by the user running brevi:
 

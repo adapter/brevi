@@ -85,7 +85,7 @@ async function ip(args: string[], network: VmNetwork): Promise<void> {
         `(ip ${args.join(" ")}: ${detail}).\n` +
         "brevi does not escalate on its own. Run the one-time host setup, which enables NAT " +
         "and pre-creates a pool of tap devices this process can use unprivileged:\n" +
-        "  sudo packages/sandbox/scripts/setup-network.sh --taps 8 --user \"$(whoami)\"\n" +
+        "  sudo packages/sandbox/scripts/setup-network.sh --taps 16 --user \"$(whoami)\"\n" +
         "See packages/sandbox/README.md.",
     );
   }
