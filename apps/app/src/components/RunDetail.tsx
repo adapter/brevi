@@ -138,9 +138,11 @@ export function RunDetail({
             />
           )}
 
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
-            <div className="flex min-h-0 min-w-0 flex-col">
-              <div className="flex shrink-0 items-end gap-1 border-b border-ink-700/70" role="tablist">
+          {/* Two explicit rows: the tab strip alone on top, then the active
+              panel and the evidence card side by side in one stretched row,
+              so both cards share a top edge and a bottom edge. */}
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-x-4 gap-y-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] xl:grid-rows-[auto_minmax(0,1fr)]">
+              <div className="flex items-end gap-1 self-end border-b border-ink-700/70 xl:col-start-1 xl:row-start-1" role="tablist">
                 <TabButton active={tab === "result"} onClick={() => setTab("result")}>
                   Result
                 </TabButton>
@@ -170,7 +172,7 @@ export function RunDetail({
 
               {/* Inactive panels hide instead of unmounting: the console keeps
                   its scroll position and the terminal keeps its live session. */}
-              <div className="mt-3 min-h-0 flex-1">
+              <div className="min-h-0 min-w-0 xl:col-start-1 xl:row-start-2">
                 <div className={tab === "result" ? "h-full" : "hidden"}>
                   <Card className="flex h-full min-h-[320px] flex-col gap-0 overflow-hidden py-0">
                     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
@@ -215,9 +217,8 @@ export function RunDetail({
                   </div>
                 )}
               </div>
-            </div>
 
-            <aside className="min-h-0 min-w-0">
+            <aside className="min-h-0 min-w-0 xl:col-start-2 xl:row-start-2">
               <Card className="flex h-full min-h-[280px] flex-col gap-0 overflow-hidden py-0">
                 <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
                   <Plate className="text-haze-400">Evidence</Plate>
