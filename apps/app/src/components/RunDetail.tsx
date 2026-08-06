@@ -77,15 +77,6 @@ export function RunDetail({
               {run.ticket.state}
             </span>
           </Badge>
-          {run.ticket.labels.slice(0, 4).map((label) => (
-            <Badge
-              key={label}
-              variant="outline"
-              className="border-ink-700 font-mono text-[10.5px] tracking-normal normal-case"
-            >
-              {label}
-            </Badge>
-          ))}
           {(live || retryable) && <span aria-hidden className="h-4 w-px shrink-0 bg-ink-700" />}
           {live && (
             <Button variant="destructive" size="plate" onClick={onCancel} disabled={busy}>
