@@ -85,9 +85,6 @@ export function AppSidebar({
         <SidebarGroup>
           <SidebarGroupLabel className="gap-2">
             <Plate className="text-haze-400">Runs</Plate>
-            <span className="font-mono text-[11px] leading-none text-haze-700">
-              {pending.length + runs.length}
-            </span>
             <span className="ml-auto">
               <Plate className="text-haze-700">Linear</Plate>
             </span>
@@ -107,7 +104,7 @@ export function AppSidebar({
               <>
                 {inFlightCount > 0 && (
                   <>
-                    <SectionLabel label="In flight" count={inFlightCount} />
+                    <SectionLabel label="In flight" />
                     <ul className="flex flex-col gap-2 px-1 pt-1">
                       {active.map((run) => (
                         <li key={run.id}>
@@ -148,7 +145,7 @@ export function AppSidebar({
                 )}
                 {finished.length > 0 && (
                   <div className={inFlightCount > 0 ? "mt-3 border-t border-sidebar-border" : ""}>
-                    <SectionLabel label="Finished" count={finished.length} />
+                    <SectionLabel label="Finished" />
                     <ul className="flex flex-col gap-2 px-1 pt-1">
                       {finished.map((run) => (
                         <li key={run.id}>
@@ -174,11 +171,10 @@ export function AppSidebar({
 }
 
 /** Quiet sub-header inside the Runs group, matching the group's own label style. */
-function SectionLabel({ label, count }: { label: string; count: number }) {
+function SectionLabel({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 px-2 pt-3 pb-1">
       <Plate className="text-haze-700">{label}</Plate>
-      <span className="font-mono text-[11px] leading-none text-haze-700">{count}</span>
     </div>
   );
 }
