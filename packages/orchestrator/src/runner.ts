@@ -137,7 +137,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         if (!event.parent_tool_use_id) trackThinking(event.event);
         return;
       }
-      if (isDict(event) && typeof event.type === "string" && NOISE_EVENT_TYPES.has(event.type)) return;
+      if (isDict(event) && event.type === "system" && typeof event.subtype === "string" && NOISE_EVENT_SUBTYPES.has(event.subtype)) return;
       if (isAgentFailureEvent(event)) noteLimit(line);
       store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "agent", event });
     });
@@ -383,11 +383,11 @@ const isDict = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
 /**
- * Top-level stream-json event types with no replay value: newer Claude Code
- * versions emit status lines and per-token progress ticks that would bloat
- * events.jsonl and spam the console if persisted.
+ * System-event subtypes with no replay value: newer Claude Code versions emit
+ * these as {type: "system", subtype: ...} status lines and per-token progress
+ * ticks that would bloat events.jsonl and spam the console if persisted.
  */
-const NOISE_EVENT_TYPES = new Set(["status", "thinking_tokens"]);
+const NOISE_EVENT_SUBTYPES = new Set(["status", "thinking_tokens"]);
 
 /**
  * Reduces the agent's raw partial-message stream events to thinking-block
