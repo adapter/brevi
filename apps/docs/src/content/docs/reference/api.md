@@ -52,6 +52,7 @@ interface Run {
   status: RunStatus;
   sandbox: { provider: "firecracker" | "process"; id?: string };
   createdAt: string;
+  queuedAt?: string;
   startedAt?: string;
   finishedAt?: string;
   result?: RunResult;   // prUrl / commentUrl / branch / summary / artifacts

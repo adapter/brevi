@@ -11,7 +11,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { duration, relative } from "../lib/format";
 import { repoDisplay } from "../lib/repo";
-import { isActive, STATUS_TONE } from "../lib/status";
+import { isActive, isTerminal, STATUS_TONE } from "../lib/status";
 import { KindChip, Plate, RepoChip, StatusDot } from "./Bits";
 import { CostBadge } from "./CostBadge";
 import { External, Play } from "./Icons";
@@ -53,6 +53,18 @@ export function AppSidebar({
       !runs.some((r) => r.ticket.id === ticket.id && r.ticket.updatedAt === ticket.updatedAt),
   );
 
+  /**
+   * In-flight runs split into "actively doing something" and "queued", the
+   * latter reordered into scheduler pickup order (ascending queuedAt) since
+   * a requeue can push an old run to the back without touching createdAt.
+   */
+  const active = runs.filter((r) => isActive(r.status) && r.status !== "queued");
+  const queued = runs
+    .filter((r) => r.status === "queued")
+    .sort((a, b) => Date.parse(a.queuedAt ?? a.createdAt) - Date.parse(b.queuedAt ?? b.createdAt));
+  const finished = runs.filter((r) => isTerminal(r.status));
+  const inFlightCount = active.length + queued.length + pending.length;
+
   return (
     <Sidebar collapsible="none" className="h-svh w-[22rem] shrink-0 border-r border-sidebar-border">
       <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
@@ -92,36 +104,82 @@ export function AppSidebar({
                 <SummonCard config={config} />
               )
             ) : (
-              <ul className="flex flex-col gap-2 px-1 pt-1">
-                {pending.map((ticket) => (
-                  <li key={`ticket-${ticket.id}`}>
-                    <TicketStrip
-                      ticket={ticket}
-                      repoName={repoDisplay(config, ticket.repo)}
-                      active={activeByTicket.get(ticket.id)}
-                      busy={busy[ticket.id] === true}
-                      onRun={() => onRun(ticket.id)}
-                      onOpenRun={onOpenRun}
-                    />
-                  </li>
-                ))}
-                {runs.map((run) => (
-                  <li key={run.id}>
-                    <RunStrip
-                      run={run}
-                      repoName={repoDisplay(config, run.ticket.repo)}
-                      now={now}
-                      selected={run.id === selectedRunId}
-                      onOpen={() => onOpenRun(run.id)}
-                    />
-                  </li>
-                ))}
-              </ul>
+              <>
+                {inFlightCount > 0 && (
+                  <>
+                    <SectionLabel label="In flight" count={inFlightCount} />
+                    <ul className="flex flex-col gap-2 px-1 pt-1">
+                      {active.map((run) => (
+                        <li key={run.id}>
+                          <RunStrip
+                            run={run}
+                            repoName={repoDisplay(config, run.ticket.repo)}
+                            now={now}
+                            selected={run.id === selectedRunId}
+                            onOpen={() => onOpenRun(run.id)}
+                          />
+                        </li>
+                      ))}
+                      {queued.map((run) => (
+                        <li key={run.id}>
+                          <RunStrip
+                            run={run}
+                            repoName={repoDisplay(config, run.ticket.repo)}
+                            now={now}
+                            selected={run.id === selectedRunId}
+                            onOpen={() => onOpenRun(run.id)}
+                          />
+                        </li>
+                      ))}
+                      {pending.map((ticket) => (
+                        <li key={`ticket-${ticket.id}`}>
+                          <TicketStrip
+                            ticket={ticket}
+                            repoName={repoDisplay(config, ticket.repo)}
+                            active={activeByTicket.get(ticket.id)}
+                            busy={busy[ticket.id] === true}
+                            onRun={() => onRun(ticket.id)}
+                            onOpenRun={onOpenRun}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {finished.length > 0 && (
+                  <div className={inFlightCount > 0 ? "mt-3 border-t border-sidebar-border" : ""}>
+                    <SectionLabel label="Finished" count={finished.length} />
+                    <ul className="flex flex-col gap-2 px-1 pt-1">
+                      {finished.map((run) => (
+                        <li key={run.id}>
+                          <RunStrip
+                            run={run}
+                            repoName={repoDisplay(config, run.ticket.repo)}
+                            now={now}
+                            selected={run.id === selectedRunId}
+                            onOpen={() => onOpenRun(run.id)}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
             )}
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
     </Sidebar>
+  );
+}
+
+/** Quiet sub-header inside the Runs group, matching the group's own label style. */
+function SectionLabel({ label, count }: { label: string; count: number }) {
+  return (
+    <div className="flex items-center gap-2 px-2 pt-3 pb-1">
+      <Plate className="text-haze-700">{label}</Plate>
+      <span className="font-mono text-[11px] leading-none text-haze-700">{count}</span>
+    </div>
   );
 }
 
