@@ -144,20 +144,20 @@ export function RunDetail({
             />
           )}
 
-          {resumable && showAttach && (
-            <AttachTerminal
-              runId={run.id}
-              retainedUntil={run.sandbox.retainedUntil as string}
-              now={now}
-              onClose={() => setShowAttach(false)}
-            />
-          )}
-
           <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
             <div className="flex min-w-0 flex-col gap-4">
               <PhaseSpine run={run} events={events} now={now} />
 
               <Console runId={run.id} events={events} live={live} />
+
+              {resumable && showAttach && (
+                <AttachTerminal
+                  runId={run.id}
+                  retainedUntil={run.sandbox.retainedUntil as string}
+                  now={now}
+                  onClose={() => setShowAttach(false)}
+                />
+              )}
             </div>
 
             <aside className="min-w-0 xl:sticky xl:top-14 xl:max-h-[calc(100svh-8.5rem)] xl:overflow-y-auto">
