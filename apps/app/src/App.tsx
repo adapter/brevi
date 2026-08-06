@@ -49,7 +49,6 @@ export default function App() {
 
   /** Nothing has answered yet: the main pane explains how to start one. */
   const unreachable = conn === "offline" && !loaded;
-  const offlineCard = unreachable && !selectedRun;
 
   const handleRun = async (ticketId: string) => {
     const run = await runTicket(ticketId);
@@ -73,14 +72,7 @@ export default function App() {
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
-        <SiteHeader
-          conn={conn}
-          health={health}
-          config={config}
-          runs={runs}
-          tickets={tickets}
-          showHint={!offlineCard}
-        />
+        <SiteHeader conn={conn} health={health} config={config} />
 
         {notice && (
           <Alert
