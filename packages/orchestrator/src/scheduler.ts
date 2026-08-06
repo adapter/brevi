@@ -44,6 +44,7 @@ import {
   validateLinearApiKey,
 } from "./credentials.js";
 import { listRepos } from "./github.js";
+import { agentProvider, probeAgentLimit } from "./limits.js";
 import { LinearService } from "./linear.js";
 import { executeRun } from "./runner.js";
 import { ACTIVE_STATUSES, RunStore, isTerminal } from "./state.js";
@@ -81,6 +82,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #activeRunId?: string;
   #abort?: AbortController;
   #pollTimer?: NodeJS.Timeout;
+  /** One pending resume timer per run waiting on a usage-limit reset. */
+  #resumeTimers = new Map<string, NodeJS.Timeout>();
   #stopped = false;
   #warnedNoRepo = new Set<string>();
   #githubDevice?: GithubDeviceSession;
@@ -122,6 +125,11 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       firecracker: this.config.sandbox.firecracker,
     });
     await this.#provider.ensureAvailable();
+    // Runs left waiting on a limit reset by a previous process pick their
+    // schedule back up.
+    for (const run of this.store.list()) {
+      if (run.status === "waiting") this.#scheduleResume(run.id);
+    }
     void this.poll();
     this.#pollTimer = setInterval(() => void this.poll(), this.config.pollIntervalSeconds * 1000);
     this.#pollTimer.unref();
@@ -477,7 +485,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return { config: redactConfig(this.config) };
   }
 
-  /** Cancel a queued or active run. Terminal runs are returned unchanged. */
+  /** Cancel a queued, waiting, or active run. Terminal runs are returned unchanged. */
   async cancelRun(runId: string): Promise<Run> {
     const run = this.store.get(runId);
     if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
@@ -486,16 +494,54 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       this.#queue = this.#queue.filter((id) => id !== runId);
       return this.store.setStatus(runId, "cancelled", { finishedAt: new Date().toISOString() });
     }
+    if (run.status === "waiting") {
+      this.#clearResume(runId);
+      return this.store.setStatus(runId, "cancelled", {
+        finishedAt: new Date().toISOString(),
+        resumeAt: undefined,
+      });
+    }
     if (this.#activeRunId === runId) {
       this.#abort?.abort();
     }
     return this.store.get(runId) ?? run;
   }
 
+  /**
+   * Manually start a new attempt of a failed, cancelled, or waiting run. For
+   * a waiting run this skips the rest of the wait and re-queues immediately.
+   */
+  async retryRun(runId: string): Promise<Run> {
+    const run = this.store.get(runId);
+    if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
+    if (ACTIVE_STATUSES.has(run.status)) {
+      throw new OrchestratorError("conflict", `run ${runId} is already ${run.status}`);
+    }
+    if (run.status === "completed") {
+      throw new OrchestratorError(
+        "conflict",
+        `run ${runId} completed; update the ticket to trigger a fresh run instead`,
+      );
+    }
+    const clash = this.store
+      .runsForTicket(run.ticket.id)
+      .find((other) => other.id !== runId && !isTerminal(other.status));
+    if (clash) {
+      throw new OrchestratorError(
+        "conflict",
+        `ticket ${run.ticket.identifier} already has an active run (${clash.id})`,
+      );
+    }
+    return this.#requeue(runId);
+  }
+
   /** Stop polling and abort any active run. Resolves once the worker settles. */
   async stop(): Promise<void> {
     this.#stopped = true;
     if (this.#pollTimer) clearInterval(this.#pollTimer);
+    // Waiting runs stay "waiting" on disk; the next boot reschedules them.
+    for (const timer of this.#resumeTimers.values()) clearTimeout(timer);
+    this.#resumeTimers.clear();
     this.#abort?.abort();
     // Cancel anything still waiting in the queue so it isn't left "queued" forever.
     for (const id of this.#queue.splice(0)) {
@@ -508,7 +554,79 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   }
 
   #activeOrQueuedRun(ticketId: string): Run | undefined {
-    return this.store.runsForTicket(ticketId).find((run) => ACTIVE_STATUSES.has(run.status));
+    // "waiting" counts: a run parked on a limit reset still owns its ticket.
+    return this.store.runsForTicket(ticketId).find((run) => !isTerminal(run.status));
+  }
+
+  /** Put a run back in the queue for its next attempt. */
+  async #requeue(runId: string): Promise<Run> {
+    this.#clearResume(runId);
+    const run = await this.store.setStatus(runId, "queued", { resumeAt: undefined });
+    this.#queue.push(runId);
+    this.#kickWorker();
+    return run;
+  }
+
+  #clearResume(runId: string): void {
+    const timer = this.#resumeTimers.get(runId);
+    if (timer) clearTimeout(timer);
+    this.#resumeTimers.delete(runId);
+  }
+
+  /** Arm a timer that fires at the run's resumeAt (or right away when past). */
+  #scheduleResume(runId: string): void {
+    if (this.#stopped) return;
+    this.#clearResume(runId);
+    const run = this.store.get(runId);
+    if (run?.status !== "waiting") return;
+    const dueAt = run.resumeAt ? Date.parse(run.resumeAt) : Number.NaN;
+    const dueIn = Math.max(Number.isFinite(dueAt) ? dueAt - Date.now() : 0, 5_000);
+    const timer = setTimeout(() => {
+      this.#resumeTimers.delete(runId);
+      void this.#tryResume(runId);
+    }, dueIn);
+    timer.unref();
+    this.#resumeTimers.set(runId, timer);
+  }
+
+  /**
+   * The resume timer fired: confirm the limit has lifted with a 1-token probe,
+   * then re-queue the run — or push resumeAt out one probe interval when the
+   * provider is still limited.
+   */
+  async #tryResume(runId: string): Promise<void> {
+    if (this.#stopped) return;
+    const run = this.store.get(runId);
+    // Cancelled or manually retried while the timer was pending.
+    if (run?.status !== "waiting") return;
+    const log = (text: string): void => {
+      this.store.appendEvent({ runId, ts: new Date().toISOString(), type: "log", stream: "system", text });
+    };
+    try {
+      const provider = run.limit?.provider ?? agentProvider(this.config);
+      const probe = await probeAgentLimit(this.config, provider);
+      if (!probe.ready) {
+        const resumeAt = new Date(
+          Date.now() + this.config.restart.probeIntervalMinutes * 60_000,
+        ).toISOString();
+        await this.store.update(runId, { resumeAt });
+        log(`still limited (${probe.detail}); probing again at ${resumeAt}`);
+        this.#scheduleResume(runId);
+        return;
+      }
+      log(`limit lifted (${probe.detail}); starting next attempt`);
+      await this.#requeue(runId);
+    } catch (error) {
+      // A broken probe must not strand the run; try again next interval.
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[brevi] resume of ${runId} failed: ${message}`);
+      await this.store
+        .update(runId, {
+          resumeAt: new Date(Date.now() + this.config.restart.probeIntervalMinutes * 60_000).toISOString(),
+        })
+        .catch(() => undefined);
+      this.#scheduleResume(runId);
+    }
   }
 
   /**
@@ -536,7 +654,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       return;
     }
     const previous = this.store.runsForTicket(ticket.id);
-    if (previous.some((run) => ACTIVE_STATUSES.has(run.status))) return;
+    if (previous.some((run) => !isTerminal(run.status))) return;
     if (previous.some((run) => run.ticket.updatedAt === ticket.updatedAt)) return;
     await this.#enqueue(ticket);
   }
@@ -601,6 +719,9 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         this.#activeRunId = undefined;
         this.#abort = undefined;
       }
+      // An attempt that ended on a usage limit parked the run as waiting;
+      // arm the timer that will start the next attempt.
+      if (this.store.get(runId)?.status === "waiting") this.#scheduleResume(runId);
     }
   }
 }
