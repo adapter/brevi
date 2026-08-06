@@ -176,3 +176,10 @@ export const Monitor = (p: IconProps) => (
     <path d="M5.8 13.6h4.4M8 11.2v2.4" />
   </Svg>
 );
+
+export const Gear = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="2.1" />
+    <path d="M8 1.8v1.7M8 12.5v1.7M14.2 8h-1.7M3.5 8H1.8M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2M12.4 12.4l-1.2-1.2M4.8 4.8 3.6 3.6" />
+  </Svg>
+);

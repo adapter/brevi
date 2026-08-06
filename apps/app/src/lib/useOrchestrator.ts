@@ -28,6 +28,7 @@ interface State {
   selectedRunId: string | null;
   /** True once runs/tickets have arrived from either transport. */
   loaded: boolean;
+  page: Page;
 }
 
 type Action =
@@ -41,7 +42,8 @@ type Action =
   | { t: "history"; runId: string; events: RunEvent[] }
   | { t: "busy"; key: string; on: boolean }
   | { t: "notice"; notice: string | null }
-  | { t: "select"; runId: string | null };
+  | { t: "select"; runId: string | null }
+  | { t: "page"; page: Page };
 
 const initial: State = {
   conn: "connecting",
@@ -55,6 +57,7 @@ const initial: State = {
   notice: null,
   selectedRunId: null,
   loaded: false,
+  page: "home",
 };
 
 /** Runs live at /runs/<id> so any run view can be linked to directly. */
@@ -65,6 +68,13 @@ function runIdFromPath(pathname: string): string | null {
 
 function pathForRun(runId: string | null): string {
   return runId ? `/runs/${encodeURIComponent(runId)}` : "/";
+}
+
+export type Page = "home" | "config";
+
+/** Non-run pages live at fixed paths; anything else is the home/run view. */
+function pageFromPath(pathname: string): Page {
+  return /^\/config\/?$/.test(pathname) ? "config" : "home";
 }
 
 function byNewest(a: Run, b: Run): number {
@@ -146,6 +156,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, notice: action.notice };
     case "select":
       return { ...state, selectedRunId: action.runId };
+    case "page":
+      return state.page === action.page ? state : { ...state, page: action.page };
     default:
       return state;
   }
@@ -162,6 +174,7 @@ function message(raw: string): ServerMessage | null {
 export function useOrchestrator() {
   const [state, dispatch] = useReducer(reducer, initial, (base) => ({
     ...base,
+    page: pageFromPath(window.location.pathname),
     selectedRunId: runIdFromPath(window.location.pathname),
   }));
   const socket = useRef<WebSocket | null>(null);
@@ -290,10 +303,18 @@ export function useOrchestrator() {
     (runId: string | null) => {
       const path = pathForRun(runId);
       if (window.location.pathname !== path) window.history.pushState(null, "", path);
+      dispatch({ t: "page", page: "home" });
       selectRun(runId);
     },
     [selectRun],
   );
+
+  /** Open the Configuration page at its own URL. */
+  const openConfig = useCallback(() => {
+    if (window.location.pathname !== "/config") window.history.pushState(null, "", "/config");
+    dispatch({ t: "page", page: "config" });
+    selectRun(null);
+  }, [selectRun]);
 
   // Deep link: a run opened by URL needs its console history like any other open.
   useEffect(() => {
@@ -308,7 +329,10 @@ export function useOrchestrator() {
 
   // Browser back/forward moves between runs without reloading.
   useEffect(() => {
-    const onPop = () => selectRun(runIdFromPath(window.location.pathname));
+    const onPop = () => {
+      dispatch({ t: "page", page: pageFromPath(window.location.pathname) });
+      selectRun(runIdFromPath(window.location.pathname));
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [selectRun]);
@@ -373,6 +397,7 @@ export function useOrchestrator() {
     selectedRun,
     events: state.events,
     openRun,
+    openConfig,
     runTicket,
     cancelRun,
     retryRun,
