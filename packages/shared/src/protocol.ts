@@ -33,6 +33,10 @@ import type { Run, RunEvent, Ticket } from "./types.js";
  *        isn't connected)
  *   PUT  /api/settings/repos             -> ReposUpdateResponse
  *        body: ReposUpdateRequest. Replaces the repo mappings wholesale.
+ *   PUT  /api/settings/sandbox           -> SandboxSettingsUpdateResponse
+ *        body: SandboxSettingsUpdateRequest. Sets how many sandboxed runs may
+ *        execute at once; persisted to the config file and applied without a
+ *        restart.
  *   GET  /ws                             -> WebSocket, messages below
  *
  * Everything else serves the built dashboard (SPA fallback to index.html).
@@ -144,6 +148,17 @@ export interface ReposUpdateRequest {
 }
 
 export interface ReposUpdateResponse {
+  /** Redacted config after the update. */
+  config: BreviConfig;
+}
+
+/** Sandbox scheduling settings adjustable from the dashboard. */
+export interface SandboxSettingsUpdateRequest {
+  /** How many sandboxed runs may execute at once (1 to 16). */
+  concurrency: number;
+}
+
+export interface SandboxSettingsUpdateResponse {
   /** Redacted config after the update. */
   config: BreviConfig;
 }

@@ -139,6 +139,12 @@ export const Plus = (p: IconProps) => (
   </Svg>
 );
 
+export const Minus = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3.2 8h9.6" />
+  </Svg>
+);
+
 export const Close = (p: IconProps) => (
   <Svg {...p}>
     <path d="m4 4 8 8M12 4l-8 8" />

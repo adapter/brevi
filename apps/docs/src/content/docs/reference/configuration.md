@@ -26,6 +26,7 @@ A freshly initialised config, with every default filled in:
   },
   "sandbox": {
     "provider": "auto",
+    "concurrency": 1,
     "firecracker": {
       "binary": "firecracker",
       "kernelImage": "~/.brevi/images/vmlinux",
@@ -130,6 +131,7 @@ At least one of the four credential fields must be set or every run fails at sta
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `provider` | `"auto"` \| `"firecracker"` \| `"process"` | `"auto"` | See [Sandboxes](/guides/sandboxes/). |
+| `concurrency` | integer 1-16 | `1` | How many sandboxed runs execute at once. Each Firecracker microVM reserves its own memory (`firecracker.memMib`, 4 GiB by default), so the host needs enough room for all of them running simultaneously. Adjustable live from the dashboard; takes effect immediately, no restart needed. |
 | `timeoutMinutes` | integer ≥ 1 | `60` | Hard wall-clock limit for one run's agent command. |
 | `firecracker` | object | see below | Only consulted when the Firecracker provider is used. |
 

@@ -26,6 +26,7 @@ There is no authentication: the server is loopback-only and anything reaching it
 | `GET` | `/api/connect/linear/callback` | HTML (OAuth redirect target) |
 | `GET` | `/api/github/repos` | `GithubRepo[]` |
 | `PUT` | `/api/settings/repos` | `ReposUpdateResponse` |
+| `PUT` | `/api/settings/sandbox` | `SandboxSettingsUpdateResponse` |
 | `GET` | `/ws` | WebSocket upgrade |
 
 Errors are `{ "error": string }` with status `400` (invalid), `404` (not found), `409` (conflict, e.g. the ticket already has an active run), or `500`.
@@ -113,6 +114,16 @@ Only the fields you send are touched. Each is validated against its provider bef
 ```
 
 Each entry is validated against the repo schema; a bad remote or an unknown `defaultRepo` returns `400` and nothing is written. On success, tickets are re-resolved against the new mappings straight away.
+
+### Sandbox settings
+
+`PUT /api/settings/sandbox` updates `sandbox.concurrency`, how many sandboxed runs execute at once:
+
+```json
+{ "concurrency": 2 }
+```
+
+The value is persisted to `~/.brevi/config.json` and takes effect immediately, no restart needed: raising the limit starts queued runs right away, and lowering it lets already-running sandboxes finish out rather than cancelling them. Values outside `1` to `16`, or non-integers, are rejected with `400` and nothing is written.
 
 ## WebSocket
 

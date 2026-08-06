@@ -16,6 +16,7 @@ import {
   type ReposUpdateRequest,
   type Run,
   type RunEvent,
+  type SandboxSettingsUpdateRequest,
   type ServerMessage,
   type Ticket,
 } from "@brevi/shared";
@@ -277,6 +278,23 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
     }
     try {
       return c.json(await orchestrator.updateRepos(body));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.put("/api/settings/sandbox", async (c) => {
+    let body: SandboxSettingsUpdateRequest;
+    try {
+      body = (await c.req.json()) as SandboxSettingsUpdateRequest;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    if (typeof body.concurrency !== "number") {
+      return c.json({ error: "concurrency must be a number" }, 400);
+    }
+    try {
+      return c.json(await orchestrator.updateSandboxSettings({ concurrency: body.concurrency }));
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }

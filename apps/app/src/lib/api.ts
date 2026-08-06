@@ -11,6 +11,8 @@ import type {
   ReposUpdateResponse,
   Run,
   RunEvent,
+  SandboxSettingsUpdateRequest,
+  SandboxSettingsUpdateResponse,
   Ticket,
 } from "@brevi/shared";
 
@@ -53,6 +55,12 @@ export const api = {
   linearProjects: () => json<LinearProject[]>("/api/linear/projects"),
   updateRepos: (request: ReposUpdateRequest) =>
     json<ReposUpdateResponse>("/api/settings/repos", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }),
+  updateSandboxSettings: (request: SandboxSettingsUpdateRequest) =>
+    json<SandboxSettingsUpdateResponse>("/api/settings/sandbox", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
