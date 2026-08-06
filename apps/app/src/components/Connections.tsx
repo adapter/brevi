@@ -506,7 +506,7 @@ function RepositoriesSection({
     void mutate(
       {
         ...config.repos,
-        [key]: { remote: repo.fullName, defaultBranch: repo.defaultBranch, projects: [] },
+        [key]: { remote: repo.fullName, defaultBranch: repo.defaultBranch, projects: [], demo: "auto" },
       },
       config.defaultRepo ?? key,
     );

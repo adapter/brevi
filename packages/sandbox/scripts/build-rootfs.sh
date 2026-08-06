@@ -4,6 +4,7 @@
 #
 # The image is an Ubuntu userland exported from a docker build, with:
 #   - node 22, git, curl, tar, ripgrep, jq
+#   - playwright's Chromium at /opt/ms-playwright (agents demo UIs without a per-run download)
 #   - the coding agent CLI (@anthropic-ai/claude-code)
 #   - openssh-server plus the public half of ~/.brevi/images/id_ed25519 in
 #     /root/.ssh/authorized_keys (this is brevi's exec channel)
@@ -22,7 +23,7 @@
 # Any kernel works as long as it has virtio-blk, virtio-net, ext4 and serial built in.
 set -euo pipefail
 
-SIZE_MB=2048
+SIZE_MB=4096
 WITH_KERNEL=0
 NODE_VERSION="22.14.0"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/x86_64/vmlinux-6.1.102"
@@ -134,6 +135,11 @@ RUN set -eux; \\
       | tar -xJ -C /usr/local --strip-components=1 --no-same-owner
 
 RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
+
+# Chromium for playwright demos, baked at a fixed path. The orchestrator sets
+# PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright so agents never download a browser.
+RUN PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright npx -y playwright install --with-deps chromium \\
+ && npm cache clean --force && rm -rf /root/.npm /tmp/*
 
 RUN ssh-keygen -A \\
  && rm -f /sbin/init \\
