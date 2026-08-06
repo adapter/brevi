@@ -46,6 +46,7 @@ export function AttachTerminal({
     const term = new Xterm({
       fontFamily: style.fontFamily,
       fontSize: 12.5,
+      lineHeight: 1.25,
       cursorBlink: true,
       theme: { background: style.backgroundColor, foreground: style.color, cursor: style.color },
     });
@@ -124,7 +125,9 @@ export function AttachTerminal({
           {state.phase === "connected" ? "Disconnect" : "Close"}
         </Button>
       </div>
-      <div ref={host} className="h-[420px] bg-ink-900 p-2 text-haze-200" />
+      {/* font-mono matters: the xterm theme lifts this container's computed
+          font, and a proportional face breaks the terminal's cell grid. */}
+      <div ref={host} className="h-[420px] bg-ink-900 p-2 font-mono text-haze-200" />
     </div>
   );
 }
