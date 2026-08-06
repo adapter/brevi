@@ -1,5 +1,5 @@
 import type { BreviConfig, LimitInfo, LimitProvider } from "@brevi/shared";
-import { validateAnthropicCredential, validateCodexApiKey } from "./credentials.js";
+import { validateAnthropicCredential } from "./credentials.js";
 
 /**
  * Usage-limit handling: recognize "you've hit your limit" output from the
@@ -24,15 +24,18 @@ export class AgentLimitError extends Error {
 }
 
 /**
- * True for stream-json events that can carry a terminal error (result/error
- * shapes from Claude Code, error msgs from Codex). Limit detection only looks
- * inside these; scanning the whole transcript would false-positive whenever
- * the ticket itself talks about usage limits.
+ * True for stream-json events that carry a terminal error (error results from
+ * Claude Code, error msgs from Codex). Limit detection only looks inside
+ * these; scanning successful results or the rest of the transcript would
+ * false-positive whenever the ticket itself talks about usage limits.
  */
 export function isAgentFailureEvent(event: unknown): boolean {
   if (typeof event !== "object" || event === null) return false;
-  const e = event as { type?: unknown; is_error?: unknown; msg?: { type?: unknown } };
-  if (e.type === "result" || e.type === "error" || e.is_error === true) return true;
+  const e = event as { type?: unknown; subtype?: unknown; is_error?: unknown; msg?: { type?: unknown } };
+  if (e.type === "error" || e.is_error === true) return true;
+  // A successful Claude result carries the agent's final response; only
+  // error-subtyped results may feed detection.
+  if (e.type === "result") return typeof e.subtype === "string" && /error/i.test(e.subtype);
   return typeof e.msg?.type === "string" && /error/i.test(e.msg.type);
 }
 
@@ -179,8 +182,36 @@ export async function probeAgentLimit(config: BreviConfig, provider: LimitProvid
     // A ChatGPT login can't be probed cheaply; trust the schedule instead.
     return { ready: true, detail: "no probe available for a ChatGPT login" };
   }
-  const result = await validateCodexApiKey(codexApiKey);
-  if (result.ok) return { ready: true, detail: result.detail };
-  if (STILL_LIMITED.test(result.detail)) return { ready: false, detail: result.detail };
-  return { ready: true, detail: `probe inconclusive: ${result.detail}` };
+  return probeOpenAiGeneration(codexApiKey);
+}
+
+/** Cheapest model for the OpenAI generation probe. */
+const OPENAI_PROBE_MODEL = "gpt-5-nano";
+
+/**
+ * A 1-token generation against OpenAI that keeps the HTTP status visible.
+ * validateCodexApiKey() is not usable here: its auth-only /v1/models fallback
+ * reports ok while generation is still 429-limited.
+ */
+async function probeOpenAiGeneration(apiKey: string): Promise<ProbeResult> {
+  let res: Response;
+  try {
+    res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: OPENAI_PROBE_MODEL,
+        messages: [{ role: "user", content: "ping" }],
+        max_completion_tokens: 1,
+      }),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ready: true, detail: `probe inconclusive: ${message}` };
+  }
+  if (res.ok) return { ready: true, detail: `verified with ${OPENAI_PROBE_MODEL}` };
+  const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+  const detail = body?.error?.message ?? `OpenAI returned ${res.status}`;
+  if (res.status === 429 || STILL_LIMITED.test(detail)) return { ready: false, detail };
+  return { ready: true, detail: `probe inconclusive: ${detail}` };
 }

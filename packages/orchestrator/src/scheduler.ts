@@ -605,6 +605,9 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     try {
       const provider = run.limit?.provider ?? agentProvider(this.config);
       const probe = await probeAgentLimit(this.config, provider);
+      // The probe took real time; the run may have been cancelled or manually
+      // resumed meanwhile, and requeueing would overwrite that decision.
+      if (this.store.get(runId)?.status !== "waiting") return;
       if (!probe.ready) {
         const resumeAt = new Date(
           Date.now() + this.config.restart.probeIntervalMinutes * 60_000,
@@ -620,6 +623,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       // A broken probe must not strand the run; try again next interval.
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[brevi] resume of ${runId} failed: ${message}`);
+      if (this.store.get(runId)?.status !== "waiting") return;
       await this.store
         .update(runId, {
           resumeAt: new Date(Date.now() + this.config.restart.probeIntervalMinutes * 60_000).toISOString(),
