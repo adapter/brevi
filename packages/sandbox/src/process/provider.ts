@@ -59,6 +59,7 @@ class ProcessSandbox implements Sandbox {
       cwd: resolveHostPath(this.workspacePath, options.cwd),
       env: { ...baseEnv(), ...this.#env, ...options.env },
       timeoutMs: options.timeoutMs,
+      signal: options.signal,
       onStdout: options.onStdout,
       onStderr: options.onStderr,
     });

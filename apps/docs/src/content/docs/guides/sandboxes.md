@@ -35,7 +35,7 @@ Four things are needed once per machine. This is a summary; see `packages/sandbo
    sudo packages/sandbox/scripts/build-rootfs.sh --with-kernel
    ```
 
-   This produces a ~2 GB ext4 image at `~/.brevi/images/rootfs.ext4` with node 22, git, curl, tar, ripgrep, `@anthropic-ai/claude-code`, and an sshd trusting `~/.brevi/images/id_ed25519`.
+   This produces a ~2 GB ext4 image at `~/.brevi/images/rootfs.ext4` with node 22, git, curl, tar, ripgrep, both agent CLIs (`@anthropic-ai/claude-code` and `@openai/codex`, the latter used for the adversarial review step), and an sshd trusting `~/.brevi/images/id_ed25519`.
 
 3. **Networking**: pre-create tap devices and the NAT rule:
 

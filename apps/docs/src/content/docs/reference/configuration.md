@@ -20,10 +20,16 @@ A freshly initialised config, with every default filled in:
   "agent": {
     "command": "claude",
     "args": [],
+    "orchestratorModel": "claude-fable-5",
+    "implementModel": "claude-sonnet-5",
+    "orchestratorEffort": "high",
     "anthropicApiKey": "",
     "claudeCodeOauthToken": "",
     "codexApiKey": "",
-    "codexAuthJson": ""
+    "codexAuthJson": "",
+    "codexReview": true,
+    "reviewModel": "gpt-5.6-sol",
+    "reviewEffort": "high"
   },
   "sandbox": {
     "provider": "auto",
@@ -137,16 +143,28 @@ The coding agent executed inside the sandbox.
 | `model` | string | - | When set, the whole run uses this one model with no subagent delegation, overriding `orchestratorModel` and `implementModel`. |
 | `orchestratorModel` | string | `"claude-fable-5"` | Model the main agent loop runs on (planning, review, delegation), also used for SPIKE research. Claude agents only. |
 | `implementModel` | string | `"claude-sonnet-5"` | Model for the `implementer` subagent that executes the coding tasks. Claude agents only. |
+| `orchestratorEffort` | `"low"` \| `"medium"` \| `"high"` | `"high"` | Reasoning effort for the main agent loop, passed to Claude Code as `--effort`. Claude agents only; the `implementer` subagent keeps the CLI's default effort. |
 | `anthropicApiKey` | string | `""` | Exported into the sandbox as `ANTHROPIC_API_KEY`. |
 | `claudeCodeOauthToken` | string | `""` | Claude Code login, exported as `CLAUDE_CODE_OAUTH_TOKEN`. |
 | `codexApiKey` | string | `""` | Exported as `OPENAI_API_KEY`. |
 | `codexAuthJson` | string | `""` | Whole contents of `~/.codex/auth.json` for a ChatGPT login; written into the sandbox and reached via `CODEX_HOME`. |
+| `codexReview` | boolean | `true` | Whether an adversarial Codex review runs after the implementation pass. Claude-primary runs only: when `command` is already Codex the review is skipped, so a run never reviews itself with its own provider. Also requires a Codex credential (`codexApiKey` or `codexAuthJson`); without one the review is skipped even when true. See [Codex review](#codex-review) below. |
+| `reviewModel` | string | `"gpt-5.6-sol"` | Model the Codex review runs on. |
+| `reviewEffort` | `"minimal"` \| `"low"` \| `"medium"` \| `"high"` | `"high"` | Reasoning effort for Codex review executions, passed as `-c model_reasoning_effort=<value>`. |
 
-brevi always invokes the agent as `<command> -p <prompt> --output-format stream-json --verbose --dangerously-skip-permissions`, then `--model <model>`, then `args`. Those are Claude Code's flags, so a different `command` has to accept the same shape.
+brevi always invokes the agent as `<command> -p <prompt> --output-format stream-json --verbose --dangerously-skip-permissions`, then `--model <model>`, then `args`. Those are Claude Code's flags, so a different `command` has to accept the same shape. Claude agents additionally get `--effort <orchestratorEffort>`.
 
 Claude implementation runs are a single agent session with delegation: the main loop runs on `orchestratorModel` and dispatches the coding work to an `implementer` subagent on `implementModel` (defined via Claude Code's `--agents` flag). Setting `model` disables delegation and runs everything on that one model. Commands containing `codex` always run single-model on `model`.
 
-At least one of the four credential fields must be set or every run fails at startup with `no agent credentials configured`. Populate them from the dashboard's Configuration page rather than by hand; the dashboard verifies keys before saving.
+### Codex review
+
+When `codexReview` is true, the primary agent is Claude, and a Codex credential is configured, an adversarial Codex review runs inside the same sandbox after the implementation pass finishes its coding phase and before the branch is pushed. The review is deliberately a cross-provider check: runs whose `command` is already Codex skip it (a console line notes the skip), so enabling it never multiplies a Codex-primary run's spend. Three Codex reviewers (`codex exec`) run in parallel, each taking one angle: requirements coverage against the ticket, a bug hunt on the diff, and regression risk in the call sites the diff touches. All three judge the uncommitted diff against two sources of truth: the Linear ticket text and the existing codebase. A synthesis pass then verifies, dedupes, and ranks the findings into `.brevi/review.md`, kept with the run's artifacts. Confirmed findings are fed back to the Claude orchestrator for a fix pass before the PR opens.
+
+Without a Codex credential the review is likewise skipped cleanly and the run behaves exactly as before. The review roughly doubles the agent spend of a run; set `codexReview: false` to turn it off. Review executions appear in the run's cost breakdown as "review (requirements)", "review (bugs)", "review (regressions)", "review (synthesis)", and the fix pass as "review fixes".
+
+Under the Firecracker provider, the review runs the Codex CLI inside the sandbox, so existing rootfs images need a rebuild with `packages/sandbox/scripts/build-rootfs.sh` before the review can run; under the process provider the host's `codex` binary is used directly.
+
+At least one of the four credential fields (`anthropicApiKey`, `claudeCodeOauthToken`, `codexApiKey`, `codexAuthJson`) must be set or every run fails at startup with `no agent credentials configured`. Populate them from the dashboard's Configuration page rather than by hand; the dashboard verifies keys before saving.
 
 ## `sandbox`
 
@@ -154,7 +172,7 @@ At least one of the four credential fields must be set or every run fails at sta
 | --- | --- | --- | --- |
 | `provider` | `"auto"` \| `"firecracker"` \| `"process"` | `"auto"` | See [Sandboxes](/guides/sandboxes/). |
 | `concurrency` | integer 1-16 | `1` | How many sandboxed runs execute at once. Each Firecracker microVM reserves its own memory (`firecracker.memMib`, 4 GiB by default) and one tap device from the pool created by [the network setup script](/guides/sandboxes/) (16 by default), so the host needs enough of both for all of them running simultaneously. Adjustable live from the dashboard; takes effect immediately, no restart needed. |
-| `timeoutMinutes` | integer ≥ 1 | `60` | Hard wall-clock limit for one run's agent command. |
+| `timeoutMinutes` | integer ≥ 1 | `60` | Hard wall-clock limit applied per agent execution: the implementation pass, each of the parallel Codex reviewers, the synthesis pass, and the fix pass each get their own budget, rather than one limit for the whole run. |
 | `firecracker` | object | see below | Only consulted when the Firecracker provider is used. |
 
 ### `sandbox.firecracker`
@@ -163,7 +181,7 @@ At least one of the four credential fields must be set or every run fails at sta
 | --- | --- | --- | --- |
 | `binary` | string | `"firecracker"` | Resolved on `PATH` unless it's an absolute path. |
 | `kernelImage` | string | `~/.brevi/images/vmlinux` | Uncompressed Linux kernel. |
-| `rootfs` | string | `~/.brevi/images/rootfs.ext4` | Ext4 image with node, git and the agent preinstalled. |
+| `rootfs` | string | `~/.brevi/images/rootfs.ext4` | Ext4 image with node, git, and both agent CLIs (`@anthropic-ai/claude-code`, `@openai/codex`) preinstalled. |
 | `vcpus` | integer ≥ 1 | `2` | vCPUs per microVM. |
 | `memMib` | integer ≥ 512 | `4096` | Memory per microVM, in MiB. |
 

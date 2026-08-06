@@ -16,6 +16,8 @@ export interface RunCommandOptions {
   /** Complete environment for the child. When omitted the host environment is inherited. */
   env?: Record<string, string>;
   timeoutMs?: number;
+  /** Terminates the child when aborted; the returned promise still resolves. */
+  signal?: AbortSignal;
   /** Written to the child's stdin and then closed. */
   input?: string;
   onStdout?: (chunk: string) => void;
@@ -39,6 +41,7 @@ export async function runCommand(
     env: options.env,
     extendEnv: options.env === undefined,
     timeout: options.timeoutMs ?? 0,
+    ...(options.signal ? { cancelSignal: options.signal } : {}),
     forceKillAfterDelay: FORCE_KILL_DELAY_MS,
     buffer: false,
     reject: false,
@@ -72,6 +75,7 @@ export async function runOrThrow(
 interface CommandOutcome {
   failed: boolean;
   timedOut: boolean;
+  isCanceled?: boolean;
   exitCode?: number | undefined;
 }
 
@@ -81,9 +85,10 @@ function exitCodeOf(result: CommandOutcome): number {
   return result.failed ? 1 : 0;
 }
 
-/** Surfaces timeouts and spawn failures, which otherwise leave both streams empty. */
+/** Surfaces timeouts, cancellations, and spawn failures, which otherwise leave both streams empty. */
 function failureNote(result: CommandOutcome, timeoutMs: number | undefined): string | undefined {
   if (result.timedOut) return `\nbrevi: command timed out after ${timeoutMs ?? 0}ms\n`;
+  if (result.isCanceled) return "\nbrevi: command cancelled\n";
   if (!result.failed || result.exitCode !== undefined) return undefined;
   return `\nbrevi: ${shortMessageOf(result) ?? "command failed to run"}\n`;
 }

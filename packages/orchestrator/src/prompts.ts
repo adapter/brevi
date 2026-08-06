@@ -134,3 +134,67 @@ export function buildSpikePrompt(ticket: Ticket, repoMap?: RepoMap): string {
     "- `## Recommendation`: what you would do and why",
   ].join("\n");
 }
+
+/** One independent brief in the adversarial Codex review; the angle list itself lives in review.ts. */
+export interface ReviewAngle {
+  key: string;
+  title: string;
+  instruction: string;
+}
+
+/** Prompt for one adversarial reviewer, judging the uncommitted implementation from a single angle. */
+export function buildReviewerPrompt(options: { angle: ReviewAngle; ticket: Ticket; outFile: string }): string {
+  const { angle, ticket, outFile } = options;
+  return [
+    `You are an adversarial code reviewer with the "${angle.title}" brief. The working tree of this repository contains an uncommitted implementation of the ticket below. Inspect it with \`git status\` and \`git diff HEAD\`; untracked files are part of the change, and everything under \`.brevi/\` is run scaffolding to ignore.`,
+    angle.instruction,
+    "",
+    ticketSection(ticket),
+    "",
+    "## Rules",
+    "- Judge only against two sources of truth: the ticket text above and the actual code in this repository. Read the surrounding code before calling something wrong.",
+    "- Report only findings you can support with concrete evidence (file and line references). An empty report is a valid outcome; do not pad.",
+    `- ${NO_EM_DASHES}`,
+    `- Write your findings to \`${outFile}\` and change nothing else. For each finding: a \`### \` heading, a severity (blocker, major, or minor), the files involved, what is wrong, and the evidence. If you found nothing from your brief, write exactly \`No findings.\``,
+  ].join("\n");
+}
+
+/** Prompt for the synthesis pass: verify and rank the independent reviewers' findings. */
+export function buildReviewSynthesisPrompt(options: { ticket: Ticket; reviewDir: string; outFile: string }): string {
+  const { ticket, reviewDir, outFile } = options;
+  return [
+    `You are the synthesis pass of an adversarial code review. Independent reviewers examined the uncommitted implementation of the ticket below and wrote their findings to markdown files under \`${reviewDir}/\`.`,
+    "",
+    ticketSection(ticket),
+    "",
+    "## Task",
+    `- Read every findings file under \`${reviewDir}/\` (a reviewer that crashed may have left no file), then verify each finding against the actual working tree: \`git diff HEAD\` plus the surrounding code. Drop findings that are wrong, duplicated, or pure style preference.`,
+    "- Merge duplicates and rank what survives from most to least severe.",
+    `- ${NO_EM_DASHES}`,
+    `- Write the result to \`${outFile}\` and change nothing else. Start with a \`# Codex review\` heading, then one \`## <n>. <title>\` section per confirmed finding with its severity, the files involved, what is wrong, and how to fix it. If no finding survives verification, write exactly \`No confirmed findings.\` under the heading.`,
+  ].join("\n");
+}
+
+/** Prompt for the orchestrator's fix pass, applied only when the review confirmed findings. */
+export function buildReviewFixPrompt(options: { ticket: Ticket; findings: string; delegate?: boolean }): string {
+  const { ticket, findings, delegate } = options;
+  return [
+    "You are the coding agent responsible for the ticket below; its implementation sits uncommitted in this working tree. An adversarial review of that implementation confirmed the findings underneath. Address them.",
+    ...(delegate
+      ? ["An `implementer` subagent on a faster model is available through your agent tool; dispatch well-scoped fixes to it and review what it returns."]
+      : []),
+    "",
+    ticketSection(ticket),
+    "",
+    "## Rules",
+    "- Fix every finding that is real; when a finding is mistaken, leave the code alone.",
+    "- Keep `.brevi/summary.md` accurate if your fixes change what a PR reviewer should know.",
+    "- Do not modify `.brevi/review.md` or anything under `.brevi/review/`.",
+    "- Rerun the checks relevant to what you change.",
+    "- Leave all changes uncommitted in the working tree. Do NOT run `git commit`, `git push`, or create branches.",
+    `- ${NO_EM_DASHES}`,
+    "",
+    "## Confirmed review findings",
+    findings,
+  ].join("\n");
+}

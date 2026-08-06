@@ -47,7 +47,7 @@ Runs execute serially (one at a time, FIFO) and move through the statuses `queue
 
 **Preparing.** brevi clones the mapped repo (depth 50, default branch, or from `repo.path` if you configured a local checkout), rewrites `origin` to a token-free URL, creates the branch `brevi/<ticket-identifier>` in lowercase, creates the sandbox, and pushes the checkout into it. Best effort, it also moves the Linear issue to its team's first "started" state.
 
-**Running.** The configured agent command runs headless inside the sandbox with the generated prompt. Structured `stream-json` output is parsed and forwarded to the dashboard as it arrives, so you watch the run live. A run is killed at `sandbox.timeoutMinutes` (60 by default), and a non-zero agent exit fails the run.
+**Running.** The configured agent command runs headless inside the sandbox with the generated prompt. Structured `stream-json` output is parsed and forwarded to the dashboard as it arrives, so you watch the run live. A run is killed at `sandbox.timeoutMinutes` (60 by default), and a non-zero agent exit fails the run. For Claude implementation runs, once the coding phase finishes, an adversarial Codex review of the uncommitted diff can run in the same sandbox and drive a fix pass before the branch is pushed; see [Codex review](/reference/configuration/#codex-review).
 
 **Finalizing.** The workspace is pulled back out and artifacts collected: everything under `.brevi/demo/` (nested paths flattened, so `demo/web/home.png` is stored as `web__home.png`), plus `.brevi/summary.md` and `.brevi/research.md`. Artifacts are kept with the run under `~/.brevi/runs/` and served by the dashboard.
 
