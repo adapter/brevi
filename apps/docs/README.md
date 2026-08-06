@@ -1,6 +1,6 @@
 # @brevi/docs
 
-The brevi documentation site — [Astro](https://astro.build) + [Starlight](https://starlight.astro.build).
+The brevi documentation site, built with [Astro](https://astro.build) + [Starlight](https://starlight.astro.build).
 
 Pages live in `src/content/docs/`; the sidebar and site metadata are in `astro.config.mjs`.
 

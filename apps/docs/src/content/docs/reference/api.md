@@ -13,12 +13,12 @@ There is no authentication: the server is loopback-only and anything reaching it
 | --- | --- | --- |
 | `GET` | `/api/health` | `HealthResponse` |
 | `GET` | `/api/config` | Redacted `BreviConfig` |
-| `GET` | `/api/tickets` | `Ticket[]` — the current eligible queue |
+| `GET` | `/api/tickets` | `Ticket[]`: the current eligible queue |
 | `GET` | `/api/runs` | `Run[]`, newest first |
 | `GET` | `/api/runs/:id` | `Run` |
-| `GET` | `/api/runs/:id/events` | `RunEvent[]` — full history |
+| `GET` | `/api/runs/:id/events` | `RunEvent[]`: full history |
 | `GET` | `/api/runs/:id/artifacts/:name` | Raw artifact bytes |
-| `POST` | `/api/tickets/:id/run` | `Run` — manually queue a ticket |
+| `POST` | `/api/tickets/:id/run` | `Run`: manually queue a ticket |
 | `POST` | `/api/runs/:id/cancel` | `Run` |
 | `PUT` | `/api/settings/credentials` | `CredentialsUpdateResponse` |
 | `POST` | `/api/connect/:provider` | `ConnectResponse` |
@@ -28,7 +28,7 @@ There is no authentication: the server is loopback-only and anything reaching it
 | `PUT` | `/api/settings/repos` | `ReposUpdateResponse` |
 | `GET` | `/ws` | WebSocket upgrade |
 
-Errors are `{ "error": string }` with status `400` (invalid), `404` (not found), `409` (conflict — e.g. the ticket already has an active run), or `500`.
+Errors are `{ "error": string }` with status `400` (invalid), `404` (not found), `409` (conflict, e.g. the ticket already has an active run), or `500`.
 
 ### Health
 
@@ -151,4 +151,4 @@ The local orchestrator calls it automatically when `connect.githubClientId` / `c
 
 `/oauth/linear/authorize` builds the redirect back to `http://localhost:<port>/api/connect/linear/callback`, so the token exchange lands on your machine; `port` is your `server.port`. The `state` you pass through is the one the local orchestrator checks on the callback.
 
-Deploying your own copy needs three secrets — `GITHUB_CLIENT_ID`, `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET` — and a Linear app registering `http://localhost:<port>/api/connect/linear/callback` redirect URIs for the ports you use.
+Deploying your own copy needs three secrets (`GITHUB_CLIENT_ID`, `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`) and a Linear app registering `http://localhost:<port>/api/connect/linear/callback` redirect URIs for the ports you use.

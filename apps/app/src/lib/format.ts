@@ -1,9 +1,9 @@
 /** Formatting helpers. Everything the operator reads about time lives here. */
 
 export function duration(fromIso: string | undefined, toMs: number): string {
-  if (!fromIso) return "—";
+  if (!fromIso) return "-";
   const start = Date.parse(fromIso);
-  if (Number.isNaN(start)) return "—";
+  if (Number.isNaN(start)) return "-";
   return elapsed(Math.max(0, toMs - start));
 }
 
@@ -19,7 +19,7 @@ export function elapsed(ms: number): string {
 
 export function relative(iso: string, nowMs: number): string {
   const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "—";
+  if (Number.isNaN(t)) return "-";
   const diff = nowMs - t;
   if (diff < 45_000) return "just now";
   if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;

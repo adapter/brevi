@@ -14,12 +14,12 @@ and keep you informed as a fix progresses.
 
 Things we especially care about:
 
-- The hosted OAuth backend (`apps/api`, api.brevi.dev) — token handling for
+- The hosted OAuth backend (`apps/api`, api.brevi.dev): token handling for
   the Linear and GitHub connect flows.
-- Credential handling in the CLI/orchestrator — everything is stored locally
+- Credential handling in the CLI/orchestrator: everything is stored locally
   in `~/.brevi/config.json` and must never leave the machine except to the
   provider it authenticates to.
-- Sandbox isolation (`packages/sandbox`) — escapes from the Firecracker or
+- Sandbox isolation (`packages/sandbox`): escapes from the Firecracker or
   process sandbox into the host.
 
 ## Supported versions

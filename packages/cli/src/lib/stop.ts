@@ -39,7 +39,7 @@ export async function stopServer(pid: number): Promise<boolean> {
     try {
       process.kill(pid, "SIGKILL");
     } catch {
-      // Exited between the check and the kill — that's what we wanted.
+      // Exited between the check and the kill, which is what we wanted.
     }
     if (!(await waitForExit(pid, FORCE_TIMEOUT_MS))) {
       console.error(pc.red(`✖ Process ${pid} is still running.`));

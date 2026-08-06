@@ -5,8 +5,8 @@
 # approves them with 2FA on npmjs.com → Staged Packages.
 #
 # Required repository secrets:
-#   NPM_TOKEN — npm token with publish rights to the @brevi scope
-#               (staging needs no 2FA bypass)
+#   NPM_TOKEN: npm token with publish rights to the @brevi scope
+#              (staging needs no 2FA bypass)
 name: Release
 
 on:
@@ -40,7 +40,7 @@ jobs:
           bun-version: 1.3.14
 
       # Staged publishing needs npm >= 11.15, newer than Node 24's bundled
-      # npm. Pinned exactly — this binary handles NPM_TOKEN, so it must not
+      # npm. Pinned exactly: this binary handles NPM_TOKEN, so it must not
       # float to whatever the registry serves as latest. Dependabot won't see
       # this; bump it deliberately.
       - run: npm install -g npm@11.19.0

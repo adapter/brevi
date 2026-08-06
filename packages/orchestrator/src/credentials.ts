@@ -148,7 +148,7 @@ export function validateCodexChatgptAuth(raw: string): CredentialResult {
     const plan = auth?.chatgpt_plan_type;
     const who = email ? `Connected as ${email}` : "Codex login verified";
     const planNote = plan ? ` (ChatGPT ${plan})` : "";
-    const expiryNote = expired ? " — token expired; Codex will refresh it on first run" : "";
+    const expiryNote = expired ? "; the token expired but Codex will refresh it on first run" : "";
     return { ok: true, detail: `${who}${planNote}${expiryNote}` };
   } catch {
     return { ok: false, detail: "Could not parse the Codex login file." };

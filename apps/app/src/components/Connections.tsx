@@ -42,7 +42,7 @@ export const PROVIDERS: ProviderSpec[] = [
     id: "linear",
     field: "linearApiKey",
     name: "Linear",
-    role: "Ticket source — polling starts once connected",
+    role: "Ticket source; polling starts once connected",
     connectHint: "Authorize in the browser",
     inputLabel: "Personal API key",
     keyUrl: "https://linear.app/settings/api",
@@ -85,7 +85,7 @@ export const PROVIDERS: ProviderSpec[] = [
 ];
 
 /**
- * Permanent right sidebar to connect Linear, GitHub, and agent credentials —
+ * Permanent right sidebar to connect Linear, GitHub, and agent credentials,
  * the mirror of the runs sidebar on the left.
  */
 export function ConnectionsSidebar({
@@ -109,7 +109,7 @@ export function ConnectionsSidebar({
         <div className="flex items-center gap-2">
           <Plate className="text-haze-400">Connections</Plate>
           <span className="font-mono text-[11px] leading-none font-normal text-haze-700">
-            {config ? `${connectedCount}/${PROVIDERS.length}` : "–"}
+            {config ? `${connectedCount}/${PROVIDERS.length}` : "-"}
           </span>
         </div>
       </SidebarHeader>
@@ -133,7 +133,7 @@ export function ConnectionsSidebar({
           </>
         ) : (
           <p className="mt-3 px-1 text-[12.5px] leading-relaxed text-haze-700">
-            Waiting for the orchestrator — connections can be edited once it answers.
+            Waiting for the orchestrator; connections can be edited once it answers.
           </p>
         )}
       </SidebarContent>
@@ -337,7 +337,7 @@ function ProviderRow({
         {awaitingRedirect && !connected && (
           <p className="mt-2.5 flex items-center gap-1.5 text-[12px] text-haze-400">
             <span className="inline-block size-[6px] animate-beacon rounded-full bg-ember-500" />
-            Finish authorizing in the opened tab — this panel updates by itself.
+            Finish authorizing in the opened tab; this panel updates by itself.
           </p>
         )}
 

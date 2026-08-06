@@ -73,7 +73,7 @@ function parseVersion(version: string): { core: number[]; prerelease: string[] }
 export type InstallMethod =
   /** A persistent global install we can update in place. */
   | { kind: "global"; manager: "npm" | "bun" | "pnpm" | "yarn"; installArgs: string[] }
-  /** A per-invocation runner cache — nothing persistent to update. */
+  /** A per-invocation runner cache; nothing persistent to update. */
   | { kind: "runner"; runner: "npx" | "bunx" | "pnpm dlx" }
   /** Not under node_modules at all, e.g. a checkout of the repo. */
   | { kind: "unknown" };
@@ -107,8 +107,8 @@ export function detectInstallMethod(entryPath = fileURLToPath(import.meta.url)):
 
 /**
  * Returns a printable "new version available" notice, or null when up to date
- * (or when npm can't be reached in time — the notice must never block or fail
- * the command it rides on).
+ * (or when npm can't be reached in time, since the notice must never block or
+ * fail the command it rides on).
  */
 export async function updateNotice(currentVersion: string): Promise<string | null> {
   try {
@@ -116,7 +116,7 @@ export async function updateNotice(currentVersion: string): Promise<string | nul
     if (compareVersions(currentVersion, latest) >= 0) return null;
     return [
       pc.yellow(`! A new version of ${PACKAGE_NAME} is available: ${currentVersion} → ${latest}`),
-      pc.dim(`  Run \`brevi update\` — changelog: ${CHANGELOG_URL}`),
+      pc.dim(`  Run \`brevi update\` (changelog: ${CHANGELOG_URL})`),
     ].join("\n");
   } catch {
     return null;

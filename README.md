@@ -5,7 +5,7 @@
 [![license](https://img.shields.io/npm/l/%40brevi%2Fcli)](LICENSE)
 
 > [!WARNING]
-> brevi is under active development. Expect breaking changes between releases, rough edges, and APIs that move without notice — pin exact versions if you depend on it.
+> brevi is under active development. Expect breaking changes between releases, rough edges, and APIs that move without notice, so pin exact versions if you depend on it.
 
 A local sandbox and orchestrator for coding agents.
 
@@ -22,14 +22,14 @@ Every execution runs in an isolated sandbox. On Linux with KVM, sandboxes are [F
 npx @brevi/cli   # first run: pick a sandbox provider, then the dashboard opens
 ```
 
-On a fresh machine this runs the init flow (one question — the sandbox provider), then starts the orchestrator and opens the dashboard. Everything else happens in the dashboard's **Connections** panel with one-click **Connect** buttons — no copying keys:
+On a fresh machine this runs the init flow (one question: the sandbox provider), then starts the orchestrator and opens the dashboard. Everything else happens in the dashboard's **Connections** panel with one-click **Connect** buttons, with no keys to copy:
 
-- **GitHub** — uses your `gh` CLI login if present, or an OAuth device code (with `connect.githubClientId` configured).
-- **Claude** — found on this machine: your Claude Code login (Keychain / `~/.claude`) or `ANTHROPIC_API_KEY`.
-- **Codex** — found on this machine: `OPENAI_API_KEY` or the Codex CLI login (`~/.codex/auth.json`).
-- **Linear** — browser OAuth (with `connect.linearClientId`/`Secret` configured), else a pasted API key.
+- **GitHub**: uses your `gh` CLI login if present, or an OAuth device code (with `connect.githubClientId` configured).
+- **Claude**: found on this machine, either your Claude Code login (Keychain / `~/.claude`) or `ANTHROPIC_API_KEY`.
+- **Codex**: found on this machine, either `OPENAI_API_KEY` or the Codex CLI login (`~/.codex/auth.json`).
+- **Linear**: browser OAuth (with `connect.linearClientId`/`Secret` configured), else a pasted API key.
 
-Every credential is verified live before saving — agent keys with a 1-token probe on the provider's cheapest model (`claude-haiku-4-5` / `gpt-5-nano`) — and stored in `~/.brevi/config.json`. All brevi state lives under `~/.brevi/`; the orchestrator reads no environment variables. Manual key entry remains as a fallback on every provider. Then pick repositories straight from your GitHub account, assign yourself a Linear issue, and add the `brevi` label; add `SPIKE` for research-only tickets.
+Every credential is verified live before saving and stored in `~/.brevi/config.json`; agent keys are checked with a 1-token probe on the provider's cheapest model (`claude-haiku-4-5` / `gpt-5-nano`). All brevi state lives under `~/.brevi/`; the orchestrator reads no environment variables. Manual key entry remains as a fallback on every provider. Then pick repositories straight from your GitHub account, assign yourself a Linear issue, and add the `brevi` label; add `SPIKE` for research-only tickets.
 
 Other commands: `brevi start` (headless, no browser), `brevi stop` (shut down a running instance), `brevi status`, `brevi update` (update an installed CLI to the latest release on npm, restarting a running instance so the new version takes effect), and `brevi init` (rerun the sandbox provider pick any time).
 
@@ -52,7 +52,7 @@ State lives in `~/.brevi/`: `config.json`, run history + artifacts under `runs/`
 
 ## Apps and packages
 
-Only `@brevi/cli` is published — it bundles the workspace libraries into a single file and ships the dashboard's built assets. The rest are internal workspace packages.
+Only `@brevi/cli` is published: it bundles the workspace libraries into a single file and ships the dashboard's built assets. The rest are internal workspace packages.
 
 | Package | What it is |
 | --- | --- |
@@ -60,7 +60,7 @@ Only `@brevi/cli` is published — it bundles the workspace libraries into a sin
 | `@brevi/orchestrator` | Linear polling, run pipeline, GitHub PRs, HTTP/WS API, serves the dashboard |
 | `@brevi/sandbox` | Sandbox providers: Firecracker microVMs (Linux + KVM) and local process fallback |
 | `@brevi/shared` | Domain types, config schema (zod), dashboard API/WebSocket protocol |
-| `@brevi/app` | The dashboard — Vite + React, shadcn/ui on Base UI, live run console, tickets, artifacts |
+| `@brevi/app` | The dashboard: Vite + React, shadcn/ui on Base UI, live run console, tickets, artifacts |
 | `@brevi/docs` | Documentation site (Astro Starlight), deployed to [brevi.dev](https://brevi.dev) |
 | `@brevi/api` | Hosted OAuth backend (Hono on Cloudflare Workers), deployed to api.brevi.dev |
 
@@ -89,23 +89,23 @@ brevi
 brevi status
 ```
 
-After changing CLI/orchestrator code, rerun `bun run build` — the linked bin runs the built `dist/`.
+After changing CLI/orchestrator code, rerun `bun run build`, because the linked bin runs the built `dist/`.
 
-For Firecracker sandboxes you need a Linux host with `/dev/kvm`, a kernel image, and a rootfs — see `packages/sandbox/README.md` for the one-time image and network setup.
+For Firecracker sandboxes you need a Linux host with `/dev/kvm`, a kernel image, and a rootfs; see `packages/sandbox/README.md` for the one-time image and network setup.
 
 ## CI, deploys, and releases
 
 GitHub Actions on [Blacksmith](https://blacksmith.sh) runners (`.github/workflows/`):
 
-- **`ci.yml`** — lint, typecheck, and build on every PR and push to main, then deploy the docs and the api to Cloudflare Workers:
+- **`ci.yml`**: lint, typecheck, and build on every PR and push to main, then deploy the docs and the api to Cloudflare Workers:
   - Pull requests → the **preview** environment (`brevi-docs-preview` / `brevi-api-preview` on the account's `workers.dev` subdomain). Forked PRs skip deploys.
   - Pushes to main → **production** ([brevi.dev](https://brevi.dev) and api.brevi.dev, attached as custom domains).
-- **`release.yml`** — releases `@brevi/cli` via [Changesets](https://github.com/changesets/changesets) and [npm staged publishing](https://docs.npmjs.com/staged-publishing). When main has pending changesets, the workflow opens (or updates) a **Release packages** PR; merging it **stages** the new version on npm. Nothing goes live until a maintainer approves the staged version with 2FA (npmjs.com → **Staged Packages**, or `npm stage approve <stage-id>`).
+- **`release.yml`**: releases `@brevi/cli` via [Changesets](https://github.com/changesets/changesets) and [npm staged publishing](https://docs.npmjs.com/staged-publishing). When main has pending changesets, the workflow opens (or updates) a **Release packages** PR; merging it **stages** the new version on npm. Nothing goes live until a maintainer approves the staged version with 2FA (npmjs.com → **Staged Packages**, or `npm stage approve <stage-id>`).
 
 Releasing a change:
 
 ```sh
-bun changeset        # describe the change, pick a bump — commit the generated file with your PR
+bun changeset        # describe the change, pick a bump, then commit the generated file with your PR
 # …merge the Release packages PR when it appears, then approve the staged versions on npmjs.com
 ```
 

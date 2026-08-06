@@ -23,7 +23,7 @@ await sandbox.pullDirectory("artifacts", localArtifacts);
 await sandbox.destroy();
 ```
 
-`exec` never throws on a non-zero exit — inspect `result.exitCode`. Output is streamed to
+`exec` never throws on a non-zero exit; inspect `result.exitCode`. Output is streamed to
 `onStdout`/`onStderr` as it arrives and the last ~2 MB of each stream is also returned in
 the result. Timeouts kill the command and report exit code `124`. Relative `cwd` and
 relative paths given to `pushDirectory`/`writeFile`/… resolve against `workspacePath`.
@@ -32,10 +32,10 @@ relative paths given to `pushDirectory`/`writeFile`/… resolve against `workspa
 
 `createSandboxProvider` maps `sandbox.provider` from the brevi config:
 
-- `"auto"` — Firecracker when **all** of: `process.platform === "linux"`, `/dev/kvm` is
+- `"auto"` selects Firecracker when **all** of: `process.platform === "linux"`, `/dev/kvm` is
   readable and writable, and the firecracker binary resolves on `PATH` (or at the
   configured `binary`). Otherwise the process provider. `auto` never fails; it downgrades.
-- `"firecracker"` / `"process"` — constructed and `ensureAvailable()`d immediately, so a
+- `"firecracker"` / `"process"`: constructed and `ensureAvailable()`d immediately, so a
   misconfigured host fails at startup with one aggregated, actionable error rather than
   mid-run.
 
@@ -45,7 +45,7 @@ Firecracker requires KVM, which is a Linux kernel feature; there is no macOS por
 Apple's Hypervisor.framework is not a substitute. On macOS `auto` therefore always selects
 the process provider, which runs agent commands directly on your machine under
 `~/.brevi/workspaces/<run-id>/workspace`. That is fine for development but provides **no
-isolation** — an agent can read and write anything your user can. For real isolation run
+isolation**: an agent can read and write anything your user can. For real isolation run
 brevi on a Linux host, or inside a Linux VM with nested virtualisation enabled.
 
 ## Architecture
@@ -83,7 +83,7 @@ directory transfers stream through `tar`, and `writeFile`/`readFile` use `cat`. 
 workspace inside the guest is `/workspace`.
 
 `destroy()` SIGTERMs firecracker, SIGKILLs it after a 3 s grace period, deletes the tap
-device (only if brevi created it — pooled devices from the setup script are left in
+device (only if brevi created it; pooled devices from the setup script are left in
 place), and removes the sandbox directory.
 
 ## One-time Linux setup
@@ -100,8 +100,8 @@ curl -fsSL -o ~/.brevi/images/vmlinux \
 ```
 
 Any kernel works provided virtio-blk, virtio-net, ext4 and the 8250 serial driver are
-built in (not modules). `CONFIG_IP_PNP` is nice to have but not required — the guest init
-also parses the `ip=` argument itself.
+built in (not modules). `CONFIG_IP_PNP` is nice to have but not required, because the guest
+init also parses the `ip=` argument itself.
 
 ### 2. Rootfs
 
@@ -124,7 +124,7 @@ Enables `ip_forward`, installs an iptables MASQUERADE rule for `172.30.0.0/16`, 
 pre-creates a pool of tap devices owned by your user so brevi can attach VMs to them
 without root. brevi never escalates privileges itself: if it has to create a tap device
 and gets `EPERM`, it fails with a message pointing back at this script. Both the rules and
-the devices are lost on reboot — re-run after restarting. `--clean` removes them.
+the devices are lost on reboot, so re-run after restarting. `--clean` removes them.
 
 ### 4. KVM access
 
@@ -136,10 +136,10 @@ sudo usermod -aG kvm "$(whoami)"   # log out and back in
 
 ## Troubleshooting
 
-- **`firecracker exited before opening its API socket`** — read
+- **`firecracker exited before opening its API socket`**: read
   `~/.brevi/workspaces/<id>/firecracker.log`; it holds the guest console.
-- **`microVM did not accept ssh within 30000ms`** — the same log shows whether the kernel
+- **`microVM did not accept ssh within 30000ms`**: the same log shows whether the kernel
   panicked, the rootfs failed to mount, or sshd never started. A missing `ip=` route
   usually means the tap device has no address (re-run the network script).
-- **Guest has no DNS/egress** — check the MASQUERADE rule and `net.ipv4.ip_forward`; the
+- **Guest has no DNS/egress**: check the MASQUERADE rule and `net.ipv4.ip_forward`; the
   image ships `/etc/resolv.conf` pointing at 1.1.1.1.

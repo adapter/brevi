@@ -9,10 +9,10 @@ brevi polls Linear on an interval (`pollIntervalSeconds`, 60 by default), turns 
 
 An issue is eligible when **all** of these hold:
 
-1. It is **assigned to you** — the user the connected Linear credential belongs to.
+1. It is **assigned to you**, meaning the user the connected Linear credential belongs to.
 2. Its state type is **`unstarted` or `backlog`**. Issues already started, done, or cancelled are ignored.
 3. It is in one of `linear.teamKeys`, if you set that list. Empty means all teams.
-4. It **opts in** by carrying the trigger label — `brevi` by default, matched case-insensitively.
+4. It **opts in** by carrying the trigger label (`brevi` by default, matched case-insensitively).
 
 The label name is configurable under `trigger` in the config.
 
@@ -43,7 +43,7 @@ A ticket that resolves to nothing is still shown in the dashboard queue, but it 
 
 ## What a run does
 
-Runs execute serially — one at a time, FIFO — and move through the statuses `queued` → `preparing` → `running` → `finalizing` → `completed`, or `failed` / `cancelled`.
+Runs execute serially (one at a time, FIFO) and move through the statuses `queued` → `preparing` → `running` → `finalizing` → `completed`, or `failed` / `cancelled`.
 
 **Preparing.** brevi clones the mapped repo (depth 50, default branch, or from `repo.path` if you configured a local checkout), rewrites `origin` to a token-free URL, creates the branch `brevi/<ticket-identifier>` in lowercase, creates the sandbox, and pushes the checkout into it. Best effort, it also moves the Linear issue to its team's first "started" state.
 
@@ -53,22 +53,22 @@ Runs execute serially — one at a time, FIFO — and move through the statuses 
 
 Then, depending on the kind:
 
-- **Implementation** — brevi removes everything under `.brevi/` (agent outputs stay with the run's artifacts; the mounted Codex login must never leak), stages the rest, and fails with `agent made no changes` if the tree is clean. Otherwise it commits `<ID>: <title>`, force-pushes `brevi/<ticket-id>`, and opens a pull request against the repo's default branch. The PR body is the agent's `summary.md`, `Fixes <ID>`, and a brevi footer. Finally brevi comments on the Linear issue with the PR link (a failure here does not fail the run).
-- **SPIKE** — brevi reads `.brevi/research.md` and posts it as a Linear comment. If the file is missing, the run fails. Comments longer than 60 KB are truncated with a pointer to the full document in the run's artifacts.
+- **Implementation**: brevi removes everything under `.brevi/` (agent outputs stay with the run's artifacts; the mounted Codex login must never leak), stages the rest, and fails with `agent made no changes` if the tree is clean. Otherwise it commits `<ID>: <title>`, force-pushes `brevi/<ticket-id>`, and opens a pull request against the repo's default branch. The PR body is the agent's `summary.md`, `Fixes <ID>`, and a brevi footer. Finally brevi comments on the Linear issue with the PR link (a failure here does not fail the run).
+- **SPIKE**: brevi reads `.brevi/research.md` and posts it as a Linear comment. If the file is missing, the run fails. Comments longer than 60 KB are truncated with a pointer to the full document in the run's artifacts.
 
-When a run completes successfully, brevi also moves the Linear issue to a review state — the team's first `started`-type state whose name mentions "review" (e.g. **In Review**). Best effort: teams without such a state keep the issue where it is.
+When a run completes successfully, brevi also moves the Linear issue to a review state: the team's first `started`-type state whose name mentions "review" (e.g. **In Review**). Best effort: teams without such a state keep the issue where it is.
 
 ### Demos
 
-The implementation prompt makes a demo mandatory. If the repo config sets `devCommand` (and optionally `devUrl`), the agent is told to start that dev server and capture real screenshots with Playwright. Otherwise it captures the best available evidence: screenshots, else a `.webm` recording, else test output or a CLI transcript as `.txt`. Files go in `.brevi/demo/` and are collected as run artifacts, viewable on the run's page in the dashboard — they are not committed to the branch or attached to the PR.
+The implementation prompt makes a demo mandatory. If the repo config sets `devCommand` (and optionally `devUrl`), the agent is told to start that dev server and capture real screenshots with Playwright. Otherwise it captures the best available evidence: screenshots, else a `.webm` recording, else test output or a CLI transcript as `.txt`. Files go in `.brevi/demo/` and are collected as run artifacts, viewable on the run's page in the dashboard; they are not committed to the branch or attached to the PR.
 
 ## Reruns
 
 Auto-queueing is keyed on the pair **(ticket id, `updatedAt`)**:
 
-- A ticket that already has a run for its current `updatedAt` is skipped — polling is idempotent.
+- A ticket that already has a run for its current `updatedAt` is skipped, so polling is idempotent.
 - **Edit the ticket after a run finished and it runs again.** The new `updatedAt` makes it a new revision; the branch is force-pushed and the existing open pull request has its title and body updated rather than a second PR being opened.
 - A ticket with a `queued`, `preparing`, `running`, or `finalizing` run is never queued again.
-- Note that moving an issue out of `unstarted`/`backlog` — which brevi itself does when a run starts — removes it from the eligible set until it moves back.
+- Note that moving an issue out of `unstarted`/`backlog` (which brevi itself does when a run starts) removes it from the eligible set until it moves back.
 
 You can also queue a ticket by hand from the dashboard, which bypasses the revision check but still refuses when a run is already active for it. Active runs can be cancelled; the sandbox is destroyed and the run ends as `cancelled`.

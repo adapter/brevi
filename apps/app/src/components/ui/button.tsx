@@ -34,7 +34,7 @@ const buttonVariants = cva(
         "icon-sm":
           "size-7 rounded-[min(var(--radius-md),12px)] in-data-[slot=button-group]:rounded-lg",
         "icon-lg": "size-9",
-        /* Tracked-out micro label — the size every control strip button uses. */
+        /* Tracked-out micro label, the size every control strip button uses. */
         plate:
           "h-auto gap-1.5 rounded-[4px] px-2 py-1.5 font-plate text-[9px] leading-none font-medium tracking-[0.14em] uppercase [&_svg:not([class*='size-'])]:size-3",
       },

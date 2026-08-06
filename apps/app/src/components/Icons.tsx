@@ -31,7 +31,7 @@ export const Stop = (p: IconProps) => (
   </Svg>
 );
 
-/** Connections: three rules with knobs — settings, in the house style. */
+/** Connections: three rules with knobs (settings, in the house style). */
 export const Sliders = (p: IconProps) => (
   <Svg {...p}>
     <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" opacity={0.4} />

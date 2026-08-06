@@ -2,7 +2,7 @@ import { Command, Plate } from "./Bits";
 
 /**
  * The main pane when no run is open. Runs themselves live in the sidebar and
- * at /runs/<id> — this pane only orients: offline help, first-run guidance,
+ * at /runs/<id>, so this pane only orients: offline help, first-run guidance,
  * or a pointer at the sidebar.
  */
 export function Overview({
@@ -63,7 +63,7 @@ export function Overview({
     <Centered center>
       <p className="text-[13.5px] text-haze-300">Pick a run from the sidebar</p>
       <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-600">
-        Each run has its own page and URL — copy the address bar to share exactly what you are
+        Each run has its own page and URL; copy the address bar to share exactly what you are
         looking at.
       </p>
     </Centered>

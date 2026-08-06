@@ -132,7 +132,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return this.#linear !== undefined;
   }
 
-  /** One poll cycle. Never throws — a bad poll must not take the server down. */
+  /** One poll cycle. Never throws; a bad poll must not take the server down. */
   async poll(): Promise<void> {
     if (this.#stopped) return;
     const linear = this.#linear;
@@ -355,7 +355,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         return {
           status: "connected",
           provider,
-          detail: `${result.detail} — from ${found.source}`,
+          detail: `${result.detail} (from ${found.source})`,
           config: redactConfig(this.config),
         };
       }
@@ -387,7 +387,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         return {
           status: "connected",
           provider,
-          detail: `${result.detail} — from ${found.source}`,
+          detail: `${result.detail} (from ${found.source})`,
           config: redactConfig(this.config),
         };
       }

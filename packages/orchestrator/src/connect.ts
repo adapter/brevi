@@ -89,7 +89,7 @@ export async function discoverAnthropicCredential(): Promise<DiscoveredCredentia
 }
 
 /**
- * Codex: OPENAI_API_KEY env, then ~/.codex/auth.json — which holds either an
+ * Codex: OPENAI_API_KEY env, then ~/.codex/auth.json, which holds either an
  * API key or a ChatGPT OAuth login ({auth_mode, tokens: {access_token,
  * refresh_token, id_token, account_id}}). ChatGPT logins are captured whole:
  * the sandboxed Codex CLI consumes the file directly via CODEX_HOME.

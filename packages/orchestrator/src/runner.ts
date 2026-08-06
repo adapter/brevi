@@ -31,7 +31,7 @@ export interface RunContext {
  * The full run pipeline: prepare a checkout + sandbox, run the coding agent,
  * then finalize (PR for implementations, Linear comment for spikes).
  *
- * Never throws for run failures — every outcome lands in the store as a
+ * Never throws for run failures: every outcome lands in the store as a
  * terminal status. Only truly unexpected store errors can escape.
  */
 export async function executeRun(ctx: RunContext): Promise<void> {
@@ -176,7 +176,7 @@ function branchNameFor(ticket: Ticket): string {
 
 /**
  * Credentials forwarded into the sandbox for the coding agent. All keys come
- * from ~/.brevi/config.json (connected via the dashboard) — the orchestrator's
+ * from ~/.brevi/config.json (connected via the dashboard); the orchestrator's
  * own environment is never consulted at run time.
  */
 function collectAgentEnv(config: BreviConfig): Record<string, string> {
@@ -408,7 +408,7 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
   };
 }
 
-/** Demo evidence stays with the local run's artifacts — the PR carries only the summary. */
+/** Demo evidence stays with the local run's artifacts; the PR carries only the summary. */
 function buildPrBody(options: { summary: string; ticket: Ticket }): string {
   const { summary, ticket } = options;
   return [summary, `Fixes ${ticket.identifier}`, `---\n${BREVI_FOOTER}`].join("\n\n");

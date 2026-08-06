@@ -71,9 +71,9 @@ export class LinearService {
   }
 
   /**
-   * Best-effort: after a successful run, move the issue to a review state —
-   * the team's first "started"-type state whose name mentions review (e.g.
-   * "In Review"). Teams without one keep their current state.
+   * Best-effort: after a successful run, move the issue to a review state,
+   * meaning the team's first "started"-type state whose name mentions review
+   * (e.g. "In Review"). Teams without one keep their current state.
    */
   async moveToReview(issueId: string): Promise<void> {
     try {

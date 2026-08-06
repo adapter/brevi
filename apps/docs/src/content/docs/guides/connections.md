@@ -3,7 +3,7 @@ title: Connections
 description: How brevi's one-click Connect buttons acquire GitHub, Claude, Codex and Linear credentials, how they are validated, and where they are stored.
 ---
 
-Every credential brevi uses is set from the dashboard's **Connections** rail. Each provider has one **Connect** button that walks a strategy chain: look for a credential that already exists on this machine, then an OAuth flow, then — only if both fail — offer manual entry with a reason.
+Every credential brevi uses is set from the dashboard's **Connections** rail. Each provider has one **Connect** button that walks a strategy chain: look for a credential that already exists on this machine, then an OAuth flow, and then, only if both fail, offer manual entry with a reason.
 
 Nothing is saved until it has been checked against the provider. "Connected" means brevi made a live call with that credential and it worked.
 
@@ -22,19 +22,19 @@ All of them go into `~/.brevi/config.json`, under the field for their provider:
 
 The orchestrator never reads environment variables to configure itself. Variables like `ANTHROPIC_API_KEY` are only *discovered* by a Connect button and then written to the config; changing the variable later has no effect on saved runs.
 
-Whenever the config is sent to the dashboard — `GET /api/config`, the WebSocket `hello`/`config` messages, every Connect response — secrets are replaced with `***`. An empty string is left as-is so the UI can tell "not connected" apart from "connected". `connect.linearClientSecret` is redacted the same way.
+Whenever the config is sent to the dashboard (`GET /api/config`, the WebSocket `hello`/`config` messages, every Connect response), secrets are replaced with `***`. An empty string is left as-is so the UI can tell "not connected" apart from "connected". `connect.linearClientSecret` is redacted the same way.
 
 :::caution
-`~/.brevi/config.json` is a plaintext file containing live tokens. Treat it like `~/.ssh` — it is not encrypted and brevi does not manage its permissions for you.
+`~/.brevi/config.json` is a plaintext file containing live tokens. Treat it like `~/.ssh`: it is not encrypted and brevi does not manage its permissions for you.
 :::
 
 ## GitHub
 
 Used to clone repositories, push branches, open pull requests, and list the repos in the dashboard's picker.
 
-1. **`gh` CLI** — brevi runs `gh auth token`. If it returns a token, the token is validated with `GET https://api.github.com/user` and saved. The detail reads `Connected as <login> (via gh CLI)`.
-2. **OAuth device flow** — otherwise brevi starts a device authorization with scope `repo` and returns a user code plus a verification URL. The dashboard shows the code, opens GitHub, and polls `POST /api/connect/github/poll` until GitHub issues a token (or the code expires).
-3. **Manual** — paste a personal access token with the `repo` scope.
+1. **`gh` CLI**: brevi runs `gh auth token`. If it returns a token, the token is validated with `GET https://api.github.com/user` and saved. The detail reads `Connected as <login> (via gh CLI)`.
+2. **OAuth device flow**: otherwise brevi starts a device authorization with scope `repo` and returns a user code plus a verification URL. The dashboard shows the code, opens GitHub, and polls `POST /api/connect/github/poll` until GitHub issues a token (or the code expires).
+3. **Manual**: paste a personal access token with the `repo` scope.
 
 ## Claude
 
@@ -44,7 +44,7 @@ The default coding agent. brevi looks for a credential in this order:
 2. `CLAUDE_CODE_OAUTH_TOKEN` in the orchestrator's environment.
 3. Your **Claude Code login**: on macOS, the Keychain item `Claude Code-credentials`; on every platform, `~/.claude/.credentials.json`. brevi reads `claudeAiOauth.accessToken`.
 
-Whatever is found is verified with a real one-token request to `claude-haiku-4-5`. API keys authenticate with `x-api-key`; Claude Code OAuth tokens with `Authorization: Bearer` plus the OAuth beta header. A successful probe reads `Verified with claude-haiku-4-5 — from Claude Code login (Keychain)`.
+Whatever is found is verified with a real one-token request to `claude-haiku-4-5`. API keys authenticate with `x-api-key`; Claude Code OAuth tokens with `Authorization: Bearer` plus the OAuth beta header. A successful probe reads `Verified with claude-haiku-4-5`, followed by the credential's source, e.g. `Claude Code login (Keychain)`.
 
 API keys are saved to `agent.anthropicApiKey`, OAuth tokens to `agent.claudeCodeOauthToken`. Entering a key manually replaces any host-discovered login (the OAuth token is cleared) so there is exactly one active Claude credential.
 
@@ -53,12 +53,12 @@ API keys are saved to `agent.anthropicApiKey`, OAuth tokens to `agent.claudeCode
 An alternative agent, including ChatGPT-plan logins that have no API key at all:
 
 1. `OPENAI_API_KEY` in the orchestrator's environment.
-2. `~/.codex/auth.json` with an `OPENAI_API_KEY` field — the Codex CLI's API-key login.
-3. `~/.codex/auth.json` with an OAuth token set (`tokens.access_token`) — a **ChatGPT login**. The whole file is captured, not just a token, and stored in `agent.codexAuthJson`.
+2. `~/.codex/auth.json` with an `OPENAI_API_KEY` field, which is the Codex CLI's API-key login.
+3. `~/.codex/auth.json` with an OAuth token set (`tokens.access_token`), which is a **ChatGPT login**. The whole file is captured, not just a token, and stored in `agent.codexAuthJson`.
 
 API keys are verified with a one-token completion on `gpt-5-nano`; if that model isn't available on the account, brevi falls back to an authentication-only check against `/v1/models`.
 
-A ChatGPT login can't be probed the same way, so it is validated offline: the token set must parse and contain an access token, and if the access token has expired there must be a refresh token. brevi decodes the `id_token` to report who you are — `Connected as you@example.com (ChatGPT pro)`.
+A ChatGPT login can't be probed the same way, so it is validated offline: the token set must parse and contain an access token, and if the access token has expired there must be a refresh token. brevi decodes the `id_token` to report who you are: `Connected as you@example.com (ChatGPT pro)`.
 
 At run time a ChatGPT login travels as a *file*, not an environment variable. brevi writes it to `.brevi/codex-home/auth.json` inside the sandbox workspace and points `CODEX_HOME` at that directory, which is what the Codex CLI reads. The directory is deleted again before anything is committed, so the login can never reach a branch.
 
@@ -68,18 +68,18 @@ Connecting Codex only stores the credential; which CLI actually runs is `agent.c
 
 The ticket source.
 
-1. **OAuth redirect** — brevi builds a `https://linear.app/oauth/authorize` URL with scope `read,write`, `actor=user`, a random `state`, and a redirect back to `http://localhost:<port>/api/connect/linear/callback`. You approve in the browser; the callback exchanges the code for a token server-side, validates it, saves it, and broadcasts the new config to the dashboard. The authorization expires after 10 minutes.
-2. **Manual** — paste a personal API key from Linear's settings.
+1. **OAuth redirect**: brevi builds a `https://linear.app/oauth/authorize` URL with scope `read,write`, `actor=user`, a random `state`, and a redirect back to `http://localhost:<port>/api/connect/linear/callback`. You approve in the browser; the callback exchanges the code for a token server-side, validates it, saves it, and broadcasts the new config to the dashboard. The authorization expires after 10 minutes.
+2. **Manual**: paste a personal API key from Linear's settings.
 
 Both are validated with a `{ viewer { name email } }` GraphQL query. Keys beginning with `lin_api_` are sent as a raw `Authorization` header; OAuth access tokens are sent as `Bearer`.
 
-Connecting or disconnecting Linear takes effect immediately — brevi rebuilds its Linear client and polls again without a restart.
+Connecting or disconnecting Linear takes effect immediately: brevi rebuilds its Linear client and polls again without a restart.
 
 ## The role of api.brevi.dev
 
 The GitHub device flow needs a client id, and the Linear code exchange needs a client secret that must not sit on your laptop. brevi hosts those OAuth applications at **`https://api.brevi.dev`**, a small Cloudflare Worker (see `apps/api`). The local orchestrator uses it automatically when you haven't configured your own OAuth app, so one-click Connect works out of the box with nothing to register.
 
-What crosses the wire is only what the OAuth flow requires: a device-code request, a device-token poll, an authorize redirect, and a code exchange. Issued tokens are stored locally in `~/.brevi/config.json` — api.brevi.dev doesn't keep them, and it never sees your repositories, tickets, or agent keys.
+What crosses the wire is only what the OAuth flow requires: a device-code request, a device-token poll, an authorize redirect, and a code exchange. Issued tokens are stored locally in `~/.brevi/config.json`; api.brevi.dev doesn't keep them, and it never sees your repositories, tickets, or agent keys.
 
 Self-hosters have two escape hatches, both under `connect` in the config:
 

@@ -45,7 +45,7 @@ export function AppSidebar({
 
   /**
    * Runs that still need to happen: tickets with no run for their current
-   * revision — the same (id, updatedAt) rule the scheduler queues by.
+   * revision, the same (id, updatedAt) rule the scheduler queues by.
    */
   const pending = tickets.filter(
     (ticket) =>
@@ -193,7 +193,7 @@ function TicketStrip({
 
 /**
  * One run in the sidebar: status, ticket, and elapsed time. A real anchor to
- * /runs/<id> — copy link and middle-click behave like any link — that hands
+ * /runs/<id> (so copy link and middle-click behave like any link) that hands
  * plain left-clicks to the router.
  */
 function RunStrip({
@@ -216,7 +216,7 @@ function RunStrip({
     ? duration(run.startedAt ?? run.createdAt, now)
     : run.finishedAt && run.startedAt
       ? duration(run.startedAt, Date.parse(run.finishedAt))
-      : "—";
+      : "-";
 
   return (
     <a
@@ -257,15 +257,15 @@ function RunStrip({
   );
 }
 
-/** First-run UX: no ticket source yet — point at the Connections panel. */
+/** First-run UX: no ticket source yet, so point at the Connections panel. */
 function ConnectLinearCard() {
   return (
     <Card size="sm" className="mx-1 block p-4">
       <Plate className="text-haze-700">No ticket source</Plate>
       <h3 className="mt-2.5 text-[15px] leading-snug text-haze-50">Connect Linear to begin</h3>
       <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
-        brevi polls Linear for issues assigned to you. Connect Linear in the panel on the right —
-        and GitHub plus an agent key while you&apos;re there — and the queue fills itself.
+        brevi polls Linear for issues assigned to you. Connect Linear in the panel on the right
+        (and GitHub plus an agent key while you&apos;re there) and the queue fills itself.
       </p>
     </Card>
   );

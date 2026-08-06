@@ -4,7 +4,7 @@
  *
  * CI runs this after the Release packages PR merges: each public workspace
  * package whose version is missing from the registry is submitted with
- * `npm stage publish` — which needs a token but no OTP — and a maintainer
+ * `npm stage publish` (which needs a token but no OTP), and a maintainer
  * approves with 2FA on npmjs.com (Staged Packages) or via
  * `npm stage approve <stage-id>`.
  *
@@ -36,7 +36,7 @@ for (const dir of DIRS) {
 
   try {
     npm(["view", spec, "version"]);
-    console.log(`skip ${spec} — already on the registry`);
+    console.log(`skip ${spec}: already on the registry`);
     continue;
   } catch {
     // Version not published; fall through to stage it.
@@ -67,5 +67,5 @@ if (staged > 0) {
     `\n${staged} package(s) staged. Approve them with 2FA on npmjs.com → Staged Packages, or \`npm stage approve <stage-id>\`.`,
   );
 } else {
-  console.log("Nothing to stage — every version is already on the registry.");
+  console.log("Nothing to stage: every version is already on the registry.");
 }
