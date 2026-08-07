@@ -153,7 +153,7 @@ The coding agent executed inside the sandbox.
 | `reviewModel` | string | `"gpt-5.6-sol"` | Model the Codex review runs on. |
 | `reviewEffort` | `"minimal"` \| `"low"` \| `"medium"` \| `"high"` | `"high"` | Reasoning effort for Codex review executions, passed as `-c model_reasoning_effort=<value>`. |
 
-brevi always invokes the agent as `<command> -p <prompt> --output-format stream-json --verbose --dangerously-skip-permissions`, then `--model <model>`, then `args`. Those are Claude Code's flags, so a different `command` has to accept the same shape. Claude agents additionally get `--effort <orchestratorEffort>`.
+brevi always invokes the agent as `<command> -p <prompt> --output-format stream-json --verbose --permission-mode auto`, then `--model <model>`, then `args`. Those are Claude Code's flags, so a different `command` has to accept the same shape. Claude agents additionally get `--effort <orchestratorEffort>`. Auto mode runs without permission prompts while a classifier blocks actions that escalate beyond the ticket (such as exfiltrating data); it needs a model that supports it, which every default brevi model does.
 
 Claude runs are a single agent session with delegation: the main loop runs on `orchestratorModel` and dispatches the coding work to an `implementer` subagent on `implementModel` (defined via Claude Code's `--agents` flag). Setting `model` disables delegation and runs everything on that one model. Commands containing `codex` always run single-model on `model`.
 

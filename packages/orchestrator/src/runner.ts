@@ -185,7 +185,11 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       // --include-partial-messages exists only so the stream carries thinking
       // block boundaries; the token-level deltas are reduced to thinking events
       // above and never persisted.
-      const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--dangerously-skip-permissions"];
+      // Auto permission mode rather than bypassPermissions: bypass is refused
+      // as root (the firecracker guest runs everything as root), and auto's
+      // classifier blocks exfiltration-shaped actions, which matters because
+      // agents chew on untrusted ticket and repo content.
+      const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", "auto"];
       if (model) args.push("--model", model);
       if (effort) args.push("--effort", effort);
       args.push(...extraArgs, ...config.agent.args);

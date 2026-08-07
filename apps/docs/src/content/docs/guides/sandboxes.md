@@ -66,7 +66,7 @@ If a run fails with `firecracker exited before opening its API socket` or `micro
 The process provider runs agent commands directly on your machine, in `~/.brevi/workspaces/<run-id>/workspace`. It exists so brevi is usable on macOS and on Linux hosts without KVM.
 
 :::caution[No isolation]
-The process provider provides **no isolation whatsoever**. The coding agent runs as your user and can read and write anything you can, and brevi runs agents with permission prompts disabled. Use it for development against repositories you trust, not for unattended work.
+The process provider provides **no isolation whatsoever**. The coding agent runs as your user and can read and write anything you can, and brevi runs agents without interactive permission prompts (Claude Code's auto permission mode, where a classifier reviews actions in the background). Use it for development against repositories you trust, not for unattended work.
 :::
 
 Firecracker requires KVM, which is a Linux kernel feature. There is no macOS port, and Apple's Hypervisor.framework is not a substitute, so on macOS `auto` always selects the process provider. For real isolation, run brevi on a Linux host, or in a Linux VM with nested virtualisation enabled.
