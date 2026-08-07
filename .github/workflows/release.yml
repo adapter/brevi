@@ -15,14 +15,16 @@ on:
 
 concurrency: release-${{ github.ref }}
 
-permissions:
-  contents: write # push the version branch / tags
-  pull-requests: write # open the Release packages PR
-  id-token: write # npm provenance attestation
+# Default to no permissions; each job declares exactly what it needs.
+permissions: {}
 
 jobs:
   release:
     name: Version or publish
+    permissions:
+      contents: write # push the version branch / tags
+      pull-requests: write # open the Release packages PR
+      id-token: write # npm provenance attestation
     # GitHub-hosted on purpose: npm rejects provenance attestations from
     # self-hosted runners (Blacksmith counts as self-hosted in OIDC claims).
     runs-on: ubuntu-latest
