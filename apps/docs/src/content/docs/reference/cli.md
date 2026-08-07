@@ -27,7 +27,7 @@ There are no global flags beyond `--version` and `--help`, and no environment va
 
 ## `brevi`
 
-Running `brevi` with no arguments loads the config, starts the orchestrator (which begins polling Linear), serves the dashboard on `http://localhost:<server.port>` (4400 by default, bound to `127.0.0.1`), and opens it in your default browser. If the browser can't be opened, the URL is printed instead.
+Running `brevi` with no arguments loads the config, starts the orchestrator (which begins polling Linear), serves the dashboard on `http://localhost:<server.port>` (4400 by default, bound to `server.host`, `127.0.0.1` unless configured), and opens it in your default browser. If the browser can't be opened, the URL is printed instead.
 
 On first launch, when there is no `~/.brevi/config.json` yet, it runs the [init flow](#brevi-init) automatically before starting, so a fresh machine goes from zero to dashboard in one command. In a non-interactive terminal (CI, scripts) the auto-init cannot prompt, so a missing config fails immediately with a message instead of hanging; run `brevi init` from an interactive terminal first.
 

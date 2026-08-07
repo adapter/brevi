@@ -463,6 +463,17 @@ function attachWebSockets(
   };
 }
 
+/**
+ * The host to advertise in the handle URL: wildcard binds map to localhost so
+ * the browser-open flow works, and IPv6 literals get their URL brackets.
+ */
+function displayHost(host: string): string {
+  if (["0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0", "::1"].includes(host) || host.startsWith("127.")) {
+    return "localhost";
+  }
+  return host.includes(":") ? `[${host}]` : host;
+}
+
 export async function startOrchestrator(options: StartOptions = {}): Promise<OrchestratorHandle> {
   const config = options.config ?? (await loadConfig(options.configPath));
   const orchestrator = new Orchestrator(config, undefined, options.configPath);
@@ -471,7 +482,7 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
   const app = buildApp(orchestrator, config, options.appDist);
   const server = await new Promise<HttpServer>((resolvePromise, rejectPromise) => {
     const instance = serve(
-      { fetch: app.fetch, port: config.server.port, hostname: "127.0.0.1" },
+      { fetch: app.fetch, port: config.server.port, hostname: config.server.host },
       () => resolvePromise(instance as HttpServer),
     ) as HttpServer;
     instance.once("error", rejectPromise);
@@ -483,7 +494,7 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
 
   return {
     port,
-    url: `http://localhost:${port}`,
+    url: `http://${displayHost(config.server.host)}:${port}`,
     async stop(): Promise<void> {
       sockets.close();
       await orchestrator.stop();

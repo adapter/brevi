@@ -3,9 +3,9 @@ title: API
 description: The orchestrator's local HTTP and WebSocket protocol, plus the hosted OAuth endpoints on api.brevi.dev.
 ---
 
-The orchestrator serves both the dashboard and its API from one process, bound to `127.0.0.1` on `server.port` (4400 by default). The protocol is defined in `packages/shared/src/protocol.ts` and shared verbatim with the dashboard.
+The orchestrator serves both the dashboard and its API from one process, bound to `server.host` (`127.0.0.1` by default) on `server.port` (4400 by default). The protocol is defined in `packages/shared/src/protocol.ts` and shared verbatim with the dashboard.
 
-There is no authentication: the server is loopback-only and anything reaching it already runs as you. Everything outside `/api` serves the dashboard as a single-page app.
+There is no authentication: by default the server is loopback-only and anything reaching it already runs as you. Setting `server.host` to `0.0.0.0` exposes the same unauthenticated API to the network, so anyone who can reach the port has full control; only do that on networks you trust. Everything outside `/api` serves the dashboard as a single-page app.
 
 ## Orchestrator HTTP API
 

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, startOrchestrator } from "@brevi/orchestrator";
@@ -17,6 +18,24 @@ import { readPackageVersion } from "./version.js";
 function bundledAppDist(): string | undefined {
   const dist = join(dirname(fileURLToPath(import.meta.url)), "app");
   return existsSync(join(dist, "index.html")) ? dist : undefined;
+}
+
+function isLoopback(host: string): boolean {
+  return host === "localhost" || host.startsWith("127.") || host === "::1";
+}
+
+/** The dashboard URLs other devices can open, when bound to a wildcard address. */
+function lanUrls(host: string, port: number): string[] {
+  if (!["0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"].includes(host)) return [];
+  const urls: string[] = [];
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family === "IPv4" && !address.internal) {
+        urls.push(`http://${address.address}:${port}`);
+      }
+    }
+  }
+  return urls;
 }
 
 export interface RunServerOptions {
@@ -43,6 +62,17 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
   process.on("exit", removePidFile);
 
   console.log(pc.green(`✔ brevi is running at ${pc.bold(pc.cyan(handle.url))}`));
+
+  if (!isLoopback(config.server.host)) {
+    for (const url of lanUrls(config.server.host, handle.port)) {
+      console.log(pc.dim(`  Also on your network: ${pc.cyan(url)}`));
+    }
+    console.log(
+      pc.yellow(
+        "  ! brevi has no authentication: anyone who can reach this port gets full control, including a shell into sandboxes. Only bind beyond loopback on networks you trust.",
+      ),
+    );
+  }
 
   if (openBrowser) {
     try {

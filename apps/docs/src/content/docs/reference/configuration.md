@@ -210,7 +210,8 @@ A self-hosted Linear OAuth app must register the redirect URI `http://localhost:
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `port` | integer | `4400` | The orchestrator binds `127.0.0.1` on this port and serves both the API and the dashboard. |
+| `port` | integer | `4400` | The orchestrator serves both the API and the dashboard on this port. |
+| `host` | string | `"127.0.0.1"` | Bind address. The default keeps the dashboard reachable only from the machine itself; set `"0.0.0.0"` to reach it from other devices on the network. Prefer `"0.0.0.0"` over a specific interface address: loopback stays bound too, so `brevi status` and `brevi stop` keep working. **The dashboard and API have no authentication**, so anyone who can reach the port has full control of brevi, including a shell into its sandboxes; only expose it on networks you trust. |
 
 ## `pollIntervalSeconds`
 
