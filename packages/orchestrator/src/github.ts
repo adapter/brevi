@@ -97,3 +97,64 @@ export async function defaultBranchOf(remote: string, token: string): Promise<st
   const repo = await octokit.rest.repos.get({ owner, repo: name });
   return repo.data.default_branch;
 }
+
+export interface CommitIdentity {
+  /** git user.name */
+  name: string;
+  /** git user.email */
+  email: string;
+}
+
+/** Synthetic identity used when the connected GitHub user cannot be resolved. */
+export const FALLBACK_COMMIT_IDENTITY: CommitIdentity = { name: "brevi", email: "brevi@localhost" };
+
+let commitIdentityCache: { token: string; promise: Promise<CommitIdentity | null>; warned: boolean } | undefined;
+
+/** Actual GET /user lookup; never touches the cache. */
+async function fetchCommitIdentity(token: string): Promise<CommitIdentity | null> {
+  try {
+    const res = await fetch("https://api.github.com/user", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "brevi",
+      },
+    });
+    if (!res.ok) return null;
+    const user = (await res.json()) as { login?: string; id?: number; name?: string | null };
+    if (!user.login || typeof user.id !== "number") return null;
+    return {
+      name: user.name?.trim() || user.login,
+      email: `${user.id}+${user.login}@users.noreply.github.com`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Commit identity of the token's GitHub account: the account's display name
+ * (or login) plus its noreply address, so run commits attribute to the
+ * connected user without exposing a private email. The resolution (success
+ * or failure) is cached for the process, keyed by token, so concurrent runs
+ * share one in-flight GET /user request instead of each issuing their own;
+ * reconnecting (a token change) re-resolves. On a cached failure, the
+ * fallback warning callback fires only once per token.
+ */
+export async function resolveCommitIdentity(
+  token: string,
+  warnFallback?: (message: string) => void,
+): Promise<CommitIdentity | null> {
+  if (commitIdentityCache?.token !== token) {
+    commitIdentityCache = { token, promise: token ? fetchCommitIdentity(token) : Promise.resolve(null), warned: false };
+  }
+  const entry = commitIdentityCache;
+  const identity = await entry.promise;
+  if (identity === null && !entry.warned && warnFallback) {
+    entry.warned = true;
+    warnFallback(
+      `could not resolve the connected GitHub user; committing as ${FALLBACK_COMMIT_IDENTITY.name} <${FALLBACK_COMMIT_IDENTITY.email}>`,
+    );
+  }
+  return identity;
+}
