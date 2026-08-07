@@ -6,7 +6,7 @@ import { BREVI_HOME, WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type Li
 import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
 import { ccusageCostEntry, resolveCcusageCommand, startCcusageSampler, type CcusageSampler } from "./ccusage.js";
 import { usageCollector } from "./costs.js";
-import { authenticatedRemote, createPullRequest, plainRemote } from "./github.js";
+import { authenticatedRemote, createPullRequest, FALLBACK_COMMIT_IDENTITY, plainRemote, resolveCommitIdentity } from "./github.js";
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
 import { buildImplementationPrompt, buildReviewFixPrompt, type RepoMap } from "./prompts.js";
@@ -100,8 +100,13 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     // Never ship credentials into the sandbox via .git/config.
     await git(["remote", "set-url", "origin", plainRemote(repo.remote)], checkoutDir, config.github.token);
     await git(["checkout", "-B", branch], checkoutDir, config.github.token);
-    await git(["config", "user.name", "brevi"], checkoutDir, config.github.token);
-    await git(["config", "user.email", "brevi@localhost"], checkoutDir, config.github.token);
+    // Commits are authored as the connected GitHub user (noreply address) so
+    // squash merges don't pre-fill a Co-authored-by trailer for brevi.
+    const identity =
+      (await resolveCommitIdentity(config.github.token, (message) => log("system", message))) ??
+      FALLBACK_COMMIT_IDENTITY;
+    await git(["config", "user.name", identity.name], checkoutDir, config.github.token);
+    await git(["config", "user.email", identity.email], checkoutDir, config.github.token);
     const repoMap = await buildRepoMap(checkoutDir, config.github.token);
     throwIfAborted(signal);
 
