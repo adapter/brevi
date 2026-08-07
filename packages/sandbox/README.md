@@ -88,6 +88,11 @@ place), and removes the sandbox directory.
 
 ## One-time Linux setup
 
+The recommended path is `brevi setup`: it checks host tools and KVM access, downloads the
+firecracker binary and kernel, builds the rootfs, and sets up networking, interactively and
+idempotently, printing every sudo command before running it. The steps below are the manual
+equivalent.
+
 ### 1. Kernel
 
 Firecracker boots an uncompressed `vmlinux`. The easiest source is the Firecracker CI

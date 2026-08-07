@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { registerAttachCommand } from "./commands/attach.js";
 import { registerDefaultCommand } from "./commands/default.js";
 import { registerInitCommand } from "./commands/init.js";
+import { registerSetupCommand } from "./commands/setup.js";
 import { registerStartCommand } from "./commands/start.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { registerStopCommand } from "./commands/stop.js";
@@ -21,6 +22,7 @@ program
 
 registerDefaultCommand(program);
 registerInitCommand(program);
+registerSetupCommand(program);
 registerUiCommand(program);
 registerStartCommand(program);
 registerStopCommand(program);
