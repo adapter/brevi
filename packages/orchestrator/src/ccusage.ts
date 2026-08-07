@@ -7,11 +7,12 @@ import type { Sandbox } from "@brevi/sandbox";
 /**
  * Live, per-model cost from `ccusage`, run inside the run's sandbox while an
  * agent execution is in flight. ccusage reads the Claude Code transcript
- * JSONL files directly, so it reports actual per-model spend rather than the
- * approximate figures reconstructed from the agent's own stdout stream
- * (costs.ts). Everything here is best-effort and tolerant of failures: a
- * missing binary, a malformed sample, or a dead sandbox must never break a
- * run, only degrade it back to the stream-parsed figure.
+ * JSONL files directly (and, for Codex review passes, the Codex rollout
+ * files), so it reports actual per-model spend rather than the approximate
+ * figures reconstructed from the agent's own stdout stream (costs.ts).
+ * Everything here is best-effort and tolerant of failures: a missing binary,
+ * a malformed sample, or a dead sandbox must never break a run, only degrade
+ * it back to the stream-parsed figure.
  */
 
 const isDict = (v: unknown): v is Record<string, unknown> =>
@@ -133,6 +134,67 @@ export function parseCcusageSessions(stdout: string): CcusageSession[] {
   return result;
 }
 
+/** One ccusage Codex session, reduced to what the entry builder below needs. */
+export interface CodexCcusageSession {
+  sessionId?: string;
+  rows: CostModelUsage[];
+  /** Absent when ccusage reports 0 (a model missing from its pricing data), not just when the field is missing. */
+  costUsd?: number;
+}
+
+/**
+ * Tolerant parse of a `ccusage codex session --json --offline` report. Unlike
+ * the Claude report, Codex sessions carry no per-model cost, only a
+ * session-level `costUSD`, so the model breakdown here is tokens-only until
+ * `ccusageCostEntry` folds the session total back in.
+ */
+export function parseCodexCcusageSessions(stdout: string): CodexCcusageSession[] {
+  let data: unknown;
+  try {
+    data = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+  if (!isDict(data)) return [];
+  const sessions = data.sessions;
+  if (!Array.isArray(sessions)) return [];
+
+  const result: CodexCcusageSession[] = [];
+  for (const session of sessions) {
+    if (!isDict(session)) continue;
+    const idRaw = session.sessionId ?? session.sessionFile;
+    const sessionId = typeof idRaw === "string" ? idRaw : undefined;
+
+    const models = session.models;
+    if (!isDict(models)) continue;
+    const rows: CostModelUsage[] = [];
+    for (const [modelName, raw] of Object.entries(models)) {
+      if (!isDict(raw)) continue;
+      const row: CostModelUsage = {
+        model: modelName,
+        inputTokens: typeof raw.inputTokens === "number" ? raw.inputTokens : 0,
+        outputTokens: typeof raw.outputTokens === "number" ? raw.outputTokens : 0,
+      };
+      if (typeof raw.cacheReadTokens === "number") row.cacheReadTokens = raw.cacheReadTokens;
+      if (typeof raw.cacheCreationTokens === "number") row.cacheWriteTokens = raw.cacheCreationTokens;
+      rows.push(row);
+    }
+    if (rows.length === 0) continue; // no usable model rows: not worth keeping the session
+
+    // ccusage reports 0, not absence, for a session whose model isn't in its
+    // pricing data; a zero would silently beat the caller's table estimate,
+    // so only a genuinely positive figure is treated as known.
+    const costRaw = session.costUSD;
+    const costUsd = typeof costRaw === "number" && costRaw > 0 ? round6(costRaw) : undefined;
+    // A single-model session's total cost is exactly that model's cost, so
+    // the dashboard's per-model breakdown can show it too.
+    const onlyRow = rows.length === 1 ? rows[0] : undefined;
+    if (costUsd !== undefined && onlyRow) onlyRow.costUsd = costUsd;
+    result.push({ sessionId, rows, costUsd });
+  }
+  return result;
+}
+
 /**
  * Roll a session's per-model ccusage rows up into one CostEntry, same shape
  * as the stream-parsed entries in costs.ts but carrying the per-model
@@ -143,8 +205,11 @@ export function ccusageCostEntry(options: {
   rows: CostModelUsage[];
   subscription: boolean;
   fallbackModel?: string;
+  provider?: "claude" | "codex";
+  /** Session-level cost (Codex reports pricing per session, not per model row). Used only when no row carried a cost. */
+  sessionCostUsd?: number;
 }): CostEntry {
-  const { label, rows, subscription, fallbackModel } = options;
+  const { label, rows, subscription, fallbackModel, provider = "claude", sessionCostUsd } = options;
 
   let inputTokens = 0;
   let outputTokens = 0;
@@ -170,9 +235,13 @@ export function ccusageCostEntry(options: {
     if (tokens > bestTokens) bestTokenRow = row;
   }
 
+  // No row carried a cost (Codex rows are tokens-only: ccusage prices the
+  // session, not each model row): fall back to the session-level figure.
+  const resolvedCostUsd = costUsd !== undefined ? round6(costUsd) : sessionCostUsd !== undefined ? round6(sessionCostUsd) : undefined;
+
   const entry: CostEntry = {
     label,
-    provider: "claude",
+    provider,
     inputTokens,
     outputTokens,
     breakdown: rows,
@@ -181,11 +250,11 @@ export function ccusageCostEntry(options: {
   if (model) entry.model = model;
   if (cacheReadTokens !== undefined) entry.cacheReadTokens = cacheReadTokens;
   if (cacheWriteTokens !== undefined) entry.cacheWriteTokens = cacheWriteTokens;
-  if (costUsd !== undefined) entry.costUsd = round6(costUsd);
+  if (resolvedCostUsd !== undefined) entry.costUsd = resolvedCostUsd;
   // Nothing is actually billed per token on a subscription login, so that
   // figure is modeled rather than real; an entry with no cost at all is
   // token-only and gets the same flag for the same reason costs.ts sets it.
-  if (subscription || costUsd === undefined) entry.estimated = true;
+  if (subscription || resolvedCostUsd === undefined) entry.estimated = true;
   return entry;
 }
 
@@ -235,6 +304,66 @@ const SESSION_FILTER_JS = [
  * about. node is guaranteed wherever ccusage runs: both are node CLIs.
  */
 const SAMPLE_PIPELINE = `"$1" claude session --json --breakdown --offline | node -e '${SESSION_FILTER_JS}' "$2"`;
+
+/**
+ * Same shape and constraints as SESSION_FILTER_JS (no single quotes; the
+ * session id arrives as an argv, never interpolated), but for a Codex report:
+ * reads `data.sessions` and matches by containment rather than equality,
+ * since ccusage's Codex sessionId is a dated path around the rollout uuid
+ * (e.g. "2026/08/07/rollout-<ts>-<uuid>"), not the bare uuid the caller has.
+ */
+const CODEX_SESSION_FILTER_JS = [
+  'let s="";',
+  'process.stdin.on("data",(d)=>{s+=d});',
+  'process.stdin.on("end",()=>{',
+  "let data;",
+  "try{data=JSON.parse(s)}catch{process.exit(3)}",
+  "const rows=data&&data.sessions;",
+  "if(!Array.isArray(rows))process.exit(3);",
+  'const hit=rows.filter((r)=>r&&typeof r.sessionId==="string"&&r.sessionId.includes(process.argv[1]));',
+  'process.stdout.write(JSON.stringify({sessions:hit}));',
+  "});",
+].join("");
+
+/**
+ * The one-shot Codex read command. `codex session` (rather than `claude
+ * session`) pins the read to the Codex rollout files under CODEX_HOME. The
+ * in-sandbox filter exists for the same reason as the Claude pipeline's: on
+ * the process provider a default CODEX_HOME is the host's own `~/.codex`
+ * with its entire session history, which would overflow the provider's
+ * capture buffer if it crossed unfiltered.
+ */
+const CODEX_READ_PIPELINE = `"$1" codex session --json --offline | node -e '${CODEX_SESSION_FILTER_JS}' "$2"`;
+
+/**
+ * One-shot ccusage read of a single Codex review exec's rollout session, run
+ * after the exec has exited. No sampler like startCcusageSampler below: a
+ * review pass's rollout file is complete once its exec exits (unlike a live
+ * Claude execution, which is sampled while still running), so a single
+ * post-exec read is enough. Never throws; a missing binary, a malformed
+ * report, or a dead sandbox all just resolve to undefined.
+ */
+export async function readCodexSessionUsage(options: {
+  sandbox: Sandbox;
+  command: string;
+  codexHome: string | undefined;
+  sessionId: string;
+  signal: AbortSignal;
+}): Promise<CodexCcusageSession | undefined> {
+  const { sandbox, command, codexHome, sessionId, signal } = options;
+  try {
+    const result = await sandbox.exec("sh", ["-c", CODEX_READ_PIPELINE, "ccusage-codex", command, sessionId], {
+      cwd: sandbox.workspacePath,
+      env: codexHome ? { CODEX_HOME: codexHome } : undefined,
+      timeoutMs: 30_000,
+      signal,
+    });
+    if (result.exitCode !== 0) return undefined;
+    return parseCodexCcusageSessions(result.stdout).find((s) => s.rows.length > 0);
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Periodically runs the ccusage sampling pipeline inside the sandbox and

@@ -123,8 +123,10 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       await sandbox.exec("mkdir", ["-p", codexHome]);
       await sandbox.writeFile(`${codexHome}/auth.json`, config.agent.codexAuthJson);
     }
-    // Codex has no equivalent transcript reader, so live sampling only ever
-    // applies to Claude executions; a Codex run resolves and starts nothing.
+    // Live sampling only ever applies to Claude executions; a Codex run
+    // resolves and starts nothing here. The Codex review passes below still
+    // reuse this resolved command, for a one-shot post-exec ccusage read of
+    // each review exec's Codex session (see review.ts).
     const claude = agentProvider(config) === "claude";
     const ccusageCommand = claude ? await resolveCcusageCommand(sandbox, provider.name, signal) : undefined;
     if (claude && !ccusageCommand) {
@@ -328,6 +330,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         ticket,
         signal,
         codexHome,
+        ccusageCommand,
         log,
         // Same attempt suffix runAgent puts on its labels, so a retried
         // attempt's review entries are distinguishable from the first's.

@@ -22,8 +22,16 @@ interface Usage {
 
 export interface UsageCollector {
   observe(event: unknown): void;
+  /** The session id observed so far (Claude's session_id or Codex's thread_id/session_id), or undefined. */
+  sessionId(): string | undefined;
   /** One CostEntry for the execution so far, or undefined if nothing was observed. */
-  snapshot(options: { label: string; provider: "claude" | "codex"; subscription: boolean }): CostEntry | undefined;
+  snapshot(options: {
+    label: string;
+    provider: "claude" | "codex";
+    subscription: boolean;
+    /** Used when no model id was ever observed on the stream, e.g. Codex's new event format never names one. */
+    fallbackModel?: string;
+  }): CostEntry | undefined;
 }
 
 /**
@@ -112,11 +120,12 @@ function claudeUsageFrom(raw: unknown): Usage | undefined {
 }
 
 /**
- * Parse a Codex `token_count` usage object (either `info.total_token_usage`
- * from newer CLIs or the msg's own fields on older ones; both are cumulative
- * for the session). Codex's input_tokens includes cached tokens, unlike
- * Claude, so the cached portion is subtracted back out to get a fresh-token
- * figure comparable to Claude's input_tokens. output_tokens already includes
+ * Parse a Codex usage object: either the old `token_count` event (`msg`'s own
+ * fields, or newer 0.x CLIs' `info.total_token_usage`, cumulative for the
+ * session) or the new `turn.completed` event's `usage` object (per-turn, same
+ * field names). Codex's input_tokens includes cached tokens, unlike Claude,
+ * so the cached portion is subtracted back out to get a fresh-token figure
+ * comparable to Claude's input_tokens. output_tokens already includes
  * reasoning tokens.
  */
 function codexUsageFrom(raw: unknown): Usage | undefined {
@@ -141,6 +150,9 @@ function codexUsageFrom(raw: unknown): Usage | undefined {
  */
 export function usageCollector(): UsageCollector {
   let model: string | undefined;
+  // Claude's session_id (from the init event) or Codex's thread_id/session_id
+  // (new-format thread.started, or old-format session_configured).
+  let sessionId: string | undefined;
 
   // Per-message fallback (Claude): accumulated from every "assistant" event,
   // including subagent messages. Only used when no "result" event arrives.
@@ -155,11 +167,16 @@ export function usageCollector(): UsageCollector {
   // each observation replaces the snapshot rather than accumulating into it.
   let codex: Usage | undefined;
 
+  // Codex CLI >= 0.44's `turn.completed` usage is per-turn, not cumulative, so
+  // it's accumulated across turns rather than replacing the running total.
+  let codexTurns: Usage | undefined;
+
   function observe(event: unknown): void {
     if (!isDict(event)) return;
 
     if (event.type === "system" && event.subtype === "init") {
       if (typeof event.model === "string") model ??= event.model;
+      if (typeof event.session_id === "string") sessionId ??= event.session_id;
       return;
     }
     if (event.type === "assistant") {
@@ -182,11 +199,24 @@ export function usageCollector(): UsageCollector {
       return;
     }
 
-    // Codex CLI events are {id, msg: {...}} envelopes.
+    // Codex CLI >= 0.44 emits a flat format (top-level `type`, no envelope);
+    // older CLIs emit `{id, msg: {...}}` envelopes, handled further below.
+    if (event.type === "thread.started") {
+      if (typeof event.thread_id === "string") sessionId ??= event.thread_id;
+      return;
+    }
+    if (event.type === "turn.completed") {
+      const usage = codexUsageFrom(event.usage);
+      if (usage) codexTurns = accumulate(codexTurns ?? { inputTokens: 0, outputTokens: 0 }, usage);
+      return;
+    }
+
+    // Codex CLI < 0.44 events are {id, msg: {...}} envelopes.
     const msg = event.msg;
     if (!isDict(msg)) return;
     if (msg.type === "session_configured") {
       if (typeof msg.model === "string") model ??= msg.model;
+      if (typeof msg.session_id === "string") sessionId ??= msg.session_id;
       return;
     }
     if (msg.type === "token_count") {
@@ -196,20 +226,21 @@ export function usageCollector(): UsageCollector {
     }
   }
 
-  function claudeSnapshot(label: string, subscription: boolean): CostEntry | undefined {
+  function claudeSnapshot(label: string, subscription: boolean, fallbackModel: string | undefined): CostEntry | undefined {
     if (!result && !fallbackSeen) return undefined;
     // The result event's usage is the authoritative roll-up (subagent usage
     // included); when present the per-message fallback is ignored entirely
     // rather than blended with it. A result without a recognized usage object
     // keeps the accumulated fallback instead of zeroing the token counts.
     const usage = result?.usage ?? fallback;
+    const resolvedModel = model ?? fallbackModel;
     const entry: CostEntry = {
       label,
       provider: "claude",
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
     };
-    if (model) entry.model = model;
+    if (resolvedModel) entry.model = resolvedModel;
     if (usage.cacheReadTokens !== undefined) entry.cacheReadTokens = usage.cacheReadTokens;
     if (usage.cacheWriteTokens !== undefined) entry.cacheWriteTokens = usage.cacheWriteTokens;
 
@@ -221,34 +252,40 @@ export function usageCollector(): UsageCollector {
     } else {
       // No result event arrived (crash, usage limit) or it carried no cost:
       // fall back to the pricing table.
-      const costUsd = estimateCost(usage, model);
+      const costUsd = estimateCost(usage, resolvedModel);
       if (costUsd !== undefined) entry.costUsd = costUsd;
       entry.estimated = true;
     }
     return entry;
   }
 
-  function codexSnapshot(label: string): CostEntry | undefined {
-    if (!codex) return undefined;
+  function codexSnapshot(label: string, fallbackModel: string | undefined): CostEntry | undefined {
+    // Old-format cumulative snapshot wins when both somehow exist.
+    const usage = codex ?? codexTurns;
+    if (!usage) return undefined;
+    const resolvedModel = model ?? fallbackModel;
     const entry: CostEntry = {
       label,
       provider: "codex",
-      inputTokens: codex.inputTokens,
-      outputTokens: codex.outputTokens,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
       // Codex never reports its own spend; every entry is table-estimated.
       estimated: true,
     };
-    if (model) entry.model = model;
-    if (codex.cacheReadTokens !== undefined) entry.cacheReadTokens = codex.cacheReadTokens;
-    const costUsd = estimateCost(codex, model);
+    if (resolvedModel) entry.model = resolvedModel;
+    if (usage.cacheReadTokens !== undefined) entry.cacheReadTokens = usage.cacheReadTokens;
+    const costUsd = estimateCost(usage, resolvedModel);
     if (costUsd !== undefined) entry.costUsd = costUsd;
     return entry;
   }
 
   return {
     observe,
-    snapshot({ label, provider, subscription }): CostEntry | undefined {
-      return provider === "codex" ? codexSnapshot(label) : claudeSnapshot(label, subscription);
+    sessionId(): string | undefined {
+      return sessionId;
+    },
+    snapshot({ label, provider, subscription, fallbackModel }): CostEntry | undefined {
+      return provider === "codex" ? codexSnapshot(label, fallbackModel) : claudeSnapshot(label, subscription, fallbackModel);
     },
   };
 }

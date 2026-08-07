@@ -9,6 +9,7 @@
 
 import type { Sandbox } from "@brevi/sandbox";
 import type { BreviConfig, CostEntry, Ticket } from "@brevi/shared";
+import { ccusageCostEntry, readCodexSessionUsage } from "./ccusage.js";
 import { usageCollector } from "./costs.js";
 import { agentProvider } from "./limits.js";
 import { buildReviewerPrompt, buildReviewSynthesisPrompt, type ReviewAngle } from "./prompts.js";
@@ -62,6 +63,8 @@ export interface CodexReviewOptions {
   ticket: Ticket;
   signal: AbortSignal;
   codexHome?: string;
+  /** The resolved ccusage binary, when live sampling was set up for the run's Claude executions; reused here for a one-shot post-exec read. */
+  ccusageCommand?: string;
   log: (stream: "stdout" | "stderr" | "system", text: string) => void;
   addCost: (entry: CostEntry) => Promise<void>;
 }
@@ -78,7 +81,7 @@ export interface CodexReviewOptions {
  * the time the error escapes no reviewer process is left running.
  */
 export async function runCodexReview(options: CodexReviewOptions): Promise<string | undefined> {
-  const { sandbox, config, ticket, signal, codexHome, log, addCost } = options;
+  const { sandbox, config, ticket, signal, codexHome, ccusageCommand, log, addCost } = options;
   try {
     await sandbox.exec("mkdir", ["-p", REVIEW_DIR], { cwd: sandbox.workspacePath });
     throwIfAborted(signal);
@@ -90,7 +93,16 @@ export async function runCodexReview(options: CodexReviewOptions): Promise<strin
 
     const runReviewer = async (angle: ReviewAngle): Promise<number> => {
       const prompt = buildReviewerPrompt({ angle, ticket, outFile: `${REVIEW_DIR}/${angle.key}.md` });
-      const exitCode = await runCodexExec({ sandbox, config, signal, codexHome, prompt, addCost, costLabel: `review (${angle.key})` });
+      const exitCode = await runCodexExec({
+        sandbox,
+        config,
+        signal,
+        codexHome,
+        ccusageCommand,
+        prompt,
+        addCost,
+        costLabel: `review (${angle.key})`,
+      });
       log("system", exitCode === 0 ? `codex reviewer (${angle.title}) finished` : `codex reviewer (${angle.title}) failed (exit ${exitCode})`);
       return exitCode;
     };
@@ -106,7 +118,16 @@ export async function runCodexReview(options: CodexReviewOptions): Promise<strin
     }
 
     const synthesisPrompt = buildReviewSynthesisPrompt({ ticket, reviewDir: REVIEW_DIR, outFile: REVIEW_FILE });
-    const synthesisExit = await runCodexExec({ sandbox, config, signal, codexHome, prompt: synthesisPrompt, addCost, costLabel: "review (synthesis)" });
+    const synthesisExit = await runCodexExec({
+      sandbox,
+      config,
+      signal,
+      codexHome,
+      ccusageCommand,
+      prompt: synthesisPrompt,
+      addCost,
+      costLabel: "review (synthesis)",
+    });
     throwIfAborted(signal);
     if (synthesisExit !== 0) {
       log("system", `codex review failed: synthesis pass failed (exit ${synthesisExit})`);
@@ -142,6 +163,7 @@ interface RunCodexExecOptions {
   config: BreviConfig;
   signal: AbortSignal;
   codexHome: string | undefined;
+  ccusageCommand?: string;
   prompt: string;
   addCost: (entry: CostEntry) => Promise<void>;
   costLabel: string;
@@ -152,10 +174,12 @@ interface RunCodexExecOptions {
  * sandbox and records its usage. `--dangerously-bypass-approvals-and-sandbox`
  * is safe here because the sandbox itself (Firecracker or process) already
  * isolates the run; Codex's own CLI-level sandboxing would just be redundant.
+ * Usage is read from ccusage over the run's CODEX_HOME session file when
+ * available (real pricing), falling back to the stream-estimated figure.
  * Never throws on a non-zero exit, the caller decides what that means.
  */
 async function runCodexExec(options: RunCodexExecOptions): Promise<number> {
-  const { sandbox, config, signal, codexHome, prompt, addCost, costLabel } = options;
+  const { sandbox, config, signal, codexHome, ccusageCommand, prompt, addCost, costLabel } = options;
   const usage = usageCollector();
   // Reviewer transcripts run three at a time; interleaving their raw output
   // into the console would be unreadable, so only usage observation reads
@@ -194,7 +218,32 @@ async function runCodexExec(options: RunCodexExecOptions): Promise<number> {
   stdoutSink.flush();
   stderrSink.flush();
 
-  const entry = usage.snapshot({ label: costLabel, provider: "codex", subscription: !config.agent.codexApiKey });
+  const subscription = !config.agent.codexApiKey;
+  const streamEntry = usage.snapshot({
+    label: costLabel,
+    provider: "codex",
+    subscription,
+    fallbackModel: config.agent.reviewModel,
+  });
+
+  let entry = streamEntry;
+  const sessionId = usage.sessionId();
+  if (ccusageCommand && sessionId) {
+    const session = await readCodexSessionUsage({ sandbox, command: ccusageCommand, codexHome, sessionId, signal });
+    // A ccusage read without a cost (the model is missing from its pricing
+    // data) keeps the stream entry instead: its table estimate is better than
+    // reporting no cost at all.
+    if (session && session.costUsd !== undefined) {
+      entry = ccusageCostEntry({
+        label: costLabel,
+        rows: session.rows,
+        subscription,
+        fallbackModel: streamEntry?.model ?? config.agent.reviewModel,
+        provider: "codex",
+        sessionCostUsd: session.costUsd,
+      });
+    }
+  }
   if (entry) await addCost(entry);
 
   return exec.exitCode;
