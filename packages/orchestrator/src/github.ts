@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { Octokit } from "octokit";
 import type { GithubRepo } from "@brevi/shared";
 
@@ -110,6 +111,17 @@ export const FALLBACK_COMMIT_IDENTITY: CommitIdentity = { name: "brevi", email: 
 
 let commitIdentityCache: { token: string; promise: Promise<CommitIdentity | null>; warned: boolean } | undefined;
 
+/**
+ * Constant-time string equality for secrets. Both sides are hashed to
+ * fixed-length digests first so timingSafeEqual can run even when the
+ * inputs differ in length, without leaking where they diverge.
+ */
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const digestA = createHash("sha256").update(a).digest();
+  const digestB = createHash("sha256").update(b).digest();
+  return timingSafeEqual(digestA, digestB);
+}
+
 /** Actual GET /user lookup; never touches the cache. */
 async function fetchCommitIdentity(token: string): Promise<CommitIdentity | null> {
   try {
@@ -145,7 +157,7 @@ export async function resolveCommitIdentity(
   token: string,
   warnFallback?: (message: string) => void,
 ): Promise<CommitIdentity | null> {
-  if (commitIdentityCache?.token !== token) {
+  if (!commitIdentityCache || !timingSafeStringEqual(commitIdentityCache.token, token)) {
     commitIdentityCache = { token, promise: token ? fetchCommitIdentity(token) : Promise.resolve(null), warned: false };
   }
   const entry = commitIdentityCache;
