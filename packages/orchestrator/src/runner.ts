@@ -12,6 +12,7 @@ import { LinearService } from "./linear.js";
 import { buildImplementationPrompt, buildReviewFixPrompt, type RepoMap } from "./prompts.js";
 import { uploadRunEvidence, type UploadedEvidence } from "./r2.js";
 import { codexReviewEnabled, runCodexReview } from "./review.js";
+import { isContainedRegularFile, isSafePathSegment, resolveWithin } from "./safepath.js";
 import { isTerminal, type RunStore } from "./state.js";
 import { lineSink, RunCancelledError, throwIfAborted } from "./util.js";
 
@@ -645,7 +646,14 @@ async function collectArtifacts(
   const collected: ArtifactRef[] = [];
 
   const add = async (sourcePath: string, name: string): Promise<void> => {
-    const dest = join(artifactsDir, name);
+    // Both the name and the source come from files the agent controls: skip
+    // names that would land outside the artifact directory, and skip sources
+    // that are symlinks (or otherwise resolve) outside the pulled workspace
+    // instead of copying a hostile path or reading a host file through them.
+    if (!isSafePathSegment(name)) return;
+    if (!(await isContainedRegularFile(pulledDir, sourcePath))) return;
+    const dest = resolveWithin(artifactsDir, name);
+    if (!dest) return;
     await copyFile(sourcePath, dest);
     const { size } = await stat(dest);
     collected.push({ name, type: classifyArtifact(name), size });
@@ -657,7 +665,7 @@ async function collectArtifacts(
     for (const entry of entries) {
       if (!entry.isFile()) continue;
       const relative = join(entry.parentPath, entry.name).slice(demoDir.length + 1);
-      await add(join(demoDir, relative), relative.split(sep).join("__"));
+      await add(join(demoDir, relative), relative.split(sep).join("__").replaceAll("\\", "__"));
     }
   } catch {
     // no demo directory
@@ -665,11 +673,6 @@ async function collectArtifacts(
 
   for (const doc of ["summary.md", "review.md"]) {
     const source = join(pulledDir, ".brevi", doc);
-    try {
-      await stat(source);
-    } catch {
-      continue;
-    }
     await add(source, doc);
   }
 
@@ -692,9 +695,15 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
   const { ticket, repo, branch, pulledDir, artifacts, config, linear, log, evidence } = options;
   const token = config.github.token;
 
-  const summary = await readFile(join(pulledDir, ".brevi", "summary.md"), "utf8")
-    .then((text) => text.trim())
-    .catch(() => `Automated change for ${ticket.identifier}: ${ticket.title}`);
+  const fallbackSummary = `Automated change for ${ticket.identifier}: ${ticket.title}`;
+  const summaryPath = join(pulledDir, ".brevi", "summary.md");
+  // summary.md comes from the sandbox; refuse to read it when it is a symlink
+  // or otherwise resolves outside the pulled workspace.
+  const summary = (await isContainedRegularFile(pulledDir, summaryPath))
+    ? await readFile(summaryPath, "utf8")
+        .then((text) => text.trim())
+        .catch(() => fallbackSummary)
+    : fallbackSummary;
 
   // Agent outputs (summary, demos) live with the run's artifacts, and the
   // mounted Codex login must never leak: nothing under .brevi reaches the branch.

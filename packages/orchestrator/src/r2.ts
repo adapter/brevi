@@ -1,6 +1,6 @@
-import { join } from "node:path";
 import { execa } from "execa";
 import type { ArtifactRef, BreviConfig } from "@brevi/shared";
+import { resolveWithin } from "./safepath.js";
 
 /**
  * Cloudflare R2 evidence uploads: pushes a run's demo screenshots/recordings
@@ -314,7 +314,14 @@ export async function uploadRunEvidence(options: {
   const uploaded: UploadedEvidence[] = [];
   for (const candidate of selectEvidence(artifacts)) {
     const { name, kind } = candidate;
-    const filePath = join(artifactsDir, name);
+    // Artifact names are persisted from agent output; a hostile name must
+    // not make wrangler read (and publicly upload) a file outside the run's
+    // artifact directory.
+    const filePath = resolveWithin(artifactsDir, name);
+    if (!filePath) {
+      log(`R2 evidence upload skipped for ${name}: unsafe file name`);
+      continue;
+    }
     const contentType = CONTENT_TYPES[extOf(name)];
     if (!contentType) continue;
 
@@ -326,7 +333,7 @@ export async function uploadRunEvidence(options: {
 
     // Video: try the GIF preview first, upload it if it renders, then the video itself.
     let previewUrl: string | undefined;
-    const gifPath = join(artifactsDir, `${name}.gif`);
+    const gifPath = `${filePath}.gif`;
     const generated = await generateGifPreview({ name, videoPath: filePath, gifPath, log });
     if (generated) {
       const gifName = `${name}.gif`;

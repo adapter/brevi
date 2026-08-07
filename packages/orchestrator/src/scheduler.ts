@@ -65,6 +65,7 @@ import { isLinearAuthError, LinearService, type LinearAuthHooks } from "./linear
 import { checkWrangler, DEFAULT_EVIDENCE_BUCKET, provisionBucket, startWranglerLogin } from "./r2.js";
 import { buildResumeScript } from "./resume.js";
 import { collectAgentEnv, executeRun, playwrightBrowsersPath } from "./runner.js";
+import { isSafePathSegment } from "./safepath.js";
 import { ACTIVE_STATUSES, RunStore, isTerminal } from "./state.js";
 
 /** Error with an HTTP-mappable code, thrown by orchestrator commands. */
@@ -860,6 +861,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    * info describes.
    */
   async resumeRun(runId: string): Promise<ResumeRunResponse> {
+    if (!isSafePathSegment(runId)) throw new OrchestratorError("invalid", "malformed run id");
     const run = this.store.get(runId);
     if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
     if (run.status !== "completed" && run.status !== "failed") {
