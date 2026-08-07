@@ -10,6 +10,7 @@ export const IMAGES_DIR = join(BREVI_HOME, "images");
 export const WORKSPACES_DIR = join(BREVI_HOME, "workspaces");
 
 export const DEFAULT_PORT = 4400;
+export const DEFAULT_HOST = "127.0.0.1";
 
 export const repoConfigSchema = z.object({
   /** Git remote in "owner/name" form. */
@@ -187,7 +188,16 @@ export const configSchema = z.object({
       probeIntervalMinutes: z.number().int().min(1).default(15),
     })
     .prefault({}),
-  server: z.object({ port: z.number().int().default(DEFAULT_PORT) }).prefault({}),
+  server: z
+    .object({
+      port: z.number().int().default(DEFAULT_PORT),
+      /**
+       * Bind address. The default keeps the dashboard loopback-only; "0.0.0.0"
+       * exposes the unauthenticated dashboard and API to the whole network.
+       */
+      host: z.string().default(DEFAULT_HOST),
+    })
+    .prefault({}),
   pollIntervalSeconds: z.number().int().min(10).default(60),
 });
 

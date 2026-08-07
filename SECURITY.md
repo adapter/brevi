@@ -22,6 +22,12 @@ Things we especially care about:
 - Sandbox isolation (`packages/sandbox`): escapes from the Firecracker or
   process sandbox into the host.
 
+Note that the dashboard and its API have no authentication. They bind
+`127.0.0.1` by default, so only the machine itself can reach them; setting
+`server.host` to a non-loopback address exposes full control of brevi
+(credential writes and interactive shells into sandboxes included) to
+anything that can reach the port. Only do this on networks you trust.
+
 ## Supported versions
 
 Only the latest published release of the `@brevi/*` packages receives

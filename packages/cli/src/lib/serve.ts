@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, startOrchestrator } from "@brevi/orchestrator";
@@ -17,6 +18,31 @@ import { readPackageVersion } from "./version.js";
 function bundledAppDist(): string | undefined {
   const dist = join(dirname(fileURLToPath(import.meta.url)), "app");
   return existsSync(join(dist, "index.html")) ? dist : undefined;
+}
+
+function isLoopback(host: string): boolean {
+  return host === "localhost" || host.startsWith("127.") || host === "::1";
+}
+
+/**
+ * Virtual interfaces whose host-side addresses are bound but useless to other
+ * devices: docker/libvirt/LXC bridges and brevi's own microVM tap gateways.
+ */
+const VIRTUAL_INTERFACE_PREFIXES = ["docker", "br-", "veth", "virbr", "lxc", "lxd", "brevi-tap"];
+
+/** The dashboard URLs other devices can open, when bound to a wildcard address. */
+function lanUrls(host: string, port: number): string[] {
+  if (!["0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"].includes(host)) return [];
+  const urls: string[] = [];
+  for (const [name, addresses] of Object.entries(networkInterfaces())) {
+    if (VIRTUAL_INTERFACE_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
+    for (const address of addresses ?? []) {
+      if (address.family === "IPv4" && !address.internal) {
+        urls.push(`http://${address.address}:${port}`);
+      }
+    }
+  }
+  return urls;
 }
 
 export interface RunServerOptions {
@@ -42,7 +68,21 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
   writePidFile();
   process.on("exit", removePidFile);
 
-  console.log(pc.green(`✔ brevi is running at ${pc.bold(pc.cyan(handle.url))}`));
+  const urls = [handle.url, ...lanUrls(config.server.host, handle.port)];
+  if (urls.length === 1) {
+    console.log(pc.green(`✔ brevi is running at ${pc.bold(pc.cyan(handle.url))}`));
+  } else {
+    console.log(pc.green("✔ brevi is running at:"));
+    for (const url of urls) console.log(`    ${pc.bold(pc.cyan(url))}`);
+  }
+
+  if (!isLoopback(config.server.host)) {
+    console.log(
+      pc.yellow(
+        "  ! brevi has no authentication: anyone who can reach this port gets full control, including a shell into sandboxes. Only bind beyond loopback on networks you trust.",
+      ),
+    );
+  }
 
   if (openBrowser) {
     try {
@@ -51,7 +91,13 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
       console.log(pc.dim("  Could not open a browser automatically; open the URL above manually."));
     }
   } else {
-    console.log(pc.dim("  Open that URL in a browser to view the dashboard."));
+    console.log(
+      pc.dim(
+        urls.length === 1
+          ? "  Open that URL in a browser to view the dashboard."
+          : "  Open the localhost URL here, or the network URL from another device.",
+      ),
+    );
   }
 
   console.log(pc.dim("  Press Ctrl+C to stop."));
