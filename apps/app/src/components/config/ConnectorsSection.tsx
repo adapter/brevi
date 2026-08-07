@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "../../lib/api";
 import { linearConnected } from "../../lib/linear";
+import { safeExternalUrl, trustedOriginOf } from "../../lib/url";
 import { Plate } from "../Bits";
 import { Check, External, Warn } from "../Icons";
 
@@ -187,6 +188,15 @@ function ProviderRow({
 
   const fail = (detail: string) => setResult({ ok: false, detail });
 
+  // Origins the orchestrator may legitimately send us to for a flow: the
+  // provider's own authorization origin, plus the configured hosted OAuth
+  // backend (connect.apiBase), which serves the flow when no personal OAuth
+  // app is set up. Anything else is rejected before navigation.
+  const flowOrigins = (providerOrigin: string): string[] => {
+    const apiOrigin = trustedOriginOf(config.connect.apiBase);
+    return apiOrigin ? [providerOrigin, apiOrigin] : [providerOrigin];
+  };
+
   const pollDevice = (interval: number) => {
     pollTimer.current = setTimeout(() => {
       void api
@@ -220,19 +230,34 @@ function ProviderRow({
           setResult({ ok: true, detail: response.detail });
           setManual(false);
           break;
-        case "device":
+        case "device": {
+          const verificationUri = safeExternalUrl(
+            response.verificationUri,
+            flowOrigins("https://github.com"),
+          );
+          if (!verificationUri) {
+            fail("The verification URL received from the orchestrator was not a trusted destination.");
+            break;
+          }
           setDevice({
             userCode: response.userCode,
-            verificationUri: response.verificationUri,
+            verificationUri,
             interval: response.interval,
           });
-          window.open(response.verificationUri, "_blank", "noopener");
+          window.open(verificationUri, "_blank", "noopener");
           pollDevice(response.interval);
           break;
-        case "redirect":
+        }
+        case "redirect": {
+          const url = safeExternalUrl(response.url, flowOrigins("https://linear.app"));
+          if (!url) {
+            fail("The authorization URL received from the orchestrator was not a trusted destination.");
+            break;
+          }
           setAwaitingRedirect(true);
-          window.open(response.url, "_blank", "noopener");
+          window.open(url, "_blank", "noopener");
           break;
+        }
         case "manual":
           setManual(true);
           setManualReason(response.reason);
