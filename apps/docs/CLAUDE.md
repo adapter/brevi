@@ -15,3 +15,4 @@ The documentation site at brevi.dev, built with Astro + Starlight, deployed to C
 
 - The reference pages mirror source code, which is ground truth: `packages/shared/src/config.ts` (configuration.md), `packages/shared/src/protocol.ts` (api.md), `packages/cli/src/commands/` (cli.md). Update the docs whenever those change, and verify against the source rather than other docs.
 - The worker (`src/worker.ts`) reverse-proxies PostHog under `/ingest/*`; the client in `src/components/Head.astro` points at it via `window.location.origin`.
+- The PostHog project token is not in source: it is injected at build time via the `PUBLIC_POSTHOG_TOKEN` env var (a GitHub repository variable used by ci.yml), and analytics are disabled when it is unset.
