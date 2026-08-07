@@ -1,12 +1,16 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "brevi-docs",
+  "main": "src/worker.ts",
   "compatibility_date": "2026-08-01",
   "observability": { "enabled": true },
-  // The docs site is a static Astro build served as Worker assets.
+  // The docs site is a static Astro build served as Worker assets; the
+  // worker also reverse-proxies PostHog under /ingest/* (see src/worker.ts).
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "404-page"
+    "not_found_handling": "404-page",
+    "binding": "ASSETS",
+    "run_worker_first": ["/ingest/*"]
   },
   // Per-commit previews: CI uploads unreleased versions of the production
   // worker (`wrangler versions upload`), each reachable on its own

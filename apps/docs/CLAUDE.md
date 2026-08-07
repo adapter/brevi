@@ -14,3 +14,4 @@ The documentation site at brevi.dev, built with Astro + Starlight, deployed to C
 ## Gotchas
 
 - The reference pages mirror source code, which is ground truth: `packages/shared/src/config.ts` (configuration.md), `packages/shared/src/protocol.ts` (api.md), `packages/cli/src/commands/` (cli.md). Update the docs whenever those change, and verify against the source rather than other docs.
+- The worker (`src/worker.ts`) reverse-proxies PostHog under `/ingest/*`; the client in `src/components/Head.astro` points at it via `window.location.origin`.
