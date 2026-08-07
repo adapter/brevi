@@ -207,6 +207,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     this.#provider = await createSandboxProvider({
       requested: this.config.sandbox.provider,
       firecracker: this.config.sandbox.firecracker,
+      concurrency: this.config.sandbox.concurrency,
     });
     await this.#provider.ensureAvailable();
     // Runs left with a retained sandbox from a previous process pick their

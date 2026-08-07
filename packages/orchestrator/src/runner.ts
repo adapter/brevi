@@ -508,6 +508,9 @@ function implementerAgent(model: string): Record<string, { description: string; 
 /** Where the Firecracker rootfs bakes Playwright browsers (see build-rootfs.sh). */
 const FIRECRACKER_BROWSERS_PATH = "/opt/ms-playwright";
 
+/** The process provider's Playwright cache; doctor checks it read-only. */
+export const PROCESS_PLAYWRIGHT_CACHE_DIR = join(BREVI_HOME, "cache", "ms-playwright");
+
 /**
  * Shared Playwright browser location, so runs never re-download Chromium. The
  * process provider gets a persistent host cache under ~/.brevi; the first run
@@ -515,9 +518,8 @@ const FIRECRACKER_BROWSERS_PATH = "/opt/ms-playwright";
  */
 export async function playwrightBrowsersPath(provider: string): Promise<string> {
   if (provider === "firecracker") return FIRECRACKER_BROWSERS_PATH;
-  const dir = join(BREVI_HOME, "cache", "ms-playwright");
-  await mkdir(dir, { recursive: true });
-  return dir;
+  await mkdir(PROCESS_PLAYWRIGHT_CACHE_DIR, { recursive: true });
+  return PROCESS_PLAYWRIGHT_CACHE_DIR;
 }
 
 const REPO_MAP_MAX_FILES = 400;

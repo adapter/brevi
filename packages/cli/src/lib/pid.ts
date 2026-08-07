@@ -52,6 +52,32 @@ export function readPidFile(): number | null {
   return record.pid;
 }
 
+export type PidFileState =
+  | { state: "absent" }
+  | { state: "invalid" }
+  | { state: "stale"; pid: number }
+  | { state: "alive"; pid: number };
+
+/**
+ * Read-only variant of readPidFile for `brevi doctor`: classifies the pid
+ * file without cleaning it up, so a diagnostic run never has the side effect
+ * of deleting state a human might want to inspect.
+ */
+export function inspectPidFile(): PidFileState {
+  let raw: string;
+  try {
+    raw = readFileSync(PID_PATH, "utf8");
+  } catch {
+    return { state: "absent" };
+  }
+  const record = parsePidFile(raw);
+  if (!record) return { state: "invalid" };
+  if (!isProcessAlive(record.pid) || isRecycledPid(record)) {
+    return { state: "stale", pid: record.pid };
+  }
+  return { state: "alive", pid: record.pid };
+}
+
 function parsePidFile(raw: string): PidFileRecord | null {
   let value: unknown;
   try {

@@ -31,19 +31,22 @@ export interface WranglerAuth {
   installed: boolean;
   loggedIn: boolean;
   account?: string;
+  /** The probe hit its deadline, so loggedIn is unknown rather than false. */
+  timedOut?: boolean;
 }
 
 const LOGGED_IN_RE = /You are logged in/i;
 const ACCOUNT_RE = /associated with the email\s+(\S+?)\.?(?:\s|$)/i;
 
 /** Probe the host's wrangler CLI: is it installed, and is it authenticated. */
-export async function checkWrangler(): Promise<WranglerAuth> {
-  let result: { stdout: string; stderr: string; code?: string };
+export async function checkWrangler(timeoutMs = 20_000): Promise<WranglerAuth> {
+  let result: { stdout: string; stderr: string; code?: string; timedOut?: boolean };
   try {
-    result = await execa("wrangler", ["whoami"], { timeout: 20_000, reject: false });
+    result = await execa("wrangler", ["whoami"], { timeout: timeoutMs, reject: false });
   } catch {
     return { installed: false, loggedIn: false };
   }
+  if (result.timedOut) return { installed: true, loggedIn: false, timedOut: true };
   // With reject: false a failed spawn resolves too; ENOENT means not on PATH.
   if (result.code === "ENOENT") return { installed: false, loggedIn: false };
   const output = `${result.stdout}\n${result.stderr}`;
@@ -77,6 +80,40 @@ function firstErrorLine(result: { stdout: string; stderr: string; exitCode?: num
   const stdoutLine = result.stdout.split("\n").find((line) => line.trim());
   if (stdoutLine) return stdoutLine;
   return `exit code ${result.exitCode}`;
+}
+
+/**
+ * Read-only probe that the configured evidence bucket exists and answers,
+ * for `brevi doctor`: asks wrangler for the bucket's dev URL without
+ * creating or changing anything.
+ */
+export async function checkBucketAccessible(
+  bucket: string,
+  timeoutMs = 30_000,
+): Promise<{ ok: boolean; detail: string; timedOut?: boolean }> {
+  let result: { stdout: string; stderr: string; exitCode?: number; code?: string; timedOut?: boolean };
+  try {
+    result = await execa("wrangler", ["r2", "bucket", "dev-url", "get", bucket], {
+      timeout: timeoutMs,
+      reject: false,
+    });
+  } catch {
+    return { ok: false, detail: "the wrangler CLI is not installed" };
+  }
+  if (result.timedOut) {
+    return { ok: false, timedOut: true, detail: `wrangler did not answer within ${timeoutMs / 1000}s` };
+  }
+  if (result.code === "ENOENT") {
+    return { ok: false, detail: "the wrangler CLI is not installed" };
+  }
+  if (result.exitCode !== 0) {
+    return { ok: false, detail: firstErrorLine(result) };
+  }
+  const url = PUBLIC_URL_RE.exec(`${result.stdout}\n${result.stderr}`)?.[0];
+  return {
+    ok: true,
+    detail: url ? `bucket "${bucket}" answered (${url})` : `bucket "${bucket}" answered`,
+  };
 }
 
 /**

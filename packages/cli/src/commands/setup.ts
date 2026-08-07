@@ -1,14 +1,16 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadConfig, saveConfig } from "@brevi/orchestrator";
 import {
+  collectFirecrackerNetworkProblems,
   collectFirecrackerProblems,
+  collectRootfsProblems,
   fileExists,
   isReadWritable,
   resolveBinary,
@@ -373,9 +375,18 @@ async function ensureRootfs(
   firecracker: FirecrackerConfig,
   missingTools: Set<string>,
 ): Promise<void> {
-  if ((await fileExists(firecracker.rootfs)) && (await fileExists(SSH_KEY_PATH))) {
+  // An image that exists but is empty, corrupt, or missing a current build
+  // manifest needs a rebuild just like a missing one, or setup would keep
+  // reporting it present while the preflight keeps failing it.
+  const rootfsProblems = (await fileExists(firecracker.rootfs))
+    ? await collectRootfsProblems(firecracker.rootfs)
+    : [`rootfs image ${firecracker.rootfs} is missing`];
+  if (rootfsProblems.length === 0 && (await fileExists(SSH_KEY_PATH))) {
     log.success(`Rootfs image and ssh key: ${firecracker.rootfs}`);
     return;
+  }
+  if ((await fileExists(firecracker.rootfs)) && rootfsProblems.length > 0) {
+    log.warn(`The existing rootfs needs a rebuild: ${rootfsProblems.join("; ")}`);
   }
   const defaultRootfs = join(IMAGES_DIR, "rootfs.ext4");
   if (firecracker.rootfs !== defaultRootfs) {
@@ -415,7 +426,7 @@ async function ensureNetwork(
   missingTools: Set<string>,
 ): Promise<void> {
   const taps = Math.max(16, config?.sandbox.concurrency ?? 1);
-  if ((await tapsPresent(taps)) && (await ipForwardEnabled())) {
+  if ((await collectFirecrackerNetworkProblems(taps)).length === 0) {
     log.success(
       `Tap devices brevi-tap0..brevi-tap${taps - 1} are present and IPv4 forwarding is on.`,
     );
@@ -460,46 +471,16 @@ async function ensureNetwork(
   );
 }
 
-async function tapsPresent(taps: number): Promise<boolean> {
-  for (let i = 0; i < taps; i++) {
-    if (!(await fileExists(`/sys/class/net/brevi-tap${i}`))) return false;
-  }
-  return true;
-}
-
-async function ipForwardEnabled(): Promise<boolean> {
-  try {
-    return (await readFile("/proc/sys/net/ipv4/ip_forward", "utf8")).trim() === "1";
-  } catch {
-    return false;
-  }
-}
-
-async function collectNetworkProblems(config: BreviConfig | undefined): Promise<string[]> {
-  const problems: string[] = [];
-  const taps = Math.max(16, config?.sandbox.concurrency ?? 1);
-  if (!(await tapsPresent(taps))) {
-    problems.push(
-      `tap devices brevi-tap0..brevi-tap${taps - 1} are missing; run brevi setup's networking step or setup-network.sh`,
-    );
-  }
-  if (!(await ipForwardEnabled())) {
-    problems.push(
-      "IPv4 forwarding is disabled; run brevi setup's networking step or setup-network.sh",
-    );
-  }
-  return problems;
-}
-
 async function verify(
   firecracker: FirecrackerConfig,
   config: BreviConfig | undefined,
   kvmReloginGroup: string | undefined,
   standalone: boolean,
 ): Promise<boolean> {
+  const taps = Math.max(16, config?.sandbox.concurrency ?? 1);
   const problems = [
     ...(await collectFirecrackerProblems(firecracker)),
-    ...(await collectNetworkProblems(config)),
+    ...(await collectFirecrackerNetworkProblems(taps)),
   ];
 
   if (problems.length === 0) {

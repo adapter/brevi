@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: "Reference for the brevi command line: the default invocation, init, setup, start, status and update."
+description: "Reference for the brevi command line: the default invocation, init, setup, start, status, doctor and update."
 ---
 
 The CLI is [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli), exposed as the `brevi` binary. Run it with `npx @brevi/cli [command]`, or install it globally with `npm install -g @brevi/cli` (see [Getting started](/getting-started/)).
@@ -15,6 +15,8 @@ brevi [command]
             (kvm, binary, kernel, rootfs, network)
   start     Start the orchestrator headlessly, without opening a browser
   status    Check whether the brevi orchestrator is running
+  doctor    Check the whole brevi setup: config, server, sandbox,
+            connectors, CLIs
   attach <runId>
             Resume a run's agent conversation inside its retained sandbox
   update    Update @brevi/cli to the latest version published on npm
@@ -70,7 +72,7 @@ The steps, in order:
 5. **Rootfs + ssh key**: builds the ~2 GB rootfs image with docker (takes several minutes; asks first).
 6. **Networking**: creates the tap device pool and NAT rules (asks first; not persistent across reboots).
 
-brevi never escalates privileges silently: every `sudo` command line is printed before it runs, and every step that uses one asks first. Setup ends with the same preflight check `brevi start` uses, plus a networking check (tap devices and IPv4 forwarding); when everything passes, setup offers to switch `sandbox.provider` from `process` to `firecracker` and reports the sandbox ready. Remaining problems are listed instead, with a pointer to re-run once fixed, and setup exits non-zero.
+brevi never escalates privileges silently: every `sudo` command line is printed before it runs, and every step that uses one asks first. Setup ends with the same complete preflight check `brevi start` uses, including networking (tap devices and IPv4 forwarding) and the rootfs build manifest; when everything passes, setup offers to switch `sandbox.provider` from `process` to `firecracker` and reports the sandbox ready. Remaining problems are listed instead, with a pointer to re-run once fixed, and setup exits non-zero.
 
 Requires an interactive terminal and Linux; on other platforms there is nothing to set up, since the `auto` provider selects the [process provider](/guides/sandboxes/#the-process-provider) there (an explicit `firecracker` provider fails at startup instead). Works without a config too (`brevi init` picks the provisioned host up afterwards).
 
@@ -90,6 +92,36 @@ $ brevi status
 ```
 
 Exits `0` when the orchestrator answers, and `1` when it doesn't (or when there is no config).
+
+## `brevi doctor`
+
+Runs a read-only checklist over the whole local setup and prints one line per check: a green pass, a yellow warning, a red failure, or a dim skip, with an indented fix hint under each failure.
+
+Five sections, roughly in dependency order:
+
+1. **Config**: `~/.brevi/config.json` exists, is valid JSON, and passes the schema; unknown keys (typos, leftovers from an older version) come back as warnings.
+2. **Server**: the pid file against reality (running and healthy, not running, a stale or unreadable pid file left by a crash, or the port held by something that isn't brevi, even one that answers no HTTP), plus the running server's version against the installed CLI, to catch an update that hasn't been restarted yet. The probe targets the configured `server.host` (loopback for the default and wildcard binds), a healthy answer must report `ok`, and a healthy server whose pid file doesn't match the responder is flagged too.
+3. **Sandbox**: for Firecracker (explicit, or `auto` on Linux), the same complete preflight `brevi start` uses: KVM, binary, kernel, rootfs (present, non-empty, and carrying a current build manifest, so images built by an older brevi fail with a rebuild hint), ssh key, tap devices, and IPv4 forwarding. An unprovisioned host is a warning under `auto` (it falls back to the process provider) and a failure under an explicit `firecracker` provider. For the process provider: `agent.command` resolves on `PATH`, `~/.brevi` is writable, and the Playwright browser cache (`~/.brevi/cache/ms-playwright`) is writable or creatable.
+4. **Connectors**: the Linear token, verified with a cheap authenticated call; the GitHub token, verified plus its scopes checked (`repo` required, `workflow` recommended), and push access to every configured repository confirmed with a cheap read-only call per repo, which also covers fine-grained tokens (they don't report scopes); Claude and Codex agent credentials saved in the config, which is what runs actually consume (a credential that is merely discoverable on the host fails, or warns for the optional Codex review, with a hint to connect it from the dashboard); R2, only when configured, checking wrangler is installed and logged in and the configured bucket is reachable, both probes sharing one 10 second budget.
+5. **External CLIs**: presence and version of `claude`, `codex`, `gh`, and `wrangler`. Purely informational here, since a CLI that's actually required already failed an earlier section; missing optional ones just show as dim skips.
+
+Network probes run with short timeouts, so a full pass takes a few seconds.
+
+```sh
+$ brevi doctor
+Config
+  ✔ config file       ~/.brevi/config.json parses and passes the schema
+Server
+  ✖ server            not running
+                      ↳ Start it with `brevi start` (or `npx @brevi/cli`).
+Sandbox
+  ✔ agent CLI         claude at /usr/local/bin/claude
+  ✔ state dir         ~/.brevi is writable
+```
+
+Exits `0` when every check passes (warnings and skips don't count against it), `1` when any check fails, so it's scriptable in CI or as a pre-flight hook.
+
+When at least one check fails and the `claude` CLI is installed, doctor offers a second stage: a non-interactive `claude -p` call, pinned to the current Sonnet model regardless of whichever models are configured for agents, that reads the check results, the config with secrets masked, the tail of the orchestrator log (`~/.brevi/logs/orchestrator.log`, where the server tees its console output), and the tail of the most recent run's event log as supplemental evidence, then explains the likely root cause with concrete fix steps. It's strictly read-only: Claude runs with its entire tool set disabled and user and project customizations (plugins, hooks, MCP servers) turned off, no permission skipping, and every raw secret value, including the individual tokens inside a Codex `auth.json` login, is scrubbed from the bundled evidence before it is sent. It never changes doctor's exit code. In an interactive terminal it asks first; `brevi doctor --ai` runs it without asking, which is also how to get it in scripts. Without `claude` installed, the stage is skipped and doctor is otherwise fully functional.
 
 ## `brevi attach <runId>`
 

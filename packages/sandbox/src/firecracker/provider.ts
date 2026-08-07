@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { open, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { WORKSPACES_DIR, type FirecrackerConfig } from "@brevi/shared";
 import { fileExists, isReadWritable, resolveBinary, resolveFirecrackerBinary } from "../host.js";
@@ -11,6 +11,20 @@ import { bootMicroVm } from "./vm.js";
 const REQUIRED_TOOLS = ["ip", "ssh", "tar"];
 
 const SETUP_DOC = "packages/sandbox/README.md";
+
+const REBUILD_HINT =
+  "rebuild it with packages/sandbox/scripts/build-rootfs.sh (or brevi setup)";
+
+/**
+ * Bumped whenever the rootfs contract changes (a new required guest tool, a layout
+ * change, etc.); must match the version packages/sandbox/scripts/build-rootfs.sh
+ * writes into rootfs.ext4.manifest.json.
+ */
+export const ROOTFS_MANIFEST_VERSION = 1;
+
+/** Byte offset of the ext4 superblock magic (0xEF53, little-endian) from the start of the image. */
+const EXT4_MAGIC_OFFSET = 1080;
+const EXT4_MAGIC_BYTES = Buffer.from([0x53, 0xef]);
 
 /**
  * Everything stopping this host from booting Firecracker microVMs with the given
@@ -46,6 +60,8 @@ export async function collectFirecrackerProblems(config: FirecrackerConfig): Pro
     problems.push(
       `rootfs image ${config.rootfs} is missing; build it with packages/sandbox/scripts/build-rootfs.sh`,
     );
+  } else {
+    problems.push(...(await collectRootfsProblems(config.rootfs)));
   }
   if (!(await fileExists(SSH_KEY_PATH))) {
     problems.push(
@@ -54,6 +70,124 @@ export async function collectFirecrackerProblems(config: FirecrackerConfig): Pro
   }
 
   return problems;
+}
+
+/**
+ * Validates an existing rootfs file: not empty, looks like ext4, and has a
+ * current build manifest. Exported so `brevi setup` can offer a rebuild for an
+ * image that exists but is invalid or outdated, not just for a missing one.
+ */
+export async function collectRootfsProblems(rootfs: string): Promise<string[]> {
+  const problems: string[] = [];
+
+  let size: number;
+  try {
+    size = (await stat(rootfs)).size;
+  } catch {
+    problems.push(`rootfs image ${rootfs} is not readable; ${REBUILD_HINT}`);
+    return problems;
+  }
+  if (size === 0) {
+    problems.push(`rootfs image ${rootfs} is empty; ${REBUILD_HINT}`);
+    return problems;
+  }
+
+  if (!(await looksLikeExt4(rootfs))) {
+    problems.push(`rootfs image ${rootfs} does not look like a valid ext4 image; ${REBUILD_HINT}`);
+  }
+
+  const manifestPath = `${rootfs}.manifest.json`;
+  const manifest = await readManifest(manifestPath);
+  if (manifest === undefined) {
+    problems.push(
+      `rootfs image ${rootfs} has no build manifest (${manifestPath}); it predates the current brevi and may lack required guest tools such as the codex CLI; ${REBUILD_HINT}`,
+    );
+  } else if (manifest.version !== ROOTFS_MANIFEST_VERSION) {
+    problems.push(
+      `rootfs image ${rootfs} was built with manifest version ${manifest.version}, but this brevi expects version ${ROOTFS_MANIFEST_VERSION}; ${REBUILD_HINT}`,
+    );
+  }
+
+  return problems;
+}
+
+async function looksLikeExt4(rootfs: string): Promise<boolean> {
+  let handle;
+  try {
+    handle = await open(rootfs, "r");
+    const buf = Buffer.alloc(2);
+    const { bytesRead } = await handle.read(buf, 0, 2, EXT4_MAGIC_OFFSET);
+    return bytesRead === 2 && buf.equals(EXT4_MAGIC_BYTES);
+  } catch {
+    return false;
+  } finally {
+    await handle?.close();
+  }
+}
+
+async function readManifest(manifestPath: string): Promise<{ version: unknown } | undefined> {
+  try {
+    const raw = await readFile(manifestPath, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    return parsed as { version: unknown };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Networking problems that block Firecracker regardless of the base preflight: missing
+ * tap devices and disabled IPv4 forwarding. Skipped on non-Linux hosts; the base checks
+ * already report the platform problem there.
+ */
+export async function collectFirecrackerNetworkProblems(concurrency: number): Promise<string[]> {
+  if (process.platform !== "linux") return [];
+
+  const problems: string[] = [];
+  const pointer =
+    "run brevi setup's networking step or packages/sandbox/scripts/setup-network.sh (tap devices and rules do not persist across reboots, so this is needed again after every restart)";
+
+  // Root creates tap devices on demand (see ensureTapDevice in ./network.ts), so missing
+  // taps are only a problem for a non-root process.
+  if (process.getuid?.() !== 0) {
+    const missing: string[] = [];
+    for (let i = 0; i < concurrency; i++) {
+      if (!(await fileExists(`/sys/class/net/brevi-tap${i}`))) missing.push(`brevi-tap${i}`);
+    }
+    if (missing.length > 0) {
+      problems.push(`tap devices missing: ${missing.join(", ")}; ${pointer}`);
+    }
+  }
+
+  if (!(await ipForwardEnabled())) {
+    problems.push(`IPv4 forwarding is disabled; ${pointer}`);
+  }
+
+  return problems;
+}
+
+async function ipForwardEnabled(): Promise<boolean> {
+  try {
+    return (await readFile("/proc/sys/net/ipv4/ip_forward", "utf8")).trim() === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The complete Firecracker preflight: everything collectFirecrackerProblems checks, plus
+ * networking. This is what provider selection and `brevi doctor` should use; auto-mode and
+ * explicit-provider validation both need the network checks, not just the base ones.
+ */
+export async function collectFirecrackerPreflightProblems(
+  config: FirecrackerConfig,
+  concurrency: number,
+): Promise<string[]> {
+  return [
+    ...(await collectFirecrackerProblems(config)),
+    ...(await collectFirecrackerNetworkProblems(concurrency)),
+  ];
 }
 
 /**

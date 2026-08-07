@@ -53,6 +53,10 @@ BREVI_HOME="${BREVI_HOME_OVERRIDE:-${BREVI_HOME:-${owner_home:-$HOME}/.brevi}}"
 IMAGES_DIR="$BREVI_HOME/images"
 ROOTFS="$IMAGES_DIR/rootfs.ext4"
 KEY="$IMAGES_DIR/id_ed25519"
+MANIFEST="$ROOTFS.manifest.json"
+# Must match ROOTFS_MANIFEST_VERSION in packages/sandbox/src/firecracker/provider.ts; bump
+# both together whenever the rootfs contract changes (a new required guest tool etc.).
+MANIFEST_VERSION=1
 
 mkdir -p "$IMAGES_DIR"
 
@@ -66,7 +70,7 @@ cleanup() {
   [[ -n "$mnt" ]] && rmdir "$mnt" 2>/dev/null || true
   [[ -n "$cid" ]] && docker rm -f "$cid" >/dev/null 2>&1 || true
   [[ -n "$build_dir" ]] && rm -rf "$build_dir" || true
-  rm -f "$ROOTFS.tmp" "$KEY.tmp" "$KEY.tmp.pub"
+  rm -f "$ROOTFS.tmp" "$KEY.tmp" "$KEY.tmp.pub" "$MANIFEST.tmp"
   return 0
 }
 trap cleanup EXIT
@@ -221,14 +225,23 @@ if [[ "$WITH_KERNEL" -eq 1 ]]; then
   curl -fsSL -o "$IMAGES_DIR/vmlinux" "$KERNEL_URL"
 fi
 
+# 5. Build manifest: lets brevi's preflight tell an image built by an older brevi (which
+# may lack a required guest tool) apart from a current one, and catch an empty/corrupt file.
+built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$MANIFEST.tmp" <<MANIFEST
+{"version": $MANIFEST_VERSION, "builtAt": "$built_at", "node": "$NODE_VERSION", "tools": ["claude-code", "codex", "playwright-chromium"]}
+MANIFEST
+mv "$MANIFEST.tmp" "$MANIFEST"
+
 chown -R "$owner" "$IMAGES_DIR"
 
 cat <<EOF
 
 Done.
-  rootfs: $ROOTFS
-  key:    $KEY
-  kernel: $IMAGES_DIR/vmlinux $([[ -f "$IMAGES_DIR/vmlinux" ]] && echo "(present)" || echo "(MISSING - see --with-kernel)")
+  rootfs:   $ROOTFS
+  manifest: $MANIFEST
+  key:      $KEY
+  kernel:   $IMAGES_DIR/vmlinux $([[ -f "$IMAGES_DIR/vmlinux" ]] && echo "(present)" || echo "(MISSING - see --with-kernel)")
 
 Next: sudo packages/sandbox/scripts/setup-network.sh --taps 16 --user "$owner"
 EOF

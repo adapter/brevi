@@ -186,7 +186,7 @@ At least one of the four credential fields (`anthropicApiKey`, `claudeCodeOauthT
 | --- | --- | --- | --- |
 | `binary` | string | `"firecracker"` | Resolved on `PATH` unless it's an absolute path. |
 | `kernelImage` | string | `~/.brevi/images/vmlinux` | Uncompressed Linux kernel. |
-| `rootfs` | string | `~/.brevi/images/rootfs.ext4` | Ext4 image with node, git, both agent CLIs (`@anthropic-ai/claude-code`, `@openai/codex`), and `ccusage` preinstalled. |
+| `rootfs` | string | `~/.brevi/images/rootfs.ext4` | Ext4 image with node, git, both agent CLIs (`@anthropic-ai/claude-code`, `@openai/codex`), and `ccusage` preinstalled. `build-rootfs.sh` also writes a `rootfs.ext4.manifest.json` next to the image; an image that's empty, corrupt, or missing a current manifest (built by an older brevi) fails preflight until it's rebuilt. |
 | `size` | `"small"` \| `"medium"` \| `"large"` | `"medium"` | VM size preset: `small` (1 vCPU, 3.75 GB), `medium` (2 vCPU, 7.5 GB), `large` (4 vCPU, 15 GB). Selectable live from the dashboard's Sandbox page (Configuration > Sandbox) when the active provider is Firecracker; a change applies to newly booted VMs only, running VMs are untouched. |
 | `vcpus` | integer ≥ 1 | unset | Explicit vCPU override. Wins over `size` when set; existing config files with an explicit value keep their exact behavior. Picking a preset in the dashboard clears it. |
 | `memMib` | integer ≥ 512 | unset | Explicit memory override, in MiB. Wins over `size` when set; existing config files with an explicit value keep their exact behavior. Picking a preset in the dashboard clears it. |
