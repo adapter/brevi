@@ -15,8 +15,8 @@ on:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: read
+# Default to no permissions; each job declares exactly what it needs.
+permissions: {}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -30,6 +30,8 @@ jobs:
     # so it is exempt.
     if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'changeset-release/')
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read # checkout
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,6 +53,8 @@ jobs:
   checks:
     name: Lint, typecheck, build
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read # checkout
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -182,6 +186,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: checks
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read # checkout
     environment:
       name: production
       url: https://brevi.dev
