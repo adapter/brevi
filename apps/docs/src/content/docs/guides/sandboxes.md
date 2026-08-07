@@ -41,7 +41,7 @@ It walks through everything below interactively (see [the CLI reference](/refere
    sudo packages/sandbox/scripts/build-rootfs.sh --with-kernel
    ```
 
-   This produces a ~2 GB ext4 image at `~/.brevi/images/rootfs.ext4` with node 22, git, curl, tar, ripgrep, both agent CLIs (`@anthropic-ai/claude-code` and `@openai/codex`, the latter used for the adversarial review step), and an sshd trusting `~/.brevi/images/id_ed25519`.
+   This produces a ~2 GB ext4 image at `~/.brevi/images/rootfs.ext4` with node 22, git, curl, tar, ripgrep, both agent CLIs (`@anthropic-ai/claude-code` and `@openai/codex`, the latter used for the adversarial review step), `ccusage` (used for live cost capture from the Claude Code transcripts), and an sshd trusting `~/.brevi/images/id_ed25519`. Images built before `ccusage` was added need a rebuild to get live cost capture; runs on an older image still work, they just skip live sampling.
 
 3. **Networking**: pre-create tap devices and the NAT rule:
 

@@ -6,6 +6,7 @@
 #   - node 22, git, curl, tar, ripgrep, jq
 #   - playwright's Chromium at /opt/ms-playwright (agents demo UIs without a per-run download)
 #   - the coding agent CLIs (@anthropic-ai/claude-code for implementation, @openai/codex for the adversarial review step)
+#   - ccusage, for live per-model cost capture from the Claude Code transcripts during a run
 #   - openssh-server plus the public half of ~/.brevi/images/id_ed25519 in
 #     /root/.ssh/authorized_keys (this is brevi's exec channel)
 #   - a ~40 line /sbin/init that mounts the pseudo filesystems, configures eth0 from
@@ -155,7 +156,7 @@ RUN set -eux; \\
     curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-\${node_arch}.tar.xz" \\
       | tar -xJ -C /usr/local --strip-components=1 --no-same-owner
 
-RUN npm install -g @anthropic-ai/claude-code @openai/codex && npm cache clean --force
+RUN npm install -g @anthropic-ai/claude-code @openai/codex ccusage && npm cache clean --force
 
 # Chromium for playwright demos, baked at a fixed path. The orchestrator sets
 # PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright so agents never download a browser.

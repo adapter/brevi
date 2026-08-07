@@ -40,6 +40,11 @@ function newRunId(): string {
   return `${stamp}-${rand}`;
 }
 
+/** Map key for one execution's interim cost entry (run ids and execution ids never contain \n). */
+function costKey(runId: string, executionId: string): string {
+  return `${runId}\n${executionId}`;
+}
+
 interface RunStoreEvents {
   "run-updated": [Run];
   "run-event": [RunEvent];
@@ -184,13 +189,52 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
     this.appendEvent({ runId, ts: new Date().toISOString(), type: "artifact", artifact });
   }
 
-  /** Append a cost entry, recompute the run's totals, and log the event. */
-  async addCost(runId: string, entry: CostEntry): Promise<void> {
+  /**
+   * Append a cost entry, recompute the run's totals, and log a "cost" event.
+   * Plain calls always append, so repeated labels (a retried attempt's Codex
+   * review passes) accumulate instead of overwriting earlier spend. With an
+   * executionId, the entry instead replaces the interim ccusage sample last
+   * upserted for that execution, keeping one final entry (and one "cost"
+   * event) per execution.
+   */
+  async addCost(runId: string, entry: CostEntry, executionId?: string): Promise<void> {
+    await this.#upsertCost(runId, entry, executionId);
+    if (executionId !== undefined) this.#interimCostIndex.delete(costKey(runId, executionId));
+    this.appendEvent({ runId, ts: new Date().toISOString(), type: "cost", entry });
+  }
+
+  /**
+   * Record an interim ccusage sample for one in-flight execution: replaces
+   * the previous sample upserted under the same executionId (the first one
+   * appends). No "cost" event: samples land at sampling cadence and would
+   * bloat the append-only event log, so only the run-updated emission (from
+   * update()) streams them to the dashboard.
+   */
+  async upsertCost(runId: string, executionId: string, entry: CostEntry): Promise<void> {
+    await this.#upsertCost(runId, entry, executionId);
+  }
+
+  /**
+   * costs[] index of each in-flight execution's interim entry. Entries are
+   * only ever appended or replaced in place, so a recorded index stays valid
+   * for the run's lifetime; addCost drops the mapping when the execution's
+   * final entry lands.
+   */
+  #interimCostIndex = new Map<string, number>();
+
+  async #upsertCost(runId: string, entry: CostEntry, executionId?: string): Promise<void> {
     const run = this.#runs.get(runId);
     if (!run) throw new Error(`unknown run ${runId}`);
-    const costs = [...run.costs, entry];
+    const key = executionId === undefined ? undefined : costKey(runId, executionId);
+    const index = key === undefined ? undefined : this.#interimCostIndex.get(key);
+    let costs: CostEntry[];
+    if (index !== undefined && index < run.costs.length) {
+      costs = run.costs.map((existing, i) => (i === index ? entry : existing));
+    } else {
+      costs = [...run.costs, entry];
+      if (key !== undefined) this.#interimCostIndex.set(key, costs.length - 1);
+    }
     await this.update(runId, { costs, costTotals: summarizeCosts(costs) });
-    this.appendEvent({ runId, ts: new Date().toISOString(), type: "cost", entry });
   }
 
   async readEvents(runId: string): Promise<RunEvent[]> {
