@@ -819,9 +819,17 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     // previous attempt is stale before it's ever used again; discard it now
     // rather than let it linger until its own retention window ends.
     await this.#discardRetained(runId);
+    // Shed the previous attempt's outcome right away rather than at the
+    // "preparing" transition: the queued snapshot goes straight to clients,
+    // and a stale result/error would keep the dashboard's Result tab alive
+    // for as long as the run waits for a free worker.
     const run = await this.store.setStatus(runId, "queued", {
       resumeAt: undefined,
       queuedAt: new Date().toISOString(),
+      finishedAt: undefined,
+      error: undefined,
+      limit: undefined,
+      result: undefined,
     });
     this.#queue.push(runId);
     this.#kickWorker();
