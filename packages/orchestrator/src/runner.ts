@@ -66,7 +66,8 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     // ---- preparing -------------------------------------------------------
     await store.setStatus(run.id, "preparing", {
       startedAt: run.startedAt ?? new Date().toISOString(),
-      // A retried run sheds the residue of its previous attempt.
+      // Requeue already shed the previous attempt's residue; clear again as
+      // a backstop for queued runs persisted before it did.
       finishedAt: undefined,
       error: undefined,
       resumeAt: undefined,

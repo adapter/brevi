@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { clock, duration, elapsed } from "../lib/format";
-import { isActive } from "../lib/status";
+import { isActive, isTerminal } from "../lib/status";
 import { Artifacts } from "./Artifacts";
 import { AttachTerminal } from "./AttachTerminal";
 import { Plate, RepoChip, StatusChip } from "./Bits";
@@ -33,21 +33,22 @@ export function RunDetail({
   onRetry: () => void;
 }) {
   const live = isActive(run.status);
+  const hasOutcome = isTerminal(run.status) || Boolean(run.result || run.error);
   const retryable = run.status === "failed" || run.status === "cancelled";
   const finished = run.status === "completed" || run.status === "failed";
   const retainedMs = run.sandbox.retainedUntil ? Date.parse(run.sandbox.retainedUntil) : Number.NaN;
   const sandboxRetained = retainedMs > now;
   const resumable = finished && sandboxRetained && Boolean(run.agentSessionId);
-  const [tab, setTab] = useState<LeftTab>(run.result || run.error ? "result" : "console");
+  const [tab, setTab] = useState<LeftTab>(hasOutcome ? "result" : "console");
   const [terminalStarted, setTerminalStarted] = useState(false);
-  // Selecting a different run resets the view: result-first when there is an
-  // outcome to show (a result or a failure), the console while the run is
-  // still producing it.
+  // Selecting a different run resets the view, and the outcome drives it while
+  // a run stays open: the Result tab appears and takes focus the moment the
+  // run finishes, and hands back to the console when a retry clears the
+  // outcome (the strip is Console-only again then, so no other tab is valid).
   useEffect(() => {
-    setTab(run.result || run.error ? "result" : "console");
+    setTab(hasOutcome ? "result" : "console");
     setTerminalStarted(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run.id]);
+  }, [run.id, hasOutcome]);
   const artifacts = run.result?.artifacts ?? collectArtifacts(events);
   const hasResult = Boolean(run.result);
   const hasArtifacts = artifacts.length > 0;
@@ -116,9 +117,11 @@ export function RunDetail({
               so both cards share a top edge and a bottom edge. */}
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-x-4 gap-y-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] xl:grid-rows-[auto_minmax(0,1fr)]">
               <div className="flex items-end gap-1 self-end border-b border-ink-700/70 xl:col-start-1 xl:row-start-1" role="tablist">
-                <TabButton active={tab === "result"} onClick={() => setTab("result")}>
-                  Result
-                </TabButton>
+                {hasOutcome && (
+                  <TabButton active={tab === "result"} onClick={() => setTab("result")}>
+                    Result
+                  </TabButton>
+                )}
                 <TabButton active={tab === "console"} onClick={() => setTab("console")}>
                   Console
                 </TabButton>
@@ -167,7 +170,7 @@ export function RunDetail({
                       <ResultCard run={run} />
                       {!hasResult && !run.error && (
                         <p className="text-[12.5px] leading-relaxed text-haze-600">
-                          The run's outcome lands here once it finishes.
+                          The run ended without producing a result.
                         </p>
                       )}
                     </div>
