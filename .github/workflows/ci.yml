@@ -4,6 +4,10 @@
 # Required repository secrets:
 #   CLOUDFLARE_API_TOKEN:  API token with Workers Scripts:Edit (deploys)
 #   CLOUDFLARE_ACCOUNT_ID: the Cloudflare account to deploy into
+#
+# Required repository variables:
+#   PUBLIC_POSTHOG_TOKEN: the brevi.dev PostHog project token (publishable),
+#     injected into the docs build. Analytics are disabled if unset.
 name: CI
 
 on:
@@ -129,6 +133,8 @@ jobs:
 
       - run: bun install --frozen-lockfile
       - run: bun run build --filter=@brevi/docs
+        env:
+          PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
 
       - name: Deploy docs to preview
         id: docs
@@ -208,6 +214,8 @@ jobs:
 
       - run: bun install --frozen-lockfile
       - run: bun run build --filter=@brevi/docs
+        env:
+          PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
 
       - name: Deploy docs to production
         working-directory: apps/docs
