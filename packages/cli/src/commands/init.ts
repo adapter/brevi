@@ -5,6 +5,7 @@ import { CONFIG_PATH, type BreviConfig } from "@brevi/shared";
 import { confirm, intro, log, note, outro, select, spinner } from "@clack/prompts";
 import type { Command } from "commander";
 import pc from "picocolors";
+import { checkCliDependencies } from "../lib/dependencies.js";
 import { errorMessage, exitOnCancel, formatZodIssues, isZodLikeError } from "../lib/util.js";
 import { runSetup } from "./setup.js";
 
@@ -93,6 +94,7 @@ export async function runInit({ firstRun = false }: RunInitOptions = {}): Promis
   s.stop(`Saved to ${CONFIG_PATH}`);
 
   await offerFirecrackerSetup(saved);
+  await checkCliDependencies(saved);
 
   outro(
     firstRun

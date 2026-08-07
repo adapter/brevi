@@ -39,7 +39,7 @@ Fails with an actionable message when the orchestrator can't start, for example 
 
 ## `brevi init`
 
-Creates `~/.brevi/config.json` and asks exactly one question, the sandbox provider:
+Creates `~/.brevi/config.json` and asks exactly one configuration question, the sandbox provider:
 
 | Choice | Meaning |
 | --- | --- |
@@ -54,6 +54,8 @@ If a config already exists, `init` asks before touching it and **preserves every
 Everything except the sandbox provider is configured from the dashboard's Configuration page, and the bare `brevi` invocation runs init automatically on first launch, so an explicit `brevi init` is normally only needed to change the sandbox provider later.
 
 On Linux, when the saved provider is `auto` or `firecracker` but the host isn't provisioned yet, init offers to run [`brevi setup`](#brevi-setup) inline. Declining changes nothing.
+
+Init then checks for the external CLIs brevi shells out to: `claude`, `codex`, `gh`, and `wrangler`. The agent CLIs (`claude`, `codex`) are only required on the host when runs execute with the process provider; under firecracker they ship inside the sandbox image, so they're checked but optional on the host. `gh` and `wrangler` are always optional, used by the dashboard's Connect flow and the R2 connector respectively. For each missing tool, init offers to install it; declining or a failed install never fails init, it just gets reported. The step ends with a per-tool status line, and re-running `brevi init` repeats the check.
 
 ## `brevi setup`
 
