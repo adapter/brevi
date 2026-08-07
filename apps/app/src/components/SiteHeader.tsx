@@ -1,6 +1,7 @@
 import type { BreviConfig, HealthResponse, LinearStatus } from "@brevi/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SidebarTrigger } from "@/components/ui/sidebar";
 import { linearConnected, linearNeedsAttention } from "../lib/linear";
 import type { Connection, Page } from "../lib/useOrchestrator";
 import { PROVIDERS } from "./config/ConnectorsSection";
@@ -38,6 +39,8 @@ export function SiteHeader({
 
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-center gap-2.5 border-b border-ink-700 bg-ink-900/80 px-4 backdrop-blur-md">
+      <SidebarTrigger className="-ml-1.5 text-haze-400 xl:hidden" aria-label="Toggle runs" />
+
       <Button
         variant="ghost"
         size="plate"
@@ -58,9 +61,14 @@ export function SiteHeader({
         </span>
       </Button>
 
-      <div className="ml-auto flex items-center gap-2.5">
+      <div className="ml-auto flex min-w-0 items-center gap-2.5">
         {provider && (
-          <Badge variant="secondary" className="hidden gap-1.5 px-2 py-1.5 sm:inline-flex">
+          <Badge
+            variant="secondary"
+            /* Hidden on phones and again at md..lg, where an open 18rem
+               sidebar leaves the header too narrow for both badges. */
+            className="gap-1.5 px-2 py-1.5 max-sm:hidden md:max-lg:hidden"
+          >
             <span className="text-haze-700">Sandbox</span>
             <span className="font-mono text-[11px] leading-none tracking-normal normal-case text-haze-200">
               {provider}
@@ -68,13 +76,15 @@ export function SiteHeader({
           </Badge>
         )}
 
-        <Badge variant="secondary" className={`gap-2 px-2 py-1.5 ${c.text}`}>
+        {/* `shrink` overrides the badge's shrink-0 so the label can truncate
+            instead of the inset clipping the whole badge. */}
+        <Badge variant="secondary" className={`min-w-0 shrink gap-2 px-2 py-1.5 ${c.text}`}>
           <span
             className={`inline-block size-[7px] shrink-0 rounded-full ${c.dot} ${
               c.live || conn === "reconnecting" ? "animate-beacon" : ""
             }`}
           />
-          {c.label}
+          <span className="truncate">{c.label}</span>
         </Badge>
       </div>
     </header>

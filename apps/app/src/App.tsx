@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type React from "react";
 import type { Run } from "@brevi/shared";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -53,13 +54,20 @@ export default function App() {
   /** Nothing has answered yet: the main pane explains how to start one. */
   const unreachable = conn === "offline" && !loaded;
 
-  const handleRun = async (ticketId: string) => {
+  /**
+   * Queue a run and hand the new id back to the sidebar, which selects it via
+   * its own openRun so the phone drawer closes over the fresh detail view.
+   */
+  const handleRun = async (ticketId: string): Promise<string | null> => {
     const run = await runTicket(ticketId);
-    if (run) openRun(run.id);
+    return run ? run.id : null;
   };
 
   return (
-    <SidebarProvider className="h-svh min-h-svh overflow-hidden">
+    <SidebarProvider
+      className="h-svh min-h-svh overflow-hidden md:max-xl:[--sidebar-width:18rem]!"
+      style={{ "--sidebar-width": "22rem" } as React.CSSProperties}
+    >
       <AppSidebar
         tickets={tickets}
         runs={runs}
@@ -71,7 +79,7 @@ export default function App() {
         health={health}
         busy={busy}
         unreachable={unreachable}
-        onRun={(id) => void handleRun(id)}
+        onRun={handleRun}
         onOpenRun={openRun}
       />
 

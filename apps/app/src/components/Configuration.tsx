@@ -29,7 +29,7 @@ export function ConfigurationPage({
   onConfig: (config: BreviConfig) => void;
 }) {
   return (
-    <div className="mx-auto w-full max-w-4xl px-5 py-7 md:px-8">
+    <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-5 sm:py-7 md:px-8">
       <header className="flex items-baseline gap-2.5">
         <h2 className="font-plate text-[13px] font-semibold tracking-[0.08em] text-haze-50 uppercase">
           Configuration
@@ -39,7 +39,10 @@ export function ConfigurationPage({
         Connections and run settings for this orchestrator.
       </p>
 
-      <nav aria-label="Configuration sections" className="mt-5 flex items-center gap-4 border-b border-ink-700">
+      <nav
+        aria-label="Configuration sections"
+        className="no-scrollbar mt-5 flex items-center gap-4 overflow-x-auto border-b border-ink-700"
+      >
         {SECTIONS.map(({ id, label }) => {
           const active = section === id;
           return (
@@ -51,7 +54,7 @@ export function ConfigurationPage({
                 e.preventDefault();
                 onSection(id);
               }}
-              className={`-mb-px border-b pb-2 font-plate text-[11.5px] font-semibold tracking-[0.08em] uppercase ${
+              className={`touch-target -mb-px shrink-0 border-b pb-2 font-plate text-[11.5px] font-semibold tracking-[0.08em] whitespace-nowrap uppercase ${
                 active ? "border-haze-300 text-haze-50" : "border-transparent text-haze-600 hover:text-haze-300"
               }`}
             >

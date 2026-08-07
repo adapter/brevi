@@ -234,7 +234,7 @@ export function RepositoriesSection({
                       type="button"
                       onClick={() => add(repo)}
                       disabled={pending}
-                      className="flex w-full items-center gap-2 bg-ink-900 px-2.5 py-2 text-left hover:bg-ink-750"
+                      className="flex w-full items-center gap-2 bg-ink-900 px-2.5 py-2 text-left hover:bg-ink-750 pointer-coarse:min-h-11"
                     >
                       <span className="min-w-0 truncate font-mono text-[12px] text-haze-100">
                         {repo.fullName}

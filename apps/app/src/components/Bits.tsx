@@ -79,9 +79,9 @@ export function Section({
 /** A shell command the operator is meant to run, ready to copy. */
 export function Command({ text }: { text: string }) {
   return (
-    <code className="inline-flex select-all items-center gap-2 rounded-[4px] border border-ink-600 bg-ink-950/70 px-2 py-1.5 font-mono text-[11.5px] text-haze-200">
+    <code className="inline-flex max-w-full select-all items-start gap-2 rounded-[4px] border border-ink-600 bg-ink-950/70 px-2 py-1.5 font-mono text-[11.5px] text-haze-200">
       <span className="text-haze-700 select-none">$</span>
-      {text}
+      <span className="min-w-0 break-all whitespace-pre-wrap">{text}</span>
     </code>
   );
 }

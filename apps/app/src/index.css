@@ -246,6 +246,66 @@
   background-size: 14px 100%;
 }
 
+/* Scrollable strips (tab bars, the sidebar body) that hide their scrollbar. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/*
+  Touch ergonomics: controls keep their compact visual size, but on coarse
+  pointers an invisible overlay guarantees a hit area of at least 44px in both
+  dimensions. Applied to every Button via its data-slot, and available as a
+  utility for bespoke controls (tab buttons, nav links).
+*/
+@utility touch-target {
+  @media (pointer: coarse) {
+    position: relative;
+    &::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+      transform: translate(-50%, -50%);
+    }
+  }
+}
+
+@media (pointer: coarse) {
+  [data-slot="button"],
+  [data-slot="sidebar-trigger"],
+  [data-slot="dropdown-menu-trigger"] {
+    position: relative;
+  }
+  [data-slot="button"]::after,
+  [data-slot="sidebar-trigger"]::after,
+  [data-slot="dropdown-menu-trigger"]::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+
+  /*
+    Stacked rows grow for real instead: an invisible overlay on adjacent list
+    items or form fields would swallow the neighbour's taps.
+  */
+  [data-slot="input"],
+  [data-slot="dropdown-menu-item"],
+  [data-slot="dropdown-menu-checkbox-item"],
+  [data-slot="dropdown-menu-radio-item"] {
+    min-height: 2.75rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
