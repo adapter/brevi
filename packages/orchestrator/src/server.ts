@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   redactConfig,
+  urlHost,
   type BreviConfig,
   type ClientMessage,
   type CredentialsUpdateRequest,
@@ -24,6 +25,7 @@ import {
   type Ticket,
 } from "@brevi/shared";
 import { loadConfig } from "./config.js";
+import { attachOrchestratorLogFile } from "./logfile.js";
 import { Orchestrator, OrchestratorError } from "./scheduler.js";
 import { handleAttachSocket } from "./terminal.js";
 
@@ -484,18 +486,8 @@ function attachWebSockets(
   };
 }
 
-/**
- * The host to advertise in the handle URL: wildcard binds map to localhost so
- * the browser-open flow works, and IPv6 literals get their URL brackets.
- */
-function displayHost(host: string): string {
-  if (["0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0", "::1"].includes(host) || host.startsWith("127.")) {
-    return "localhost";
-  }
-  return host.includes(":") ? `[${host}]` : host;
-}
-
 export async function startOrchestrator(options: StartOptions = {}): Promise<OrchestratorHandle> {
+  attachOrchestratorLogFile();
   const config = options.config ?? (await loadConfig(options.configPath));
   const orchestrator = new Orchestrator(config, undefined, options.configPath);
   await orchestrator.start();
@@ -515,7 +507,7 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
 
   return {
     port,
-    url: `http://${displayHost(config.server.host)}:${port}`,
+    url: `http://${urlHost(config.server.host)}:${port}`,
     async stop(): Promise<void> {
       sockets.close();
       await orchestrator.stop();

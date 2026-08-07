@@ -1,4 +1,4 @@
-import type { HealthResponse } from "@brevi/shared";
+import { urlHost, type HealthResponse } from "@brevi/shared";
 import { loadConfig } from "@brevi/orchestrator";
 import type { Command } from "commander";
 import pc from "picocolors";
@@ -24,7 +24,9 @@ export function registerStatusCommand(program: Command): void {
       });
 
       const port = config.server.port;
-      const url = `http://localhost:${port}/api/health`;
+      // Probe the address the server actually binds to (server.host), not a
+      // hardcoded localhost.
+      const url = `http://${urlHost(config.server.host)}:${port}/api/health`;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
 

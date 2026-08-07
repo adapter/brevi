@@ -91,4 +91,6 @@ export interface SandboxProvider {
 export interface ProviderSelection {
   requested: "auto" | SandboxProviderName;
   firecracker: FirecrackerConfig;
+  /** How many sandboxes may run at once; used to size the network preflight. Defaults to 1. */
+  concurrency?: number;
 }

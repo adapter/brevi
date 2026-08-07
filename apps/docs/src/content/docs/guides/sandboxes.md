@@ -14,7 +14,7 @@ Every run executes inside a sandbox: one sandbox holds one run's workspace. The 
 
 `brevi init` writes your choice to `sandbox.provider`:
 
-- **`auto`** (recommended): Firecracker when the host passes the full preflight, the same checks `brevi start` runs for an explicit `firecracker` provider: Linux, `/dev/kvm` readable and writable, the firecracker binary resolving on `PATH`, in `~/.brevi/bin`, or at `sandbox.firecracker.binary`, and the kernel, rootfs, and ssh key images in place. Otherwise the process provider. `auto` never fails; it downgrades.
+- **`auto`** (recommended): Firecracker when the host passes the full preflight, the same checks `brevi start` runs for an explicit `firecracker` provider: Linux, `/dev/kvm` readable and writable, the firecracker binary resolving on `PATH`, in `~/.brevi/bin`, or at `sandbox.firecracker.binary`, the kernel, rootfs, and ssh key images in place with a current rootfs build manifest, and networking ready (tap devices for `sandbox.concurrency`, IPv4 forwarding enabled). Otherwise the process provider. `auto` never fails; it downgrades.
 - **`firecracker`** / **`process`**: constructed and checked at startup, so a misconfigured host fails immediately with one aggregated, actionable error instead of halfway through a run.
 
 You can change the provider any time by editing `sandbox.provider` in `~/.brevi/config.json` (or re-running `brevi init`) and restarting brevi.
