@@ -61,7 +61,7 @@ export function RunDetail({
           href={run.ticket.url}
           target="_blank"
           rel="noreferrer"
-          className="group inline-flex items-center gap-1.5 font-plate text-[11px] tracking-[0.06em] text-haze-200 hover:text-haze-50"
+          className="group touch-target inline-flex items-center gap-1.5 font-plate text-[11px] tracking-[0.06em] text-haze-200 hover:text-haze-50"
         >
           {run.ticket.identifier}
           <External className="size-3 text-haze-700 transition-colors group-hover:text-haze-300" />
@@ -69,7 +69,7 @@ export function RunDetail({
 
         <StatusChip status={run.status} />
 
-        <span className="ml-auto flex flex-wrap items-center justify-end gap-x-2.5 gap-y-2">
+        <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-2.5 gap-y-2">
           <CostBadge costs={run.costs} totals={run.costTotals} align="end" className="text-[11px]" />
           <RepoChip repo={repoName} />
           <Badge variant="secondary">
@@ -116,7 +116,7 @@ export function RunDetail({
               panel and the evidence card side by side in one stretched row,
               so both cards share a top edge and a bottom edge. */}
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-x-4 gap-y-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] xl:grid-rows-[auto_minmax(0,1fr)]">
-              <div className="flex items-end gap-1 self-end border-b border-ink-700/70 xl:col-start-1 xl:row-start-1" role="tablist">
+              <div className="no-scrollbar flex items-end gap-1 self-end overflow-x-auto border-b border-ink-700/70 xl:col-start-1 xl:row-start-1" role="tablist">
                 {hasOutcome && (
                   <TabButton active={tab === "result"} onClick={() => setTab("result")}>
                     Result
@@ -148,7 +148,7 @@ export function RunDetail({
 
               {/* Inactive panels hide instead of unmounting: the console keeps
                   its scroll position and the terminal keeps its live session. */}
-              <div className="min-h-0 min-w-0 xl:col-start-1 xl:row-start-2">
+              <div className="h-[max(320px,calc(100svh-21rem))] min-h-0 min-w-0 xl:h-auto xl:col-start-1 xl:row-start-2">
                 <div className={tab === "result" ? "h-full" : "hidden"}>
                   <Card className="flex h-full min-h-[320px] flex-col gap-0 overflow-hidden py-0">
                     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
@@ -162,7 +162,7 @@ export function RunDetail({
                           className="mb-4 rounded-[5px] border-rust-500/35 bg-rust-500/8 p-3"
                         >
                           <AlertTitle className="plate text-rust-400">Error</AlertTitle>
-                          <AlertDescription className="mt-1 font-mono text-[11.5px] leading-relaxed text-wrap break-words whitespace-pre-wrap text-rust-400/90 md:text-wrap">
+                          <AlertDescription className="mt-1 min-w-0 font-mono text-[11.5px] leading-relaxed text-wrap break-words whitespace-pre-wrap text-rust-400/90 md:text-wrap">
                             {run.error}
                           </AlertDescription>
                         </Alert>
@@ -271,7 +271,7 @@ function TabButton({
       disabled={disabled}
       title={title}
       onClick={onClick}
-      className={`-mb-px border-b-2 px-3 py-2 font-plate text-[11px] tracking-[0.06em] transition-colors ${
+      className={`-mb-px shrink-0 touch-target border-b-2 px-3 py-2 font-plate text-[11px] tracking-[0.06em] whitespace-nowrap transition-colors ${
         active
           ? "border-ember-500 text-haze-50"
           : disabled

@@ -118,7 +118,8 @@ export function AttachTerminal({
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
         <Plate className="text-haze-400">Terminal</Plate>
         <span
-          className={`font-mono text-[11px] ${state.phase === "error" ? "text-rust-400" : "text-haze-600"}`}
+          title={status}
+          className={`min-w-0 truncate font-mono text-[11px] ${state.phase === "error" ? "text-rust-400" : "text-haze-600"}`}
         >
           {status}
         </span>

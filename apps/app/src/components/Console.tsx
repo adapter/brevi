@@ -38,6 +38,14 @@ export function Console({
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [stick, setStick] = useState(true);
+  // Mirrors `stick` for the ResizeObserver callback, which outlives renders.
+  const stickRef = useRef(true);
+  useEffect(() => {
+    stickRef.current = stick;
+  }, [stick]);
+  // A resize restore is in flight: its scroll event is not the operator
+  // scrolling away, so it must not turn follow mode off.
+  const restoring = useRef(false);
   // A finished run's console starts (and, on completion, becomes) a collapsed
   // bar; the operator expands it on demand. Live and fill consoles are always
   // open.
@@ -59,10 +67,41 @@ export function Console({
     if (el) el.scrollTop = el.scrollHeight;
   }, [events.length, stick, expanded]);
 
+  /**
+   * A reflow (drawer toggle, orientation change, line wrap) moves the bottom
+   * without firing scroll events; while following, snap back to the tail. The
+   * jump is instant so it produces exactly one scroll event for onScroll to
+   * discount.
+   */
+  const restoreFollow = () => {
+    const el = scroller.current;
+    if (!el || !stickRef.current) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 1) return;
+    restoring.current = true;
+    el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
+  };
+
+  useEffect(() => {
+    if (!expanded) return;
+    const el = scroller.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      restoreFollow();
+      // Wrap-induced scrollHeight growth can land a frame after the resize.
+      requestAnimationFrame(restoreFollow);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [expanded]);
+
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 28;
+    if (restoring.current) {
+      restoring.current = false;
+      if (atBottom) return;
+    }
     setStick(atBottom);
   };
 
@@ -304,7 +343,7 @@ function ThinkingRow({ row }: { row: ThinkingRowData }) {
 
 function Gutter({ ts }: { ts?: string }) {
   return (
-    <span className="w-[58px] shrink-0 pt-[3px] text-right font-mono text-[10px] leading-[1.55] tabular-nums text-haze-600 select-none">
+    <span className="w-[44px] shrink-0 pt-[3px] text-right font-mono text-[9px] leading-[1.55] tabular-nums text-haze-600 select-none sm:w-[58px] sm:text-[10px]">
       {ts ? clock(ts) : ""}
     </span>
   );

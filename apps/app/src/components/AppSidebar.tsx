@@ -7,6 +7,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { Card } from "@/components/ui/card";
 import { duration, relative } from "../lib/format";
@@ -43,13 +44,20 @@ export function AppSidebar({
   busy: Record<string, true | undefined>;
   /** No orchestrator has answered yet, so an empty queue means nothing. */
   unreachable: boolean;
-  onRun: (ticketId: string) => void;
+  /** Queues a run for the ticket; resolves to the new run's id, or null. */
+  onRun: (ticketId: string) => Promise<string | null>;
   onOpenRun: (runId: string) => void;
 }) {
   // config === null still counts as connected so the connect card doesn't
   // flash before the first config arrives.
   const linearConnected = config === null || isLinearConnected(config, linearStatus);
   const linearAuthError = linearStatus?.state === "auth-error";
+
+  const { isMobile, setOpenMobile } = useSidebar();
+  const openRun = (runId: string) => {
+    if (isMobile) setOpenMobile(false);
+    onOpenRun(runId);
+  };
 
   /**
    * Runs that still need to happen: tickets with no run for their current
@@ -73,7 +81,7 @@ export function AppSidebar({
   const inFlightCount = active.length + queued.length + pending.length;
 
   return (
-    <Sidebar collapsible="none" className="h-svh w-[22rem] shrink-0 border-r border-sidebar-border">
+    <Sidebar collapsible="offcanvas" className="border-sidebar-border">
       <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
         <div className="flex items-center gap-2.5">
           <img src="/logo.png" alt="" className="size-[22px]" />
@@ -123,7 +131,7 @@ export function AppSidebar({
                             repoName={repoDisplay(config, run.ticket.repo)}
                             now={now}
                             selected={run.id === selectedRunId}
-                            onOpen={() => onOpenRun(run.id)}
+                            onOpen={() => openRun(run.id)}
                           />
                         </li>
                       ))}
@@ -134,7 +142,7 @@ export function AppSidebar({
                             repoName={repoDisplay(config, run.ticket.repo)}
                             now={now}
                             selected={run.id === selectedRunId}
-                            onOpen={() => onOpenRun(run.id)}
+                            onOpen={() => openRun(run.id)}
                           />
                         </li>
                       ))}
@@ -145,8 +153,12 @@ export function AppSidebar({
                             repoName={repoDisplay(config, ticket.repo)}
                             active={activeByTicket.get(ticket.id)}
                             busy={busy[ticket.id] === true}
-                            onRun={() => onRun(ticket.id)}
-                            onOpenRun={onOpenRun}
+                            onRun={() => {
+                              void onRun(ticket.id).then((runId) => {
+                                if (runId !== null) openRun(runId);
+                              });
+                            }}
+                            onOpenRun={openRun}
                           />
                         </li>
                       ))}
@@ -164,7 +176,7 @@ export function AppSidebar({
                             repoName={repoDisplay(config, run.ticket.repo)}
                             now={now}
                             selected={run.id === selectedRunId}
-                            onOpen={() => onOpenRun(run.id)}
+                            onOpen={() => openRun(run.id)}
                           />
                         </li>
                       ))}
@@ -216,10 +228,10 @@ function TicketStrip({
             href={ticket.url}
             target="_blank"
             rel="noreferrer"
-            className="group/id inline-flex items-center gap-1 font-plate text-[10px] tracking-[0.08em] text-haze-300 hover:text-haze-50"
+            className="group/id touch-target inline-flex items-center gap-1 font-plate text-[10px] tracking-[0.08em] text-haze-300 hover:text-haze-50"
           >
             {ticket.identifier}
-            <External className="size-3 text-haze-700 opacity-0 transition-opacity group-hover/id:opacity-100" />
+            <External className="size-3 text-haze-700 opacity-0 transition-opacity group-hover/id:opacity-100 pointer-coarse:opacity-100" />
           </a>
           <span className="ml-auto truncate font-mono text-[10px] text-haze-700">
             {ticket.state}
