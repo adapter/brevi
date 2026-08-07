@@ -13,8 +13,11 @@ import Default from '@astrojs/starlight/components/Head.astro';
 	const POSTHOG_TOKEN = 'phc_seRFkKUX3embkS4GScjnXx7zzDYDLn8BJT7FSnNeU6nK';
 
 	if (import.meta.env.PROD && POSTHOG_TOKEN) {
+		// Proxied through the worker at /ingest (see src/worker.ts) so analytics
+		// requests are first-party, including on *.workers.dev preview deploys.
 		posthog.init(POSTHOG_TOKEN, {
-			api_host: 'https://us.i.posthog.com',
+			api_host: `${window.location.origin}/ingest`,
+			ui_host: 'https://us.posthog.com',
 			defaults: '2026-06-25',
 		});
 	}
