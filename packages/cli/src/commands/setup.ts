@@ -45,7 +45,7 @@ const ARTIFACTS = {
 
 type FirecrackerArch = keyof typeof ARTIFACTS;
 
-/** apt package per host tool, for the install hint when one is missing. */
+/** apt package per host tool, for the install offer (or hint) when one is missing. */
 const TOOL_PACKAGES = [
   { tool: "ip", aptPackage: "iproute2" },
   { tool: "ssh", aptPackage: "openssh-client" },
@@ -139,24 +139,61 @@ function firecrackerArch(): FirecrackerArch | undefined {
 }
 
 async function checkHostTools(): Promise<Set<string>> {
-  const missing: typeof TOOL_PACKAGES = [];
-  for (const entry of TOOL_PACKAGES) {
-    if ((await resolveBinary(entry.tool)) === undefined) missing.push(entry);
-  }
+  let missing = await missingHostTools();
   if (missing.length === 0) {
     log.success("Host tools: ip, ssh, tar, iptables, and docker are all installed.");
     return new Set();
   }
 
-  const names = new Set(missing.map((entry) => entry.tool));
-  const lines = [
-    `Missing host tools: ${[...names].join(", ")}. Install them with your package manager, e.g.:`,
-    `  ${pc.cyan(`sudo apt install ${missing.map((entry) => entry.aptPackage).join(" ")}`)}`,
-  ];
-  if (names.has("docker")) lines.push("docker is only needed to build the rootfs image.");
-  if (names.has("iptables")) lines.push("iptables is only needed for microVM networking.");
-  log.warn(lines.join("\n"));
-  return names;
+  const describe = (): string[] => {
+    const names = missing.map((entry) => entry.tool);
+    const lines = [`Missing host tools: ${names.join(", ")}.`];
+    if (names.includes("docker")) lines.push("docker is only needed to build the rootfs image.");
+    if (names.includes("iptables")) lines.push("iptables is only needed for microVM networking.");
+    return lines;
+  };
+  const packages = missing.map((entry) => entry.aptPackage);
+
+  if ((await resolveBinary("apt-get")) === undefined) {
+    log.warn(
+      [
+        ...describe(),
+        "Install them with your package manager, e.g.:",
+        `  ${pc.cyan(`sudo apt install ${packages.join(" ")}`)}`,
+      ].join("\n"),
+    );
+    return new Set(missing.map((entry) => entry.tool));
+  }
+
+  log.warn(describe().join("\n"));
+  const install = exitOnCancel(
+    await confirm({
+      message: `Install ${packages.join(", ")} with apt now? (uses sudo)`,
+      initialValue: true,
+    }),
+  );
+  if (!install) {
+    log.warn("Skipped; the setup steps that need the missing tools will be skipped too.");
+    return new Set(missing.map((entry) => entry.tool));
+  }
+  const code = await runSudo(["apt-get", "install", "-y", ...packages]);
+  if (code !== 0) {
+    log.error(
+      `apt-get exited with code ${code}; try ${pc.cyan("sudo apt-get update")} first, then re-run brevi setup.`,
+    );
+  }
+  missing = await missingHostTools();
+  if (missing.length === 0) log.success("Host tools installed.");
+  else log.warn(`Still missing after the install: ${missing.map((entry) => entry.tool).join(", ")}.`);
+  return new Set(missing.map((entry) => entry.tool));
+}
+
+async function missingHostTools(): Promise<typeof TOOL_PACKAGES> {
+  const missing: typeof TOOL_PACKAGES = [];
+  for (const entry of TOOL_PACKAGES) {
+    if ((await resolveBinary(entry.tool)) === undefined) missing.push(entry);
+  }
+  return missing;
 }
 
 /** Resolves to the group added when a change was made that needs a re-login to take effect. */

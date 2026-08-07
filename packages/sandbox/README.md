@@ -89,7 +89,8 @@ place), and removes the sandbox directory.
 
 ## One-time Linux setup
 
-The recommended path is `brevi setup`: it checks host tools and KVM access, downloads the
+The recommended path is `brevi setup`: it installs missing host tools (offered via apt),
+checks KVM access, downloads the
 firecracker binary and kernel (sha256-verified against pinned digests), builds the rootfs,
 and sets up networking, interactively and idempotently, printing every sudo command before
 running it. Its final check also verifies networking (tap devices and IPv4 forwarding),

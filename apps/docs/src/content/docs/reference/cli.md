@@ -61,7 +61,7 @@ Provisions the current Linux host for the [Firecracker sandbox](/guides/sandboxe
 
 The steps, in order:
 
-1. **Host tools**: checks for `ip`, `ssh`, `tar`, `iptables` and `docker`, and prints an install hint for the missing ones (docker is only needed to build the rootfs, iptables only for networking; nothing is installed for you).
+1. **Host tools**: checks for `ip`, `ssh`, `tar`, `iptables` and `docker`, and offers to install the missing ones with apt (asks first; on non-apt systems an install hint is printed instead). docker is only needed to build the rootfs, iptables only for networking.
 2. **KVM**: when `/dev/kvm` exists but isn't accessible, offers to add your user to the `kvm` group (takes effect after a re-login); when it's missing entirely, points at `modprobe`.
 3. **Firecracker binary**: when none resolves on `PATH` (or at `sandbox.firecracker.binary`), downloads the official release to `~/.brevi/bin/firecracker` (sha256-verified against a pinned digest) and points the config at it.
 4. **Kernel**: downloads a known-good `vmlinux` (sha256-verified against a pinned digest) to the configured kernel path when missing.
