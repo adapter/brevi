@@ -24,11 +24,18 @@ function isLoopback(host: string): boolean {
   return host === "localhost" || host.startsWith("127.") || host === "::1";
 }
 
+/**
+ * Virtual interfaces whose host-side addresses are bound but useless to other
+ * devices: docker/libvirt/LXC bridges and brevi's own microVM tap gateways.
+ */
+const VIRTUAL_INTERFACE_PREFIXES = ["docker", "br-", "veth", "virbr", "lxc", "lxd", "brevi-tap"];
+
 /** The dashboard URLs other devices can open, when bound to a wildcard address. */
 function lanUrls(host: string, port: number): string[] {
   if (!["0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"].includes(host)) return [];
   const urls: string[] = [];
-  for (const addresses of Object.values(networkInterfaces())) {
+  for (const [name, addresses] of Object.entries(networkInterfaces())) {
+    if (VIRTUAL_INTERFACE_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
     for (const address of addresses ?? []) {
       if (address.family === "IPv4" && !address.internal) {
         urls.push(`http://${address.address}:${port}`);
