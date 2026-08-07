@@ -1,4 +1,4 @@
-import type { BreviConfig, HealthResponse, Run, Ticket } from "@brevi/shared";
+import type { BreviConfig, HealthResponse, LinearStatus, Run, Ticket } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
 import {
   Sidebar,
@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Card } from "@/components/ui/card";
 import { duration, relative } from "../lib/format";
+import { linearConnected as isLinearConnected } from "../lib/linear";
 import { repoDisplay } from "../lib/repo";
 import { isActive, isTerminal, STATUS_TONE } from "../lib/status";
 import { Plate, RepoChip, StatusDot } from "./Bits";
@@ -24,6 +25,7 @@ export function AppSidebar({
   selectedRunId,
   activeByTicket,
   config,
+  linearStatus,
   health,
   busy,
   unreachable,
@@ -36,6 +38,7 @@ export function AppSidebar({
   selectedRunId: string | null;
   activeByTicket: Map<string, Run>;
   config: BreviConfig | null;
+  linearStatus: LinearStatus | null;
   health: HealthResponse | null;
   busy: Record<string, true | undefined>;
   /** No orchestrator has answered yet, so an empty queue means nothing. */
@@ -43,7 +46,10 @@ export function AppSidebar({
   onRun: (ticketId: string) => void;
   onOpenRun: (runId: string) => void;
 }) {
-  const linearConnected = config === null || config.linear.apiKey !== "";
+  // config === null still counts as connected so the connect card doesn't
+  // flash before the first config arrives.
+  const linearConnected = config === null || isLinearConnected(config, linearStatus);
+  const linearAuthError = linearStatus?.state === "auth-error";
 
   /**
    * Runs that still need to happen: tickets with no run for their current
@@ -100,7 +106,7 @@ export function AppSidebar({
                   Runs appear once the orchestrator is running.
                 </p>
               ) : !linearConnected ? (
-                <ConnectLinearCard />
+                <ConnectLinearCard reconnect={linearAuthError} />
               ) : (
                 <SummonCard config={config} />
               )
@@ -314,8 +320,24 @@ function RunStrip({
   );
 }
 
-/** First-run UX: no ticket source yet, so point at the Connections panel. */
-function ConnectLinearCard() {
+/**
+ * No ticket source: either Linear has never been connected, or a stored
+ * credential has stopped authenticating and needs the user's attention.
+ */
+function ConnectLinearCard({ reconnect }: { reconnect?: boolean }) {
+  if (reconnect) {
+    return (
+      <Card size="sm" className="mx-1 block p-4">
+        <Plate className="text-haze-700">Ticket source disconnected</Plate>
+        <h3 className="mt-2.5 text-[15px] leading-snug text-haze-50">Reconnect Linear</h3>
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
+          The stored Linear credential no longer authenticates, so polling is paused. Reconnect it
+          from the Connectors section of the Configuration page to resume.
+        </p>
+      </Card>
+    );
+  }
+
   return (
     <Card size="sm" className="mx-1 block p-4">
       <Plate className="text-haze-700">No ticket source</Plate>

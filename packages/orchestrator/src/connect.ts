@@ -271,10 +271,24 @@ export function startLinearOauth(
   };
 }
 
+/** Linear's standard OAuth token response shape, as returned by both the token and refresh grants. */
+export interface LinearTokens {
+  accessToken: string;
+  refreshToken?: string;
+  /** Seconds until the access token expires, as reported at grant time. */
+  expiresIn?: number;
+}
+
+interface LinearTokenResponse {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+}
+
 export async function exchangeLinearCode(
   session: LinearOauthSession,
   code: string,
-): Promise<string> {
+): Promise<LinearTokens> {
   const res = session.hosted
     ? await fetch(`${session.hosted.apiBase}/oauth/linear/token`, {
         method: "POST",
@@ -293,7 +307,88 @@ export async function exchangeLinearCode(
         }),
       });
   if (!res.ok) throw new Error(`Linear token exchange failed (${res.status})`);
-  const body = (await res.json()) as { access_token?: string };
+  const body = (await res.json()) as LinearTokenResponse;
   if (!body.access_token) throw new Error("Linear returned no access token");
-  return body.access_token;
+  return { accessToken: body.access_token, refreshToken: body.refresh_token, expiresIn: body.expires_in };
+}
+
+/**
+ * Refresh failure whose `permanent` flag tells the caller whether reconnecting
+ * is required (revoked/rejected grant) or the attempt may be retried later
+ * (network, 5xx, rate limit). `retryAfterMs` carries a Retry-After hint when
+ * the failure was a 429.
+ */
+export class LinearRefreshError extends Error {
+  constructor(
+    message: string,
+    readonly permanent: boolean,
+    readonly retryAfterMs?: number,
+  ) {
+    super(message);
+    this.name = "LinearRefreshError";
+  }
+}
+
+/**
+ * Exchange a stored refresh token for a fresh access token, via a personal
+ * OAuth app or the hosted backend (mirrors the two sources exchangeLinearCode
+ * supports). Throws LinearRefreshError on any failure so callers have one
+ * type to check.
+ */
+export async function refreshLinearToken(
+  source: { app: LinearOauthApp } | { apiBase: string },
+  refreshToken: string,
+): Promise<LinearTokens> {
+  let res: Response;
+  try {
+    res =
+      "app" in source
+        ? await fetch("https://api.linear.app/oauth/token", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              refresh_token: refreshToken,
+              client_id: source.app.clientId,
+              client_secret: source.app.clientSecret,
+            }),
+          })
+        : await fetch(`${source.apiBase}/oauth/linear/refresh`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ refresh_token: refreshToken }),
+          });
+  } catch (error) {
+    throw new LinearRefreshError(
+      `Linear token refresh request failed: ${error instanceof Error ? error.message : String(error)}`,
+      false,
+    );
+  }
+  if (!res.ok) {
+    const failure = (await res.json().catch(() => null)) as {
+      error?: string;
+      error_description?: string;
+    } | null;
+    const detail = failure?.error_description ?? failure?.error;
+    const message = `Linear token refresh failed (${res.status}${detail ? `: ${detail}` : ""})`;
+    // Rate limiting is retryable, not a revoked grant; honor Retry-After
+    // when present so the caller's backoff waits at least that long.
+    if (res.status === 429) {
+      const retryAfter = Number(res.headers.get("Retry-After"));
+      const retryAfterMs =
+        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined;
+      throw new LinearRefreshError(message, false, retryAfterMs);
+    }
+    // Only an explicit rejection of the grant is permanent: Linear (and the
+    // hosted backend, which maps upstream 400/401/403 to 401) reports an
+    // invalid or revoked refresh token as 400/401/403. Everything else,
+    // including 5xx, is transient.
+    const permanent = res.status === 400 || res.status === 401 || res.status === 403;
+    throw new LinearRefreshError(message, permanent);
+  }
+  const body = (await res.json()) as LinearTokenResponse;
+  if (!body.access_token) {
+    throw new LinearRefreshError("Linear token refresh returned no access token", true);
+  }
+  return { accessToken: body.access_token, refreshToken: body.refresh_token, expiresIn: body.expires_in };
 }

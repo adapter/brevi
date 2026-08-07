@@ -1,6 +1,7 @@
-import type { BreviConfig, HealthResponse } from "@brevi/shared";
+import type { BreviConfig, HealthResponse, LinearStatus } from "@brevi/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { linearConnected, linearNeedsAttention } from "../lib/linear";
 import type { Connection, Page } from "../lib/useOrchestrator";
 import { PROVIDERS } from "./config/ConnectorsSection";
 
@@ -15,18 +16,24 @@ export function SiteHeader({
   conn,
   health,
   config,
+  linearStatus,
   page,
   onOpenConfig,
 }: {
   conn: Connection;
   health: HealthResponse | null;
   config: BreviConfig | null;
+  linearStatus: LinearStatus | null;
   page: Page;
   onOpenConfig: () => void;
 }) {
   const c = CONNECTION[conn];
   const provider = health?.sandboxProvider ?? config?.sandbox.provider;
-  const disconnected = config !== null && PROVIDERS.some((spec) => !spec.connected(config));
+  const disconnected =
+    config !== null &&
+    (PROVIDERS.some((spec) => spec.id !== "linear" && !spec.connected(config)) ||
+      !linearConnected(config, linearStatus) ||
+      linearNeedsAttention(linearStatus));
   const onConfig = page.startsWith("config:");
 
   return (

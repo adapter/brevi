@@ -4,12 +4,14 @@ import type {
   CredentialProvider,
   CredentialResult,
   CredentialsUpdateRequest,
+  LinearStatus,
   R2Status,
 } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "../../lib/api";
+import { linearConnected } from "../../lib/linear";
 import { Plate } from "../Bits";
 import { Check, External, Warn } from "../Icons";
 
@@ -81,12 +83,27 @@ export const PROVIDERS: ProviderSpec[] = [
  */
 export function ConnectorsSection({
   config,
+  linearStatus,
   onConfig,
 }: {
   config: BreviConfig;
+  linearStatus: LinearStatus | null;
   onConfig: (config: BreviConfig) => void;
 }) {
-  const connectedCount = PROVIDERS.filter((spec) => spec.connected(config)).length;
+  const connectedCount = PROVIDERS.filter((spec) =>
+    spec.id === "linear" ? linearConnected(config, linearStatus) : spec.connected(config),
+  ).length;
+  // Normalized to end with a period: the row renders a follow-up sentence
+  // right after it, and error details arrive with and without one.
+  const period = (text: string) => (text.endsWith(".") ? text : `${text}.`);
+  const linearAuthError =
+    linearStatus?.state === "auth-error"
+      ? period(linearStatus.error ?? "Linear rejected the stored credential")
+      : undefined;
+  const linearRefreshWarning =
+    linearStatus?.state === "refresh-failing"
+      ? period(linearStatus.error ?? "The Linear token could not be refreshed")
+      : undefined;
 
   return (
     <section className="mt-6">
@@ -99,7 +116,13 @@ export function ConnectorsSection({
       <ul className="mt-3 grid grid-cols-1 gap-2.5 lg:grid-cols-2">
         {PROVIDERS.map((spec) => (
           <li key={spec.id}>
-            <ProviderRow spec={spec} config={config} onConfig={onConfig} />
+            <ProviderRow
+              spec={spec}
+              config={config}
+              onConfig={onConfig}
+              authError={spec.id === "linear" ? linearAuthError : undefined}
+              refreshWarning={spec.id === "linear" ? linearRefreshWarning : undefined}
+            />
           </li>
         ))}
         <li>
@@ -125,10 +148,14 @@ function ProviderRow({
   spec,
   config,
   onConfig,
+  authError,
+  refreshWarning,
 }: {
   spec: ProviderSpec;
   config: BreviConfig;
   onConfig: (config: BreviConfig) => void;
+  authError?: string;
+  refreshWarning?: string;
 }) {
   const [value, setValue] = useState("");
   const [pending, setPending] = useState(false);
@@ -147,13 +174,16 @@ function ProviderRow({
   useEffect(() => stopPolling, []);
 
   // The redirect flow completes server-side; the config broadcast tells us.
+  // A reconnect after an auth error keeps `connected` true throughout, so
+  // this also has to fire when the auth error itself clears (the
+  // linear-status broadcast that follows a completed reconnect).
   useEffect(() => {
-    if (connected) {
+    if (connected && !authError) {
       setAwaitingRedirect(false);
       setDevice(null);
       stopPolling();
     }
-  }, [connected]);
+  }, [connected, authError]);
 
   const fail = (detail: string) => setResult({ ok: false, detail });
 
@@ -240,25 +270,49 @@ function ProviderRow({
       <CardHeader className="gap-0">
         <div className="flex items-center gap-2">
           <span
-            className={`inline-block size-[7px] shrink-0 rounded-full ${connected ? "bg-mint-500" : "bg-haze-700"}`}
+            className={`inline-block size-[7px] shrink-0 rounded-full ${
+              authError
+                ? "bg-rust-400"
+                : refreshWarning
+                  ? "bg-ember-400"
+                  : connected
+                    ? "bg-mint-500"
+                    : "bg-haze-700"
+            }`}
             role="img"
-            aria-label={connected ? "Connected" : "Not connected"}
-            title={connected ? "Connected" : "Not connected"}
+            aria-label={
+              authError || refreshWarning ? "Needs attention" : connected ? "Connected" : "Not connected"
+            }
+            title={
+              authError || refreshWarning ? "Needs attention" : connected ? "Connected" : "Not connected"
+            }
           />
           <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
             {spec.name}
           </h3>
-          <span className="ml-auto">
+          <span className="ml-auto flex items-center gap-1.5">
             {connected ? (
-              <Button
-                variant="outline"
-                size="plate"
-                onClick={() => void submit("")}
-                disabled={pending}
-                title="Remove this key"
-              >
-                Disconnect
-              </Button>
+              <>
+                {(authError || refreshWarning) && (
+                  <Button
+                    size="plate"
+                    onClick={() => void connect()}
+                    disabled={pending || device !== null}
+                    title="Authorize in the browser again"
+                  >
+                    Reconnect
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  size="plate"
+                  onClick={() => void submit("")}
+                  disabled={pending}
+                  title="Remove this key"
+                >
+                  Disconnect
+                </Button>
+              </>
             ) : (
               <Button
                 size="plate"
@@ -275,6 +329,20 @@ function ProviderRow({
 
       <CardContent>
         <p className="text-[12px] leading-relaxed text-haze-400">{spec.role}</p>
+
+        {authError && (
+          <p className="mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed text-rust-400">
+            <Warn className="mt-px size-3 shrink-0" />
+            {authError} Polling is paused until Linear is reconnected.
+          </p>
+        )}
+
+        {refreshWarning && (
+          <p className="mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed text-ember-300">
+            <Warn className="mt-px size-3 shrink-0" />
+            {refreshWarning} brevi retries automatically; polling resumes once a refresh succeeds.
+          </p>
+        )}
 
         {device && (
           <div className="mt-2.5 rounded-[5px] border border-ink-600 bg-ink-950/70 p-3">
@@ -308,7 +376,7 @@ function ProviderRow({
           </div>
         )}
 
-        {awaitingRedirect && !connected && (
+        {awaitingRedirect && (!connected || authError) && (
           <p className="mt-2.5 flex items-center gap-1.5 text-[12px] text-haze-400">
             <span className="inline-block size-[6px] animate-beacon rounded-full bg-ember-500" />
             Finish authorizing in the opened tab; this panel updates by itself.
@@ -319,7 +387,7 @@ function ProviderRow({
           <p className="mt-2.5 text-[12px] leading-relaxed text-haze-400">{manualReason}</p>
         )}
 
-        {manual && !connected ? (
+        {manual && (!connected || authError !== undefined) ? (
           <form
             className="mt-2.5 flex items-center gap-2"
             onSubmit={(e) => {
@@ -344,7 +412,7 @@ function ProviderRow({
             </Button>
           </form>
         ) : (
-          !connected &&
+          (!connected || authError !== undefined) &&
           !device && (
             <Button
               variant="ghost"
@@ -372,7 +440,7 @@ function ProviderRow({
           </p>
         )}
 
-        {manual && !connected && (
+        {manual && (!connected || authError !== undefined) && (
           <a
             href={spec.keyUrl}
             target="_blank"

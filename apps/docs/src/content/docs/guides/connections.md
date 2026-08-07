@@ -14,11 +14,14 @@ All of them go into `~/.brevi/config.json`, under the field for their provider:
 | Provider | Config field |
 | --- | --- |
 | Linear | `linear.apiKey` |
+| Linear (OAuth refresh token) | `linear.refreshToken` |
 | GitHub | `github.token` |
 | Claude (API key) | `agent.anthropicApiKey` |
 | Claude (Claude Code login) | `agent.claudeCodeOauthToken` |
 | Codex (API key) | `agent.codexApiKey` |
 | Codex (ChatGPT login) | `agent.codexAuthJson` |
+
+A Linear connection made through OAuth also persists the long-lived refresh token in `linear.refreshToken`, which brevi uses to rotate the access token automatically; it is empty for plain `lin_api_` personal keys. It is a live credential like the others: redacted in every dashboard and API payload, and stored as plaintext in the same file, so the caution below covers it too.
 
 The orchestrator never reads environment variables to configure itself. Variables like `ANTHROPIC_API_KEY` are only *discovered* by a Connect button and then written to the config; changing the variable later has no effect on saved runs.
 
@@ -74,6 +77,8 @@ The ticket source.
 Both are validated with a `{ viewer { name email } }` GraphQL query. Keys beginning with `lin_api_` are sent as a raw `Authorization` header; OAuth access tokens are sent as `Bearer`.
 
 Connecting or disconnecting Linear takes effect immediately: brevi rebuilds its Linear client and polls again without a restart.
+
+An OAuth connection is kept alive automatically: brevi refreshes the access token shortly before it expires, and again if a call fails with an authentication error. If the connection is revoked and can't be refreshed, the Configuration page shows a Reconnect button with the error and polling pauses until you reconnect, resuming on its own once you do. If a refresh fails for a transient reason instead (network trouble, a rate limit) after the token has already expired, polling pauses too, but brevi keeps retrying the refresh with backoff and resumes by itself once one succeeds; no reconnect is needed.
 
 ## Cloudflare R2
 

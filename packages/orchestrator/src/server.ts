@@ -13,6 +13,7 @@ import {
   type ClientMessage,
   type CredentialsUpdateRequest,
   type HealthResponse,
+  type LinearStatus,
   type R2SettingsUpdateRequest,
   type ReposUpdateRequest,
   type Run,
@@ -420,6 +421,7 @@ function attachWebSockets(
       runs: orchestrator.listRuns(),
       tickets: orchestrator.tickets,
       config: redactConfig(config),
+      linearStatus: orchestrator.linearStatus,
     });
     socket.on("message", (data) => {
       let message: ClientMessage;
@@ -437,6 +439,8 @@ function attachWebSockets(
 
   const onTickets = (tickets: Ticket[]): void => broadcast({ type: "tickets", tickets });
   const onConfig = (redacted: BreviConfig): void => broadcast({ type: "config", config: redacted });
+  const onLinearStatus = (linearStatus: LinearStatus): void =>
+    broadcast({ type: "linear-status", linearStatus });
   const onRunUpdated = (run: Run): void => broadcast({ type: "run-updated", run });
   const onRunEvent = (event: RunEvent): void => {
     for (const client of clients) {
@@ -446,6 +450,7 @@ function attachWebSockets(
   };
   orchestrator.on("tickets", onTickets);
   orchestrator.on("config", onConfig);
+  orchestrator.on("linear-status", onLinearStatus);
   orchestrator.store.on("run-updated", onRunUpdated);
   orchestrator.store.on("run-event", onRunEvent);
 
@@ -453,6 +458,7 @@ function attachWebSockets(
     close(): void {
       orchestrator.off("tickets", onTickets);
       orchestrator.off("config", onConfig);
+      orchestrator.off("linear-status", onLinearStatus);
       orchestrator.store.off("run-updated", onRunUpdated);
       orchestrator.store.off("run-event", onRunEvent);
       server.off("upgrade", onUpgrade);

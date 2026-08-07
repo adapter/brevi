@@ -286,13 +286,29 @@ export interface SandboxSettingsUpdateResponse {
   config: BreviConfig;
 }
 
+/**
+ * Live state of the Linear connector, beyond "a key is stored".
+ * "auth-error" means the stored credential no longer authenticates and could
+ * not be refreshed; polling is paused until the user reconnects.
+ * "refresh-failing" means the OAuth access token has expired and refreshing
+ * it keeps failing for a retryable reason (network, 5xx, rate limit);
+ * polling is paused but brevi retries the refresh on its own and resumes
+ * without user action once one succeeds.
+ */
+export interface LinearStatus {
+  state: "disconnected" | "connected" | "auth-error" | "refresh-failing";
+  /** Why authentication or the refresh failed, absent when healthy. */
+  error?: string;
+}
+
 /** Server -> dashboard WebSocket messages. */
 export type ServerMessage =
-  | { type: "hello"; runs: Run[]; tickets: Ticket[]; config: BreviConfig }
+  | { type: "hello"; runs: Run[]; tickets: Ticket[]; config: BreviConfig; linearStatus: LinearStatus }
   | { type: "config"; config: BreviConfig }
   | { type: "tickets"; tickets: Ticket[] }
   | { type: "run-updated"; run: Run }
-  | { type: "run-event"; event: RunEvent };
+  | { type: "run-event"; event: RunEvent }
+  | { type: "linear-status"; linearStatus: LinearStatus };
 
 /** Dashboard -> server WebSocket messages. */
 export type ClientMessage =

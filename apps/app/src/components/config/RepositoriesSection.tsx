@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { BreviConfig, GithubRepo, LinearProject, RepoConfig } from "@brevi/shared";
+import type { BreviConfig, GithubRepo, LinearProject, LinearStatus, RepoConfig } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { api } from "../../lib/api";
+import { linearConnected as isLinearConnected } from "../../lib/linear";
 import { Plate, RepoChip } from "../Bits";
 import { ChevronRight, Close, Plus, Warn } from "../Icons";
 
@@ -18,13 +19,15 @@ import { ChevronRight, Close, Plus, Warn } from "../Icons";
  */
 export function RepositoriesSection({
   config,
+  linearStatus,
   onConfig,
 }: {
   config: BreviConfig;
+  linearStatus: LinearStatus | null;
   onConfig: (config: BreviConfig) => void;
 }) {
   const githubConnected = config.github.token !== "";
-  const linearConnected = config.linear.apiKey !== "";
+  const linearConnected = isLinearConnected(config, linearStatus);
   const mapped = Object.entries(config.repos);
 
   const [available, setAvailable] = useState<GithubRepo[] | null>(null);

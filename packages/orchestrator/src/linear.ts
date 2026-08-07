@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { LinearClient, type Issue, type LinearDocument } from "@linear/sdk";
+import { LinearClient, LinearErrorType, type Issue, type LinearDocument } from "@linear/sdk";
 import type { BreviConfig, LinearProject, Ticket } from "@brevi/shared";
 
 /** Backoff before the single retry of a failed Linear API call. */
@@ -17,27 +17,113 @@ const REVIEW_REASSERT_DELAYS_MS = [5_000, 15_000];
 const sleep = (ms: number, signal?: AbortSignal): Promise<void> => delay(ms, undefined, { signal });
 
 /**
+ * True when a Linear API error means the stored credential no longer
+ * authenticates (an expired/revoked OAuth token, or a rejected personal
+ * key), as opposed to a transient network or server failure. Checked
+ * structurally against the SDK's error `type` rather than `instanceof`,
+ * since errors can cross unclear module boundaries; the regex is a fallback
+ * for failures that never made it into a typed LinearError.
+ */
+export function isLinearAuthError(error: unknown): boolean {
+  const type = (error as { type?: unknown } | null)?.type;
+  if (type === LinearErrorType.AuthenticationError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /authentication required|not authenticated/i.test(message);
+}
+
+/**
+ * How the scheduler hooks into authentication failures. Owned by the
+ * scheduler so refresh stays single-flight across every caller (poll, the
+ * dashboard's project list, a run posting its comment).
+ */
+export interface LinearAuthHooks {
+  /**
+   * Try to make the stored credential authenticate again (refresh the OAuth
+   * token). True means the failed call is worth retrying once.
+   */
+  recover(): Promise<boolean>;
+  /** The retry right after a successful recover was rejected too: the fresh credential is dead. */
+  rejected(detail: string): void;
+}
+
+/**
  * Linear integration: polls for eligible tickets, posts result comments, and
  * moves issues into a started state when a run begins.
  */
 export class LinearService {
-  #client: LinearClient;
+  #clientInstance?: LinearClient;
+  /** apiKey the current #clientInstance was built from, to detect a token refresh. */
+  #clientKey?: string;
   #config: BreviConfig;
+  #auth?: LinearAuthHooks;
 
-  constructor(config: BreviConfig) {
+  constructor(config: BreviConfig, auth?: LinearAuthHooks) {
     this.#config = config;
-    // Personal API keys are sent raw; OAuth tokens (from the Connect flow) as Bearer.
-    const key = config.linear.apiKey;
-    this.#client = key.startsWith("lin_api_")
-      ? new LinearClient({ apiKey: key })
-      : new LinearClient({ accessToken: key });
+    this.#auth = auth;
+  }
+
+  /**
+   * Rebuilds the client whenever config.linear.apiKey has moved on from what
+   * it was built with. config is shared by reference and mutated in place
+   * when scheduler.ts refreshes an OAuth token, so a run already in flight
+   * must pick up the fresh token to post its final comment rather than fail
+   * against the stale one.
+   */
+  get #client(): LinearClient {
+    const key = this.#config.linear.apiKey;
+    if (!this.#clientInstance || this.#clientKey !== key) {
+      // Personal API keys are sent raw; OAuth tokens (from the Connect flow) as Bearer.
+      this.#clientInstance = key.startsWith("lin_api_")
+        ? new LinearClient({ apiKey: key })
+        : new LinearClient({ accessToken: key });
+      this.#clientKey = key;
+    }
+    return this.#clientInstance;
+  }
+
+  /**
+   * Run a Linear operation with authentication recovery: on an auth error,
+   * ask the scheduler to refresh the token, then retry the exact operation
+   * once against the rebuilt client. Every public method goes through this,
+   * so whichever call first hits an expired token recovers (or surfaces the
+   * disconnection), not just the poll loop.
+   */
+  async #withAuthRecovery<T>(operation: () => Promise<T>): Promise<T> {
+    const keyAtStart = this.#config.linear.apiKey;
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isLinearAuthError(error) || !this.#auth) throw error;
+      // The credential may have been replaced while the call was in flight
+      // (a reconnect from the dashboard); retry against the current one
+      // instead of asking to refresh a grant that no longer exists.
+      const keyChanged = this.#config.linear.apiKey !== keyAtStart;
+      if (!keyChanged && !(await this.#auth.recover())) throw error;
+      try {
+        return await operation();
+      } catch (retryError) {
+        // Rejected again right after a successful refresh: the fresh token
+        // is dead too. Not conclusive when the key changed mid-call, so only
+        // report the stable-credential case.
+        if (!keyChanged && isLinearAuthError(retryError)) {
+          this.#auth.rejected(
+            retryError instanceof Error ? retryError.message : String(retryError),
+          );
+        }
+        throw retryError;
+      }
+    }
   }
 
   /**
    * Issues assigned to the connected user in unstarted/backlog states that opt
    * in via the trigger label, mapped to the shared Ticket shape.
    */
-  async fetchEligibleTickets(): Promise<Ticket[]> {
+  fetchEligibleTickets(): Promise<Ticket[]> {
+    return this.#withAuthRecovery(() => this.#fetchEligibleTickets());
+  }
+
+  async #fetchEligibleTickets(): Promise<Ticket[]> {
     const filter: LinearDocument.IssueFilter = {
       assignee: { isMe: { eq: true } },
       state: { type: { in: ["unstarted", "backlog"] } },
@@ -55,18 +141,22 @@ export class LinearService {
   }
 
   /** Projects visible to the credential, for the dashboard's repo-mapping picker. */
-  async listProjects(): Promise<LinearProject[]> {
-    const connection = await this.#client.projects({ first: 250 });
-    return connection.nodes
-      .map((project) => ({ id: project.id, name: project.name }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+  listProjects(): Promise<LinearProject[]> {
+    return this.#withAuthRecovery(async () => {
+      const connection = await this.#client.projects({ first: 250 });
+      return connection.nodes
+        .map((project) => ({ id: project.id, name: project.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    });
   }
 
   /** Post a markdown comment on an issue; returns the comment url when available. */
-  async postComment(issueId: string, markdown: string): Promise<string | undefined> {
-    const payload = await this.#client.createComment({ issueId, body: markdown });
-    const comment = payload.comment ? await payload.comment : undefined;
-    return comment?.url;
+  postComment(issueId: string, markdown: string): Promise<string | undefined> {
+    return this.#withAuthRecovery(async () => {
+      const payload = await this.#client.createComment({ issueId, body: markdown });
+      const comment = payload.comment ? await payload.comment : undefined;
+      return comment?.url;
+    });
   }
 
   /**
@@ -75,7 +165,7 @@ export class LinearService {
    * should still carry on.
    */
   async moveToStarted(issueId: string): Promise<void> {
-    await this.#withRetry(async () => {
+    await this.#run(async () => {
       const issue = await this.#client.issue(issueId);
       const team = await issue.team;
       if (!team) return;
@@ -95,7 +185,7 @@ export class LinearService {
    * log the reason. Aborting `signal` interrupts the reassertion waits.
    */
   async moveToReview(issueId: string, signal?: AbortSignal): Promise<boolean> {
-    const reviewStateId = await this.#withRetry(async () => {
+    const reviewStateId = await this.#run(async () => {
       const issue = await this.#client.issue(issueId);
       const team = await issue.team;
       if (!team) return undefined;
@@ -117,7 +207,7 @@ export class LinearService {
     // transition and is left alone.
     for (const wait of REVIEW_REASSERT_DELAYS_MS) {
       await sleep(wait, signal);
-      await this.#withRetry(async () => {
+      await this.#run(async () => {
         const issue = await this.#client.issue(issueId);
         const state = await issue.state;
         if (state && state.id !== reviewStateId && state.type === "started") {
@@ -126,6 +216,11 @@ export class LinearService {
       }, signal);
     }
     return true;
+  }
+
+  /** Transient retry plus authentication recovery around one state-transition operation. */
+  #run<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    return this.#withAuthRecovery(() => this.#withRetry(operation, signal));
   }
 
   /** Run a Linear API operation, retrying once after a short backoff. */

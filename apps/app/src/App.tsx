@@ -20,6 +20,7 @@ export default function App() {
     runs,
     tickets,
     config,
+    linearStatus,
     health,
     events,
     busy,
@@ -66,6 +67,7 @@ export default function App() {
         selectedRunId={selectedRunId}
         activeByTicket={activeByTicket}
         config={config}
+        linearStatus={linearStatus}
         health={health}
         busy={busy}
         unreachable={unreachable}
@@ -74,7 +76,14 @@ export default function App() {
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
-        <SiteHeader conn={conn} health={health} config={config} page={page} onOpenConfig={openConfig} />
+        <SiteHeader
+          conn={conn}
+          health={health}
+          config={config}
+          linearStatus={linearStatus}
+          page={page}
+          onOpenConfig={openConfig}
+        />
 
         {notice && (
           <Alert
@@ -119,6 +128,7 @@ export default function App() {
           ) : (
             <ConfigurationPage
               config={config}
+              linearStatus={linearStatus}
               section={page.slice("config:".length) as ConfigSection}
               onSection={openConfig}
               onConfig={applyConfig}
