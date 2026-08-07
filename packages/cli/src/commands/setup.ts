@@ -215,6 +215,12 @@ async function ensureKvmAccess(): Promise<string | undefined> {
 
   const username = userInfo().username;
   const group = await kvmGroup();
+  if (await userInGroup(username, group)) {
+    log.warn(
+      `${username} is already in the "${group}" group, but this session has not picked it up yet. Log out and back in (or run ${pc.cyan(`newgrp ${group}`)}).`,
+    );
+    return group;
+  }
   const add = exitOnCancel(
     await confirm({
       message: `/dev/kvm exists but is not readable and writable by ${username}. Add ${username} to the "${group}" group?`,
@@ -234,6 +240,19 @@ async function ensureKvmAccess(): Promise<string | undefined> {
     `Added ${username} to the "${group}" group. Log out and back in (or run ${pc.cyan(`newgrp ${group}`)}) for it to take effect; the rest of setup can proceed regardless.`,
   );
   return group;
+}
+
+/**
+ * Whether the group database (not the current session) already lists the user
+ * in the group; `id -Gn <user>` re-resolves membership instead of reporting the
+ * process credentials, so it sees a usermod from a previous run before re-login.
+ */
+function userInGroup(username: string, group: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile("id", ["-Gn", username], { timeout: 3_000 }, (err, stdout) => {
+      resolve(!err && stdout.trim().split(/\s+/).includes(group));
+    });
+  });
 }
 
 /** The group owning /dev/kvm, so the usermod offer matches distros that do not call it "kvm". */
