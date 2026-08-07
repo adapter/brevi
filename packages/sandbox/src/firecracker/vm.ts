@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { FirecrackerConfig } from "@brevi/shared";
 import { execa, type ResultPromise } from "execa";
 import { runCommand } from "../exec.js";
+import { resolveFirecrackerBinary } from "../host.js";
 import { FirecrackerApi } from "./api.js";
 import { allocateNetwork, deleteTapDevice, ensureTapDevice, releaseNetwork } from "./network.js";
 import type { VmNetwork } from "./network.js";
@@ -83,7 +84,9 @@ export async function bootMicroVm(options: MicroVmOptions): Promise<MicroVm> {
     await rm(socketPath, { force: true });
     await writeFile(logPath, "");
 
-    subprocess = execa(options.config.binary, ["--api-sock", socketPath, "--id", instanceId(options.id)], {
+    const binary =
+      (await resolveFirecrackerBinary(options.config.binary)) ?? options.config.binary;
+    subprocess = execa(binary, ["--api-sock", socketPath, "--id", instanceId(options.id)], {
       stdin: "ignore",
       stdout: { file: logPath, append: true },
       stderr: { file: logPath, append: true },

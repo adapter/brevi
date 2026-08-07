@@ -31,7 +31,7 @@ Four things are needed once per machine. The recommended path is one command:
 brevi setup
 ```
 
-It walks through everything below interactively (see [the CLI reference](/reference/cli/#brevi-setup)), skips whatever is already in place, and prints every `sudo` command before running it. The manual equivalents follow; this is a summary, see `packages/sandbox/README.md` in the repo for the full walkthrough and troubleshooting.
+It walks through everything below interactively (see [the CLI reference](/reference/cli/#brevi-setup)), skips whatever is already in place, and prints every `sudo` command before running it. Downloads are sha256-verified against pinned digests, the final check also verifies networking (tap devices and IPv4 forwarding), and setup exits non-zero when the host is not ready. The manual equivalents follow; this is a summary, see `packages/sandbox/README.md` in the repo for the full walkthrough and troubleshooting.
 
 1. **Kernel**: an uncompressed `vmlinux` at `~/.brevi/images/vmlinux`. The Firecracker CI bucket used by their quickstart is the easiest source. Any kernel works if virtio-blk, virtio-net, ext4 and the 8250 serial driver are built in rather than modules.
 

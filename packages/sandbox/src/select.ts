@@ -1,6 +1,6 @@
 import type { FirecrackerConfig } from "@brevi/shared";
 import { FirecrackerProvider } from "./firecracker/provider.js";
-import { isReadWritable, resolveBinary } from "./host.js";
+import { isReadWritable, resolveFirecrackerBinary } from "./host.js";
 import { ProcessProvider } from "./process/provider.js";
 import type { ProviderSelection, SandboxProvider } from "./types.js";
 
@@ -29,5 +29,5 @@ export async function createSandboxProvider(
 async function supportsFirecracker(config: FirecrackerConfig): Promise<boolean> {
   if (process.platform !== "linux") return false;
   if (!(await isReadWritable("/dev/kvm"))) return false;
-  return (await resolveBinary(config.binary)) !== undefined;
+  return (await resolveFirecrackerBinary(config.binary)) !== undefined;
 }

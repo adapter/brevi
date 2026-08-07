@@ -63,12 +63,12 @@ The steps, in order:
 
 1. **Host tools**: checks for `ip`, `ssh`, `tar`, `iptables` and `docker`, and prints an install hint for the missing ones (docker is only needed to build the rootfs, iptables only for networking; nothing is installed for you).
 2. **KVM**: when `/dev/kvm` exists but isn't accessible, offers to add your user to the `kvm` group (takes effect after a re-login); when it's missing entirely, points at `modprobe`.
-3. **Firecracker binary**: when none resolves on `PATH` (or at `sandbox.firecracker.binary`), downloads the official release to `~/.brevi/bin/firecracker` and points the config at it.
-4. **Kernel**: downloads a known-good `vmlinux` to the configured kernel path when missing.
+3. **Firecracker binary**: when none resolves on `PATH` (or at `sandbox.firecracker.binary`), downloads the official release to `~/.brevi/bin/firecracker` (sha256-verified against a pinned digest) and points the config at it.
+4. **Kernel**: downloads a known-good `vmlinux` (sha256-verified against a pinned digest) to the configured kernel path when missing.
 5. **Rootfs + ssh key**: builds the ~2 GB rootfs image with docker (takes several minutes; asks first).
 6. **Networking**: creates the tap device pool and NAT rules (asks first; not persistent across reboots).
 
-brevi never escalates privileges silently: every `sudo` command line is printed before it runs, and every step that uses one asks first. Setup ends with the same preflight check `brevi start` uses; when it passes, setup offers to switch `sandbox.provider` from `process` to `firecracker` and reports the sandbox ready. Remaining problems are listed instead, with a pointer to re-run once fixed.
+brevi never escalates privileges silently: every `sudo` command line is printed before it runs, and every step that uses one asks first. Setup ends with the same preflight check `brevi start` uses, plus a networking check (tap devices and IPv4 forwarding); when everything passes, setup offers to switch `sandbox.provider` from `process` to `firecracker` and reports the sandbox ready. Remaining problems are listed instead, with a pointer to re-run once fixed, and setup exits non-zero.
 
 Requires an interactive terminal and Linux; on other platforms there is nothing to set up, since brevi falls back to the [process provider](/guides/sandboxes/#the-process-provider). Works without a config too (`brevi init` picks the provisioned host up afterwards).
 

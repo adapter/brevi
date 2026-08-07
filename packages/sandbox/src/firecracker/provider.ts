@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { WORKSPACES_DIR, type FirecrackerConfig } from "@brevi/shared";
-import { fileExists, isReadWritable, resolveBinary } from "../host.js";
+import { fileExists, isReadWritable, resolveBinary, resolveFirecrackerBinary } from "../host.js";
 import type { CreateSandboxOptions, Sandbox, SandboxProvider } from "../types.js";
 import { ensureGuestWorkspace, FirecrackerSandbox } from "./sandbox.js";
 import { SSH_KEY_PATH, waitForSsh, type SshTarget } from "./ssh.js";
@@ -29,9 +29,9 @@ export async function collectFirecrackerProblems(config: FirecrackerConfig): Pro
       '/dev/kvm is not readable and writable by this user; load the kvm module and add yourself to the "kvm" group',
     );
   }
-  if ((await resolveBinary(config.binary)) === undefined) {
+  if ((await resolveFirecrackerBinary(config.binary)) === undefined) {
     problems.push(
-      `the firecracker binary "${config.binary}" was not found on PATH; install it or set sandbox.firecracker.binary`,
+      `the firecracker binary "${config.binary}" was not found on PATH or in ~/.brevi/bin; install it or set sandbox.firecracker.binary`,
     );
   }
   for (const tool of REQUIRED_TOOLS) {

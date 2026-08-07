@@ -89,8 +89,10 @@ place), and removes the sandbox directory.
 ## One-time Linux setup
 
 The recommended path is `brevi setup`: it checks host tools and KVM access, downloads the
-firecracker binary and kernel, builds the rootfs, and sets up networking, interactively and
-idempotently, printing every sudo command before running it. The steps below are the manual
+firecracker binary and kernel (sha256-verified against pinned digests), builds the rootfs,
+and sets up networking, interactively and idempotently, printing every sudo command before
+running it. Its final check also verifies networking (tap devices and IPv4 forwarding),
+and it exits non-zero when the host is not ready. The steps below are the manual
 equivalent.
 
 ### 1. Kernel

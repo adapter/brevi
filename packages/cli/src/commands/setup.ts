@@ -1,10 +1,10 @@
 import { execFile, spawn } from "node:child_process";
-import { once } from "node:events";
+import { createHash } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
-import { finished } from "node:stream/promises";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadConfig, saveConfig } from "@brevi/orchestrator";
 import {
@@ -12,12 +12,14 @@ import {
   fileExists,
   isReadWritable,
   resolveBinary,
+  resolveFirecrackerBinary,
   SSH_KEY_PATH,
 } from "@brevi/sandbox";
 import {
   BREVI_HOME,
   CONFIG_PATH,
   firecrackerConfigSchema,
+  IMAGES_DIR,
   type BreviConfig,
   type FirecrackerConfig,
 } from "@brevi/shared";
@@ -28,6 +30,20 @@ import { errorMessage, exitOnCancel } from "../lib/util.js";
 
 const FIRECRACKER_VERSION = "v1.10.1";
 const KERNEL_NAME = "vmlinux-6.1.102";
+
+/** Pinned sha256 digests for the downloads above, per architecture. */
+const ARTIFACTS = {
+  x86_64: {
+    binarySha256: "36112969952b0e34fadcfca769d48a55dc22cbba99af17e02bd0e24fc35adc77",
+    kernelSha256: "49ba99a5299444ac59dda2efc3569cc2d58a5d72ea6475a6bfc37aa0bf322e54",
+  },
+  aarch64: {
+    binarySha256: "9e3641071de140979afaac0c52fdc107baeba398bdb5709c12f77ee469207fcd",
+    kernelSha256: "bb1f50912d63a8ca5e92d488984875e1177eb9283050ffa592a8cb455cada52d",
+  },
+} as const;
+
+type FirecrackerArch = keyof typeof ARTIFACTS;
 
 /** apt package per host tool, for the install hint when one is missing. */
 const TOOL_PACKAGES = [
@@ -46,7 +62,8 @@ export function registerSetupCommand(program: Command): void {
     )
     .action(async () => {
       try {
-        await runSetup();
+        const ready = await runSetup();
+        if (!ready) process.exitCode = 1;
       } catch (err) {
         log.error(errorMessage(err));
         process.exit(1);
@@ -93,13 +110,13 @@ export async function runSetup({ standalone = true }: RunSetupOptions = {}): Pro
   const arch = firecrackerArch();
 
   const missingTools = await checkHostTools();
-  const kvmReloginNeeded = await ensureKvmAccess();
+  const kvmReloginGroup = await ensureKvmAccess();
   ({ firecracker, config } = await ensureFirecrackerBinary(firecracker, config, arch));
   await ensureKernel(firecracker, arch);
   await ensureRootfs(firecracker, missingTools);
   await ensureNetwork(config, missingTools);
 
-  return verify(firecracker, config, kvmReloginNeeded, standalone);
+  return verify(firecracker, config, kvmReloginGroup, standalone);
 }
 
 async function loadExisting(): Promise<BreviConfig | undefined> {
@@ -115,7 +132,7 @@ async function loadExisting(): Promise<BreviConfig | undefined> {
 }
 
 /** Maps the node arch to firecracker's release/CI naming; undefined = no prebuilt release. */
-function firecrackerArch(): string | undefined {
+function firecrackerArch(): FirecrackerArch | undefined {
   if (process.arch === "x64") return "x86_64";
   if (process.arch === "arm64") return "aarch64";
   return undefined;
@@ -142,11 +159,11 @@ async function checkHostTools(): Promise<Set<string>> {
   return names;
 }
 
-/** Resolves to true when a group change was made that needs a re-login to take effect. */
-async function ensureKvmAccess(): Promise<boolean> {
+/** Resolves to the group added when a change was made that needs a re-login to take effect. */
+async function ensureKvmAccess(): Promise<string | undefined> {
   if (await isReadWritable("/dev/kvm")) {
     log.success("/dev/kvm is readable and writable.");
-    return false;
+    return undefined;
   }
   if (!(await fileExists("/dev/kvm"))) {
     log.warn(
@@ -156,39 +173,56 @@ async function ensureKvmAccess(): Promise<boolean> {
         "If it still does not appear, enable virtualization (VT-x / AMD-V) in the BIOS.",
       ].join("\n"),
     );
-    return false;
+    return undefined;
   }
 
   const username = userInfo().username;
+  const group = await kvmGroup();
   const add = exitOnCancel(
     await confirm({
-      message: `/dev/kvm exists but is not readable and writable by ${username}. Add ${username} to the "kvm" group?`,
+      message: `/dev/kvm exists but is not readable and writable by ${username}. Add ${username} to the "${group}" group?`,
       initialValue: true,
     }),
   );
   if (!add) {
     log.warn("Skipped; brevi cannot boot microVMs until /dev/kvm is readable and writable.");
-    return false;
+    return undefined;
   }
-  const code = await runSudo(["usermod", "-aG", "kvm", username]);
+  const code = await runSudo(["usermod", "-aG", group, username]);
   if (code !== 0) {
     log.error(`usermod exited with code ${code}; /dev/kvm access is unchanged.`);
-    return false;
+    return undefined;
   }
   log.warn(
-    `Added ${username} to the "kvm" group. Log out and back in (or run ${pc.cyan("newgrp kvm")}) for it to take effect; the rest of setup can proceed regardless.`,
+    `Added ${username} to the "${group}" group. Log out and back in (or run ${pc.cyan(`newgrp ${group}`)}) for it to take effect; the rest of setup can proceed regardless.`,
   );
-  return true;
+  return group;
+}
+
+/** The group owning /dev/kvm, so the usermod offer matches distros that do not call it "kvm". */
+function kvmGroup(): Promise<string> {
+  return new Promise((resolve) => {
+    execFile("stat", ["-c", "%G", "/dev/kvm"], { timeout: 3_000 }, (err, stdout) => {
+      const group = stdout.trim();
+      resolve(err || group === "" ? "kvm" : group);
+    });
+  });
 }
 
 async function ensureFirecrackerBinary(
   firecracker: FirecrackerConfig,
   config: BreviConfig | undefined,
-  arch: string | undefined,
+  arch: FirecrackerArch | undefined,
 ): Promise<{ firecracker: FirecrackerConfig; config: BreviConfig | undefined }> {
-  const resolved = await resolveBinary(firecracker.binary);
+  const resolved = await resolveFirecrackerBinary(firecracker.binary);
   if (resolved !== undefined) {
-    log.success(`firecracker binary: ${resolved}${await binaryVersion(resolved)}`);
+    const version = await binaryVersion(resolved);
+    log.success(`firecracker binary: ${resolved}${version}`);
+    if (version === "") {
+      log.warn(
+        `${resolved} could not report a version; it may be broken or built for the wrong architecture.`,
+      );
+    }
     return { firecracker, config };
   }
   if (arch === undefined) {
@@ -206,7 +240,7 @@ async function ensureFirecrackerBinary(
     const tmp = await mkdtemp(join(tmpdir(), "brevi-firecracker-"));
     try {
       const tgz = join(tmp, "firecracker.tgz");
-      await downloadToFile(url, tgz);
+      await downloadToFile(url, tgz, ARTIFACTS[arch].binarySha256);
       s.message("Extracting firecracker");
       await extractTarball(tgz, tmp);
       const extracted = join(
@@ -245,7 +279,7 @@ async function ensureFirecrackerBinary(
 
 async function ensureKernel(
   firecracker: FirecrackerConfig,
-  arch: string | undefined,
+  arch: FirecrackerArch | undefined,
 ): Promise<void> {
   if (await fileExists(firecracker.kernelImage)) {
     log.success(`Kernel image: ${firecracker.kernelImage}`);
@@ -264,7 +298,7 @@ async function ensureKernel(
   try {
     await mkdir(dirname(firecracker.kernelImage), { recursive: true });
     let lastMib = -1;
-    await downloadToFile(url, firecracker.kernelImage, (bytes) => {
+    await downloadToFile(url, firecracker.kernelImage, ARTIFACTS[arch].kernelSha256, (bytes) => {
       const mib = Math.floor(bytes / (1024 * 1024));
       if (mib !== lastMib) {
         lastMib = mib;
@@ -287,6 +321,13 @@ async function ensureRootfs(
     log.success(`Rootfs image and ssh key: ${firecracker.rootfs}`);
     return;
   }
+  const defaultRootfs = join(IMAGES_DIR, "rootfs.ext4");
+  if (firecracker.rootfs !== defaultRootfs) {
+    log.warn(
+      `build-rootfs.sh only writes the default path ${defaultRootfs}; the configured rootfs ${firecracker.rootfs} must be built manually.`,
+    );
+    return;
+  }
   if (missingTools.has("docker")) {
     log.warn(
       "Building the rootfs image needs docker; install it and re-run brevi setup for this step.",
@@ -307,7 +348,7 @@ async function ensureRootfs(
 
   const script = shippedScript("build-rootfs.sh");
   if (script === undefined) return;
-  const code = await runSudo(["bash", script]);
+  const code = await runSudo(["bash", script, "--brevi-home", BREVI_HOME]);
   if (code !== 0) {
     log.error(`build-rootfs.sh exited with code ${code}; the rootfs may be incomplete.`);
   }
@@ -318,8 +359,13 @@ async function ensureNetwork(
   missingTools: Set<string>,
 ): Promise<void> {
   const taps = Math.max(16, config?.sandbox.concurrency ?? 1);
-  if (await tapsPresent(taps)) {
-    log.success(`Tap devices brevi-tap0..brevi-tap${taps - 1} are present.`);
+  if ((await tapsPresent(taps)) && (await ipForwardEnabled())) {
+    log.success(
+      `Tap devices brevi-tap0..brevi-tap${taps - 1} are present and IPv4 forwarding is on.`,
+    );
+    log.info(
+      "NAT rules cannot be verified without root; if guests lack egress, re-run setup-network.sh.",
+    );
     return;
   }
   if (missingTools.has("iptables")) {
@@ -365,13 +411,40 @@ async function tapsPresent(taps: number): Promise<boolean> {
   return true;
 }
 
+async function ipForwardEnabled(): Promise<boolean> {
+  try {
+    return (await readFile("/proc/sys/net/ipv4/ip_forward", "utf8")).trim() === "1";
+  } catch {
+    return false;
+  }
+}
+
+async function collectNetworkProblems(config: BreviConfig | undefined): Promise<string[]> {
+  const problems: string[] = [];
+  const taps = Math.max(16, config?.sandbox.concurrency ?? 1);
+  if (!(await tapsPresent(taps))) {
+    problems.push(
+      `tap devices brevi-tap0..brevi-tap${taps - 1} are missing; run brevi setup's networking step or setup-network.sh`,
+    );
+  }
+  if (!(await ipForwardEnabled())) {
+    problems.push(
+      "IPv4 forwarding is disabled; run brevi setup's networking step or setup-network.sh",
+    );
+  }
+  return problems;
+}
+
 async function verify(
   firecracker: FirecrackerConfig,
   config: BreviConfig | undefined,
-  kvmReloginNeeded: boolean,
+  kvmReloginGroup: string | undefined,
   standalone: boolean,
 ): Promise<boolean> {
-  const problems = await collectFirecrackerProblems(firecracker);
+  const problems = [
+    ...(await collectFirecrackerProblems(firecracker)),
+    ...(await collectNetworkProblems(config)),
+  ];
 
   if (problems.length === 0) {
     if (config && config.sandbox.provider === "process") {
@@ -394,9 +467,11 @@ async function verify(
 
   log.warn(`Not ready yet:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
   const onlyKvm =
-    kvmReloginNeeded && problems.length === 1 && problems[0]?.startsWith("/dev/kvm") === true;
+    kvmReloginGroup !== undefined &&
+    problems.length === 1 &&
+    problems[0]?.startsWith("/dev/kvm") === true;
   const message = onlyKvm
-    ? `Almost there: log out and back in (or run ${pc.cyan("newgrp kvm")}) so the kvm group change takes effect, then run ${pc.cyan("brevi start")}.`
+    ? `Almost there: log out and back in (or run ${pc.cyan(`newgrp ${kvmReloginGroup}`)}) so the ${kvmReloginGroup} group change takes effect, then run ${pc.cyan("brevi start")}.`
     : `Re-run ${pc.cyan("brevi setup")} once the remaining problems are fixed.`;
   if (standalone) outro(message);
   else log.info(message);
@@ -443,28 +518,37 @@ function extractTarball(tgz: string, dest: string): Promise<void> {
   });
 }
 
-/** Streams a URL to disk via a .partial file, so an aborted download never looks complete. */
+/**
+ * Streams a URL to disk via a .partial file, so an aborted download never looks
+ * complete, and verifies the sha256 digest before the file lands at its final name.
+ */
 async function downloadToFile(
   url: string,
   dest: string,
+  sha256: string,
   onProgress?: (bytes: number) => void,
 ): Promise<void> {
   const res = await fetch(url);
   if (!res.ok || res.body === null) throw new Error(`GET ${url} failed with HTTP ${res.status}`);
+  const body = res.body;
 
   const partial = `${dest}.partial`;
-  const file = createWriteStream(partial);
-  let bytes = 0;
+  const hash = createHash("sha256");
   try {
-    for await (const chunk of res.body) {
-      bytes += chunk.length;
-      onProgress?.(bytes);
-      if (!file.write(chunk)) await once(file, "drain");
+    let bytes = 0;
+    await pipeline(async function* () {
+      for await (const chunk of body) {
+        bytes += chunk.length;
+        hash.update(chunk);
+        onProgress?.(bytes);
+        yield chunk;
+      }
+    }, createWriteStream(partial));
+    const actual = hash.digest("hex");
+    if (actual !== sha256) {
+      throw new Error(`sha256 mismatch for ${url}: expected ${sha256}, got ${actual}`);
     }
-    file.end();
-    await finished(file);
   } catch (err) {
-    file.destroy();
     await rm(partial, { force: true });
     throw err;
   }
