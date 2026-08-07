@@ -61,12 +61,15 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
   writePidFile();
   process.on("exit", removePidFile);
 
-  console.log(pc.green(`✔ brevi is running at ${pc.bold(pc.cyan(handle.url))}`));
+  const urls = [handle.url, ...lanUrls(config.server.host, handle.port)];
+  if (urls.length === 1) {
+    console.log(pc.green(`✔ brevi is running at ${pc.bold(pc.cyan(handle.url))}`));
+  } else {
+    console.log(pc.green("✔ brevi is running at:"));
+    for (const url of urls) console.log(`    ${pc.bold(pc.cyan(url))}`);
+  }
 
   if (!isLoopback(config.server.host)) {
-    for (const url of lanUrls(config.server.host, handle.port)) {
-      console.log(pc.dim(`  Also on your network: ${pc.cyan(url)}`));
-    }
     console.log(
       pc.yellow(
         "  ! brevi has no authentication: anyone who can reach this port gets full control, including a shell into sandboxes. Only bind beyond loopback on networks you trust.",
@@ -81,7 +84,13 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
       console.log(pc.dim("  Could not open a browser automatically; open the URL above manually."));
     }
   } else {
-    console.log(pc.dim("  Open that URL in a browser to view the dashboard."));
+    console.log(
+      pc.dim(
+        urls.length === 1
+          ? "  Open that URL in a browser to view the dashboard."
+          : "  Open the localhost URL here, or the network URL from another device.",
+      ),
+    );
   }
 
   console.log(pc.dim("  Press Ctrl+C to stop."));
