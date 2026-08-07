@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: "Reference for the brevi command line: the default invocation, init, start, status and update."
+description: "Reference for the brevi command line: the default invocation, init, setup, start, status and update."
 ---
 
 The CLI is [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli), exposed as the `brevi` binary. Run it with `npx @brevi/cli [command]`, or install it globally with `npm install -g @brevi/cli` (see [Getting started](/getting-started/)).
@@ -11,6 +11,8 @@ brevi [command]
   (none)    Start the orchestrator and open the dashboard in your browser;
             runs init first if there is no config yet
   init      Create the brevi config and choose a sandbox provider
+  setup     Set up the firecracker sandbox on this host
+            (kvm, binary, kernel, rootfs, network)
   start     Start the orchestrator headlessly, without opening a browser
   status    Check whether the brevi orchestrator is running
   attach <runId>
@@ -41,7 +43,7 @@ Creates `~/.brevi/config.json` and asks exactly one question, the sandbox provid
 
 | Choice | Meaning |
 | --- | --- |
-| `auto` | Firecracker on Linux with KVM, the process provider otherwise (recommended) |
+| `auto` | Firecracker when the host passes the full preflight (Linux, KVM, binary, images, key), the process provider otherwise (recommended) |
 | `firecracker` | Linux + KVM required, strongest isolation |
 | `process` | No isolation, development only |
 
@@ -50,6 +52,25 @@ Picking `firecracker` on a non-Linux machine prints a warning; the config is sti
 If a config already exists, `init` asks before touching it and **preserves everything else**: credentials, repository mappings, triggers. An unparseable config can be overwritten. A summary is shown before saving, listing the provider, which providers are connected, and the mapped repositories.
 
 Everything except the sandbox provider is configured from the dashboard's Configuration page, and the bare `brevi` invocation runs init automatically on first launch, so an explicit `brevi init` is normally only needed to change the sandbox provider later.
+
+On Linux, when the saved provider is `auto` or `firecracker` but the host isn't provisioned yet, init offers to run [`brevi setup`](#brevi-setup) inline. Declining changes nothing.
+
+## `brevi setup`
+
+Provisions the current Linux host for the [Firecracker sandbox](/guides/sandboxes/). Interactive and idempotent: each step checks itself first and is skipped with a note when already satisfied, so re-running after a reboot or a partial first run is safe.
+
+The steps, in order:
+
+1. **Host tools**: checks for `ip`, `ssh`, `tar`, `iptables` and `docker`, and offers to install the missing ones with apt (asks first; on non-apt systems an install hint is printed instead). docker is only needed to build the rootfs, iptables only for networking.
+2. **KVM**: when `/dev/kvm` exists but isn't accessible, offers to add your user to the `kvm` group (takes effect after a re-login); when it's missing entirely, points at `modprobe`.
+3. **Firecracker binary**: when none resolves on `PATH` (or at `sandbox.firecracker.binary`), downloads the official release to `~/.brevi/bin/firecracker` (sha256-verified against a pinned digest) and points the config at it.
+4. **Kernel**: downloads a known-good `vmlinux` (sha256-verified against a pinned digest) to the configured kernel path when missing.
+5. **Rootfs + ssh key**: builds the ~2 GB rootfs image with docker (takes several minutes; asks first).
+6. **Networking**: creates the tap device pool and NAT rules (asks first; not persistent across reboots).
+
+brevi never escalates privileges silently: every `sudo` command line is printed before it runs, and every step that uses one asks first. Setup ends with the same preflight check `brevi start` uses, plus a networking check (tap devices and IPv4 forwarding); when everything passes, setup offers to switch `sandbox.provider` from `process` to `firecracker` and reports the sandbox ready. Remaining problems are listed instead, with a pointer to re-run once fixed, and setup exits non-zero.
+
+Requires an interactive terminal and Linux; on other platforms there is nothing to set up, since the `auto` provider selects the [process provider](/guides/sandboxes/#the-process-provider) there (an explicit `firecracker` provider fails at startup instead). Works without a config too (`brevi init` picks the provisioned host up afterwards).
 
 ## `brevi start`
 

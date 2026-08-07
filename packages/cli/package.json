@@ -18,7 +18,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target=node --format=esm --external open --external @lydell/node-pty && cp -R ../../apps/app/dist dist/app",
+    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target=node --format=esm --external open --external @lydell/node-pty && cp -R ../../apps/app/dist dist/app && cp -R ../sandbox/scripts dist/scripts",
     "dev": "tsc --watch",
     "lint": "oxlint --max-warnings 0",
     "check-types": "tsc --noEmit"
@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@brevi/orchestrator": "*",
+    "@brevi/sandbox": "*",
     "@brevi/shared": "*",
     "@clack/prompts": "^1.7.0",
     "@repo/typescript-config": "*",

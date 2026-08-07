@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
 import { loadConfig, saveConfig } from "@brevi/orchestrator";
+import { collectFirecrackerProblems } from "@brevi/sandbox";
 import { CONFIG_PATH, type BreviConfig } from "@brevi/shared";
 import { confirm, intro, log, note, outro, select, spinner } from "@clack/prompts";
 import type { Command } from "commander";
 import pc from "picocolors";
 import { errorMessage, exitOnCancel, formatZodIssues, isZodLikeError } from "../lib/util.js";
+import { runSetup } from "./setup.js";
 
 type SandboxProvider = "auto" | "firecracker" | "process";
 
@@ -76,8 +78,9 @@ export async function runInit({ firstRun = false }: RunInitOptions = {}): Promis
 
   const s = spinner();
   s.start("Saving configuration");
+  let saved: BreviConfig;
   try {
-    await saveConfig(draft);
+    saved = await saveConfig(draft);
   } catch (err) {
     s.error("Failed to save configuration");
     if (isZodLikeError(err)) {
@@ -88,6 +91,8 @@ export async function runInit({ firstRun = false }: RunInitOptions = {}): Promis
     process.exit(1);
   }
   s.stop(`Saved to ${CONFIG_PATH}`);
+
+  await offerFirecrackerSetup(saved);
 
   outro(
     firstRun
@@ -100,6 +105,35 @@ export async function runInit({ firstRun = false }: RunInitOptions = {}): Promis
         ].join("\n"),
   );
   return true;
+}
+
+/**
+ * When the saved provider can use firecracker but the host isn't provisioned
+ * yet, offers to run the setup flow inline. Declining changes nothing.
+ */
+async function offerFirecrackerSetup(saved: BreviConfig): Promise<void> {
+  if (process.platform !== "linux" || saved.sandbox.provider === "process") return;
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return;
+
+  const problems = await collectFirecrackerProblems(saved.sandbox.firecracker);
+  if (problems.length === 0) return;
+
+  const setupNow = exitOnCancel(
+    await confirm({
+      message: "Set up the firecracker sandbox now? (downloads images, uses sudo)",
+      initialValue: true,
+    }),
+  );
+  if (!setupNow) return;
+
+  const ready = await runSetup({ standalone: false });
+  if (!ready) {
+    log.warn(
+      saved.sandbox.provider === "firecracker"
+        ? "brevi start will fail until the remaining problems are fixed."
+        : "brevi will fall back to the process provider (no isolation) until the remaining problems are fixed.",
+    );
+  }
 }
 
 async function loadExisting(): Promise<BreviConfig | undefined> {

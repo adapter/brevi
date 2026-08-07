@@ -14,7 +14,7 @@
 # Requires: Linux, root (loop mount + mkfs.ext4), docker, ssh-keygen.
 #
 # Usage:
-#   sudo packages/sandbox/scripts/build-rootfs.sh [--size-mb 2048] [--with-kernel]
+#   sudo packages/sandbox/scripts/build-rootfs.sh [--size-mb 2048] [--with-kernel] [--brevi-home PATH]
 #
 # The kernel is NOT built here. Grab a known-good uncompressed vmlinux from the
 # Firecracker CI bucket (what their quickstart uses) with --with-kernel, or manually:
@@ -28,11 +28,13 @@ WITH_KERNEL=0
 NODE_VERSION="22.14.0"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/x86_64/vmlinux-6.1.102"
 IMAGE_TAG="brevi-rootfs:latest"
+BREVI_HOME_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --size-mb) SIZE_MB="$2"; shift 2 ;;
     --with-kernel) WITH_KERNEL=1; shift ;;
+    --brevi-home) BREVI_HOME_OVERRIDE="$2"; shift 2 ;;
     -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -42,26 +44,45 @@ done
 [[ "$(uname -s)" == "Linux" ]] || { echo "building an ext4 rootfs requires Linux" >&2; exit 1; }
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 
-# Under sudo, resolve BREVI_HOME against the invoking user, not root.
+# Under sudo, resolve BREVI_HOME against the invoking user, not root. --brevi-home wins
+# so the TS caller can pass the exact directory brevi itself uses.
 owner="${SUDO_USER:-$(id -un)}"
 owner_home="$(getent passwd "$owner" | cut -d: -f6)"
-BREVI_HOME="${BREVI_HOME:-${owner_home:-$HOME}/.brevi}"
+BREVI_HOME="${BREVI_HOME_OVERRIDE:-${BREVI_HOME:-${owner_home:-$HOME}/.brevi}}"
 IMAGES_DIR="$BREVI_HOME/images"
 ROOTFS="$IMAGES_DIR/rootfs.ext4"
 KEY="$IMAGES_DIR/id_ed25519"
 
 mkdir -p "$IMAGES_DIR"
 
+# Everything is built at .tmp paths and only moved into place after e2fsck passes, so a
+# failed build never replaces a working image or leaves a key/rootfs mismatch.
+mnt=""
+cid=""
+build_dir=""
+cleanup() {
+  if [[ -n "$mnt" ]] && mountpoint -q "$mnt"; then umount "$mnt" || true; fi
+  [[ -n "$mnt" ]] && rmdir "$mnt" 2>/dev/null || true
+  [[ -n "$cid" ]] && docker rm -f "$cid" >/dev/null 2>&1 || true
+  [[ -n "$build_dir" ]] && rm -rf "$build_dir" || true
+  rm -f "$ROOTFS.tmp" "$KEY.tmp" "$KEY.tmp.pub"
+  return 0
+}
+trap cleanup EXIT
+
 # 1. Keypair. Generated once and reused; regenerating it invalidates existing images.
+key_tmp=""
 if [[ ! -f "$KEY" ]]; then
   echo "==> generating $KEY"
-  ssh-keygen -t ed25519 -N '' -C "brevi-sandbox" -f "$KEY" >/dev/null
+  rm -f "$KEY.tmp" "$KEY.tmp.pub"
+  ssh-keygen -t ed25519 -N '' -C "brevi-sandbox" -f "$KEY.tmp" >/dev/null
+  key_tmp="$KEY.tmp"
 fi
 
 # 2. Guest userland, built with docker so apt caching and layering do the heavy lifting.
 echo "==> building $IMAGE_TAG"
 build_dir="$(mktemp -d)"
-cp "${KEY}.pub" "$build_dir/authorized_keys"
+cp "${key_tmp:-$KEY}.pub" "$build_dir/authorized_keys"
 
 cat > "$build_dir/init" <<'INIT'
 #!/bin/sh
@@ -161,27 +182,32 @@ docker build -t "$IMAGE_TAG" "$build_dir"
 # 3. Export the container filesystem into a fresh ext4 image.
 echo "==> writing ${ROOTFS} (${SIZE_MB} MiB)"
 mnt="$(mktemp -d)"
-cid=""
-cleanup() {
-  mountpoint -q "$mnt" && umount "$mnt"
-  rmdir "$mnt" 2>/dev/null || true
-  [[ -n "$cid" ]] && docker rm -f "$cid" >/dev/null 2>&1
-  rm -rf "$build_dir"
-  return 0
-}
-trap cleanup EXIT
 
-rm -f "$ROOTFS"
-truncate -s "${SIZE_MB}M" "$ROOTFS"
-mkfs.ext4 -q -F -L brevi-rootfs "$ROOTFS"
-mount -o loop "$ROOTFS" "$mnt"
+rm -f "$ROOTFS.tmp"
+truncate -s "${SIZE_MB}M" "$ROOTFS.tmp"
+mkfs.ext4 -q -F -L brevi-rootfs "$ROOTFS.tmp"
+mount -o loop "$ROOTFS.tmp" "$mnt"
 
 cid="$(docker create "$IMAGE_TAG")"
 docker export "$cid" | tar -C "$mnt" -xf -
 
 sync
 umount "$mnt"
-e2fsck -fp "$ROOTFS" >/dev/null || true
+
+# -fp exits 0 (clean), 1 (errors fixed) or 2 (fixed, reboot advised); anything higher
+# means the image is broken and must not replace a working one.
+fsck_status=0
+e2fsck -fp "$ROOTFS.tmp" >/dev/null || fsck_status=$?
+if [[ "$fsck_status" -gt 2 ]]; then
+  echo "e2fsck failed with status $fsck_status; discarding the broken image" >&2
+  exit 1
+fi
+
+mv "$ROOTFS.tmp" "$ROOTFS"
+if [[ -n "$key_tmp" ]]; then
+  mv "$KEY.tmp" "$KEY"
+  mv "$KEY.tmp.pub" "$KEY.pub"
+fi
 
 # 4. Optional kernel download.
 if [[ "$WITH_KERNEL" -eq 1 ]]; then

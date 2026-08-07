@@ -32,9 +32,10 @@ relative paths given to `pushDirectory`/`writeFile`/… resolve against `workspa
 
 `createSandboxProvider` maps `sandbox.provider` from the brevi config:
 
-- `"auto"` selects Firecracker when **all** of: `process.platform === "linux"`, `/dev/kvm` is
-  readable and writable, and the firecracker binary resolves on `PATH` (or at the
-  configured `binary`). Otherwise the process provider. `auto` never fails; it downgrades.
+- `"auto"` selects Firecracker when the full preflight passes (the same checks
+  `ensureAvailable()` runs): Linux, `/dev/kvm` readable and writable, the binary resolving
+  on `PATH`, in `~/.brevi/bin`, or at the configured `binary`, and the kernel, rootfs, and
+  ssh key present. Otherwise the process provider. `auto` never fails; it downgrades.
 - `"firecracker"` / `"process"`: constructed and `ensureAvailable()`d immediately, so a
   misconfigured host fails at startup with one aggregated, actionable error rather than
   mid-run.
@@ -87,6 +88,14 @@ device (only if brevi created it; pooled devices from the setup script are left 
 place), and removes the sandbox directory.
 
 ## One-time Linux setup
+
+The recommended path is `brevi setup`: it installs missing host tools (offered via apt),
+checks KVM access, downloads the
+firecracker binary and kernel (sha256-verified against pinned digests), builds the rootfs,
+and sets up networking, interactively and idempotently, printing every sudo command before
+running it. Its final check also verifies networking (tap devices and IPv4 forwarding),
+and it exits non-zero when the host is not ready. The steps below are the manual
+equivalent.
 
 ### 1. Kernel
 

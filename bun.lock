@@ -73,7 +73,7 @@
     },
     "packages/cli": {
       "name": "@brevi/cli",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "bin": {
         "brevi": "./dist/index.js",
       },
@@ -83,6 +83,7 @@
       },
       "devDependencies": {
         "@brevi/orchestrator": "*",
+        "@brevi/sandbox": "*",
         "@brevi/shared": "*",
         "@clack/prompts": "^1.7.0",
         "@repo/typescript-config": "*",

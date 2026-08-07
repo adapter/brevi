@@ -60,8 +60,23 @@ if [[ "$CLEAN" -eq 1 ]]; then
   remove_rule nat POSTROUTING -s "$SUBNET" -o "$EGRESS" -j MASQUERADE
   remove_rule filter FORWARD -i "$EGRESS" -o "${TAP_PREFIX}+" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
   remove_rule filter FORWARD -i "${TAP_PREFIX}+" -o "$EGRESS" -j ACCEPT
+  rm -f /etc/sysctl.d/99-brevi.conf
+  echo "removed /etc/sysctl.d/99-brevi.conf; the runtime ip_forward setting is left as-is"
   echo "brevi network teardown complete"
   exit 0
+fi
+
+# Refuse to touch anything when 172.30.0.0/16 is already routed to something that is
+# not one of our taps; brevi's subnet is currently not configurable.
+conflict="$(ip -4 route show | awk -v prefix="$TAP_PREFIX" '
+  $1 ~ /^172\.30\./ {
+    dev = ""
+    for (i = 1; i <= NF; i++) if ($i == "dev") dev = $(i + 1)
+    if (index(dev, prefix) != 1) { print; exit }
+  }')"
+if [[ -n "$conflict" ]]; then
+  echo "route \"$conflict\" collides with ${SUBNET}, which brevi's microVMs use; brevi's subnet is currently not configurable, so remove or renumber that route first" >&2
+  exit 1
 fi
 
 echo "egress interface: $EGRESS"

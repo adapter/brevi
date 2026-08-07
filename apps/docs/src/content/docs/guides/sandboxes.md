@@ -14,7 +14,7 @@ Every run executes inside a sandbox: one sandbox holds one run's workspace. The 
 
 `brevi init` writes your choice to `sandbox.provider`:
 
-- **`auto`** (recommended): Firecracker when *all* of the following hold: the platform is Linux, `/dev/kvm` is readable and writable, and the firecracker binary resolves on `PATH` (or at `sandbox.firecracker.binary`). Otherwise the process provider. `auto` never fails; it downgrades.
+- **`auto`** (recommended): Firecracker when the host passes the full preflight, the same checks `brevi start` runs for an explicit `firecracker` provider: Linux, `/dev/kvm` readable and writable, the firecracker binary resolving on `PATH`, in `~/.brevi/bin`, or at `sandbox.firecracker.binary`, and the kernel, rootfs, and ssh key images in place. Otherwise the process provider. `auto` never fails; it downgrades.
 - **`firecracker`** / **`process`**: constructed and checked at startup, so a misconfigured host fails immediately with one aggregated, actionable error instead of halfway through a run.
 
 You can change the provider any time by editing `sandbox.provider` in `~/.brevi/config.json` (or re-running `brevi init`) and restarting brevi.
@@ -25,7 +25,13 @@ On Linux with KVM, each run boots its own microVM: the base rootfs is cloned cop
 
 ### One-time host setup
 
-Four things are needed once per machine. This is a summary; see `packages/sandbox/README.md` in the repo for the full walkthrough and troubleshooting.
+Four things are needed once per machine. The recommended path is one command:
+
+```sh
+brevi setup
+```
+
+It walks through everything below interactively (see [the CLI reference](/reference/cli/#brevi-setup)), skips whatever is already in place, and prints every `sudo` command before running it. Downloads are sha256-verified against pinned digests, the final check also verifies networking (tap devices and IPv4 forwarding), and setup exits non-zero when the host is not ready. The manual equivalents follow; this is a summary, see `packages/sandbox/README.md` in the repo for the full walkthrough and troubleshooting.
 
 1. **Kernel**: an uncompressed `vmlinux` at `~/.brevi/images/vmlinux`. The Firecracker CI bucket used by their quickstart is the easiest source. Any kernel works if virtio-blk, virtio-net, ext4 and the 8250 serial driver are built in rather than modules.
 

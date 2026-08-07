@@ -1,13 +1,12 @@
 import type { FirecrackerConfig } from "@brevi/shared";
-import { FirecrackerProvider } from "./firecracker/provider.js";
-import { isReadWritable, resolveBinary } from "./host.js";
+import { collectFirecrackerProblems, FirecrackerProvider } from "./firecracker/provider.js";
 import { ProcessProvider } from "./process/provider.js";
 import type { ProviderSelection, SandboxProvider } from "./types.js";
 
 /**
  * Builds the provider named by the selection. An explicit choice is validated eagerly so
  * misconfiguration fails at startup rather than on the first run; "auto" prefers
- * Firecracker whenever the host can plausibly run it and falls back to the host process.
+ * Firecracker whenever the host passes the full preflight and falls back to the host process.
  */
 export async function createSandboxProvider(
   selection: ProviderSelection,
@@ -27,7 +26,5 @@ export async function createSandboxProvider(
 }
 
 async function supportsFirecracker(config: FirecrackerConfig): Promise<boolean> {
-  if (process.platform !== "linux") return false;
-  if (!(await isReadWritable("/dev/kvm"))) return false;
-  return (await resolveBinary(config.binary)) !== undefined;
+  return (await collectFirecrackerProblems(config)).length === 0;
 }
