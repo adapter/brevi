@@ -167,10 +167,7 @@ RUN ssh-keygen -A \\
  && mkdir -p /root/.ssh /workspace /run/sshd \\
  && chmod 700 /root/.ssh \\
  && printf 'PermitRootLogin prohibit-password\\nPasswordAuthentication no\\nUseDNS no\\nAcceptEnv *\\n' \\
-      > /etc/ssh/sshd_config.d/brevi.conf \\
- && printf 'nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n' > /etc/resolv.conf \\
- && printf 'brevi\\n' > /etc/hostname \\
- && printf '127.0.0.1 localhost brevi\\n' > /etc/hosts
+      > /etc/ssh/sshd_config.d/brevi.conf
 
 COPY authorized_keys /root/.ssh/authorized_keys
 COPY init /sbin/init
@@ -190,6 +187,14 @@ mount -o loop "$ROOTFS.tmp" "$mnt"
 
 cid="$(docker create "$IMAGE_TAG")"
 docker export "$cid" | tar -C "$mnt" -xf -
+
+# docker manages /etc/resolv.conf, /etc/hostname and /etc/hosts as runtime bind
+# mounts, so writing them in the Dockerfile never reaches the exported image
+# (they come out empty, leaving the guest without DNS). Write them into the
+# mounted filesystem instead.
+printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > "$mnt/etc/resolv.conf"
+printf 'brevi\n' > "$mnt/etc/hostname"
+printf '127.0.0.1 localhost brevi\n' > "$mnt/etc/hosts"
 
 sync
 umount "$mnt"
