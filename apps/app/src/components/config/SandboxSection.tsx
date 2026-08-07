@@ -1,34 +1,48 @@
 import { useState } from "react";
-import type { BreviConfig } from "@brevi/shared";
+import type { BreviConfig, HealthResponse, SandboxSettingsUpdateRequest } from "@brevi/shared";
+import { resolveFirecrackerResources, type FirecrackerVmSize } from "@brevi/shared/sizes";
 import { Button } from "@/components/ui/button";
 import { api } from "../../lib/api";
 import { Plate } from "../Bits";
 import { Minus, Plus, Warn } from "../Icons";
 
-/** How many sandboxed runs may execute at once, above which host memory gets tight. */
-const CONCURRENCY_MEMORY_HINT = 4;
+const SIZES: { id: FirecrackerVmSize; label: string }[] = [
+  { id: "small", label: "Small" },
+  { id: "medium", label: "Medium" },
+  { id: "large", label: "Large" },
+];
+
+/** MiB to a GB string with up to two decimals, trailing zeros stripped. */
+function formatGb(mib: number): string {
+  return (Math.round((mib / 1024) * 100) / 100).toString();
+}
 
 /**
- * Sandbox run concurrency: a stepper backed by the orchestrator's live
- * sandbox settings. The value shown always comes from the server-confirmed
- * config, never local optimistic state.
+ * Sandbox settings: run concurrency and, when the orchestrator runs
+ * Firecracker microVMs, the VM size preset and a live host-memory capacity
+ * hint. Backed by the orchestrator's live sandbox settings; the values shown
+ * always come from the server-confirmed config, never local optimistic
+ * state.
  */
 export function SandboxSection({
   config,
+  health,
   onConfig,
 }: {
   config: BreviConfig;
+  health: HealthResponse | null;
   onConfig: (config: BreviConfig) => void;
 }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const concurrency = config.sandbox.concurrency;
+  const firecracker = health?.sandboxProvider === "firecracker";
 
-  const step = async (next: number) => {
+  const update = async (request: SandboxSettingsUpdateRequest) => {
     setPending(true);
     setError(null);
     try {
-      const response = await api.updateSandboxSettings({ concurrency: next });
+      const response = await api.updateSandboxSettings(request);
       onConfig(response.config);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The orchestrator did not respond.");
@@ -36,6 +50,21 @@ export function SandboxSection({
       setPending(false);
     }
   };
+
+  const fc = config.sandbox.firecracker;
+  const override = fc.vcpus !== undefined || fc.memMib !== undefined;
+  const { vcpus, memMib } = resolveFirecrackerResources(fc);
+  const reservedMib = memMib * concurrency;
+
+  const runWord = concurrency === 1 ? "run" : "runs";
+  const verb = concurrency === 1 ? "reserves" : "reserve";
+  const hintWords: string[] = [String(concurrency)];
+  if (concurrency > 1) hintWords.push("concurrent");
+  if (!override) hintWords.push(fc.size);
+  hintWords.push(runWord, verb, `${formatGb(reservedMib)} GB of host memory`);
+  const hint = hintWords.join(" ");
+
+  const hostMemMib = health?.hostMemMib;
 
   return (
     <section className="mt-6">
@@ -54,7 +83,7 @@ export function SandboxSection({
           <Button
             variant="outline"
             size="icon-xs"
-            onClick={() => void step(concurrency - 1)}
+            onClick={() => void update({ concurrency: concurrency - 1 })}
             disabled={pending || concurrency <= 1}
             aria-label="Decrease parallel runs"
           >
@@ -66,7 +95,7 @@ export function SandboxSection({
           <Button
             variant="outline"
             size="icon-xs"
-            onClick={() => void step(concurrency + 1)}
+            onClick={() => void update({ concurrency: concurrency + 1 })}
             disabled={pending || concurrency >= 16}
             aria-label="Increase parallel runs"
           >
@@ -75,12 +104,60 @@ export function SandboxSection({
         </div>
       </div>
 
-      {concurrency >= CONCURRENCY_MEMORY_HINT && (
-        <p className="mt-2.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-haze-700">
-          <Warn className="mt-px size-3 shrink-0" />
-          Each Firecracker VM reserves its own memory (4 GiB by default); make sure the host has
-          room for all of them.
-        </p>
+      {firecracker && (
+        <>
+          <div className="mt-4 flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-[12.5px] text-haze-200">VM size</p>
+              <p className="text-[12px] leading-relaxed text-haze-700">
+                Resources for each Firecracker microVM
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {SIZES.map(({ id, label }) => {
+                const active = fc.size === id;
+                return (
+                  <Button
+                    key={id}
+                    variant="outline"
+                    size="xs"
+                    aria-pressed={active}
+                    onClick={() => void update({ size: id })}
+                    disabled={pending}
+                    className={
+                      active
+                        ? "border-haze-300 text-haze-50"
+                        : "border-ink-600 text-haze-600"
+                    }
+                  >
+                    {label}
+                  </Button>
+                );
+              })}
+            </div>
+          </div>
+
+          <p className="mt-2 text-[12px] text-haze-700">
+            {vcpus} vCPU, {formatGb(memMib)} GB memory per VM
+          </p>
+
+          {override && (
+            <p className="mt-2.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-haze-700">
+              <Warn className="mt-px size-3 shrink-0" />
+              The config file sets explicit vcpus/memMib, which win over the preset. Picking a
+              size clears them.
+            </p>
+          )}
+
+          <p className="mt-2.5 text-[12px] leading-relaxed text-haze-700">{hint}</p>
+
+          {typeof hostMemMib === "number" && reservedMib > hostMemMib && (
+            <p className="mt-1 flex items-start gap-1.5 text-[12px] leading-relaxed text-rust-400">
+              <Warn className="mt-px size-3 shrink-0" />
+              That exceeds this host's {formatGb(hostMemMib)} GB of memory.
+            </p>
+          )}
+        </>
       )}
 
       {error && (

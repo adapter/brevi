@@ -38,8 +38,7 @@ A freshly initialised config, with every default filled in:
       "binary": "firecracker",
       "kernelImage": "~/.brevi/images/vmlinux",
       "rootfs": "~/.brevi/images/rootfs.ext4",
-      "vcpus": 2,
-      "memMib": 4096
+      "size": "medium"
     },
     "timeoutMinutes": 60,
     "retentionHours": 24
@@ -176,7 +175,7 @@ At least one of the four credential fields (`anthropicApiKey`, `claudeCodeOauthT
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `provider` | `"auto"` \| `"firecracker"` \| `"process"` | `"auto"` | See [Sandboxes](/guides/sandboxes/). |
-| `concurrency` | integer 1-16 | `1` | How many sandboxed runs execute at once. Each Firecracker microVM reserves its own memory (`firecracker.memMib`, 4 GiB by default) and one tap device from the pool created by [the network setup script](/guides/sandboxes/) (16 by default), so the host needs enough of both for all of them running simultaneously. Adjustable live from the dashboard; takes effect immediately, no restart needed. |
+| `concurrency` | integer 1-16 | `1` | How many sandboxed runs execute at once. Each Firecracker microVM reserves its own memory (7.5 GB for the default `medium` size preset, see `firecracker.size`) and one tap device from the pool created by [the network setup script](/guides/sandboxes/) (16 by default), so the host needs enough of both for all of them running simultaneously. Adjustable live from the dashboard; takes effect immediately, no restart needed. |
 | `timeoutMinutes` | integer ≥ 1 | `60` | Hard wall-clock limit applied per agent execution: the implementation pass, each of the parallel Codex reviewers, the synthesis pass, and the fix pass each get their own budget, rather than one limit for the whole run. |
 | `retentionHours` | number ≥ 0 | `24` | How many hours a finished (completed or failed) run's sandbox disk is kept for interactive resume, either from the dashboard's "Open terminal" button or `brevi attach <runId>`. `0` disables retention. A retained sandbox's compute is stopped; it costs disk only, no memory or CPU. |
 | `firecracker` | object | see below | Only consulted when the Firecracker provider is used. |
@@ -188,8 +187,11 @@ At least one of the four credential fields (`anthropicApiKey`, `claudeCodeOauthT
 | `binary` | string | `"firecracker"` | Resolved on `PATH` unless it's an absolute path. |
 | `kernelImage` | string | `~/.brevi/images/vmlinux` | Uncompressed Linux kernel. |
 | `rootfs` | string | `~/.brevi/images/rootfs.ext4` | Ext4 image with node, git, both agent CLIs (`@anthropic-ai/claude-code`, `@openai/codex`), and `ccusage` preinstalled. |
-| `vcpus` | integer ≥ 1 | `2` | vCPUs per microVM. |
-| `memMib` | integer ≥ 512 | `4096` | Memory per microVM, in MiB. |
+| `size` | `"small"` \| `"medium"` \| `"large"` | `"medium"` | VM size preset: `small` (1 vCPU, 3.75 GB), `medium` (2 vCPU, 7.5 GB), `large` (4 vCPU, 15 GB). Selectable live from the dashboard's Sandbox page (Configuration > Sandbox) when the active provider is Firecracker; a change applies to newly booted VMs only, running VMs are untouched. |
+| `vcpus` | integer ≥ 1 | unset | Explicit vCPU override. Wins over `size` when set; existing config files with an explicit value keep their exact behavior. Picking a preset in the dashboard clears it. |
+| `memMib` | integer ≥ 512 | unset | Explicit memory override, in MiB. Wins over `size` when set; existing config files with an explicit value keep their exact behavior. Picking a preset in the dashboard clears it. |
+
+A config file from before size presets that sets only one of `vcpus`/`memMib` (and no `size`) keeps the old default for the other (2 vCPUs, 4096 MiB): the preset never changes an allocation such a config was already getting.
 
 ## `connect`
 
