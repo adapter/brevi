@@ -33,16 +33,40 @@ export const repoConfigSchema = z.object({
   demo: z.enum(["always", "auto", "never"]).default("auto"),
 });
 
-export const firecrackerConfigSchema = z.object({
-  /** Path to the firecracker binary. */
-  binary: z.string().default("firecracker"),
-  /** Uncompressed Linux kernel image (vmlinux). */
-  kernelImage: z.string().default(join(IMAGES_DIR, "vmlinux")),
-  /** Ext4 rootfs with node, git, and the coding agent preinstalled. */
-  rootfs: z.string().default(join(IMAGES_DIR, "rootfs.ext4")),
-  vcpus: z.number().int().min(1).default(2),
-  memMib: z.number().int().min(512).default(4096),
-});
+export const firecrackerConfigSchema = z.preprocess(
+  (raw) => {
+    // Before size presets existed, vcpus and memMib had independent defaults
+    // (2 and 4096). A legacy config carrying only one of them used the old
+    // default for the other; letting the preset fill that half would change
+    // the config's allocation, so the old default is pinned instead. A config
+    // that names a size (or sets neither field) resolves through the preset.
+    if (raw !== null && typeof raw === "object") {
+      const cfg = raw as { size?: unknown; vcpus?: unknown; memMib?: unknown };
+      if (cfg.size === undefined && (cfg.vcpus !== undefined || cfg.memMib !== undefined)) {
+        return { vcpus: 2, memMib: 4096, ...cfg };
+      }
+    }
+    return raw;
+  },
+  z.object({
+    /** Path to the firecracker binary. */
+    binary: z.string().default("firecracker"),
+    /** Uncompressed Linux kernel image (vmlinux). */
+    kernelImage: z.string().default(join(IMAGES_DIR, "vmlinux")),
+    /** Ext4 rootfs with node, git, and the coding agent preinstalled. */
+    rootfs: z.string().default(join(IMAGES_DIR, "rootfs.ext4")),
+    /**
+     * VM size preset: small (1 vCPU / 3.75 GB), medium (2 vCPU / 7.5 GB), or
+     * large (4 vCPU / 15 GB). Adjustable live from the dashboard's Sandbox
+     * page; applies to newly booted VMs.
+     */
+    size: z.enum(["small", "medium", "large"]).default("medium"),
+    /** Explicit vCPU override (config file only); when set it wins over `size`. */
+    vcpus: z.number().int().min(1).optional(),
+    /** Explicit memory override in MiB (config file only); when set it wins over `size`. */
+    memMib: z.number().int().min(512).optional(),
+  }),
+);
 
 export const configSchema = z.object({
   linear: z
@@ -149,9 +173,10 @@ export const configSchema = z.object({
       firecracker: firecrackerConfigSchema.prefault({}),
       /**
        * How many sandboxed runs may execute at once. Each Firecracker microVM
-       * reserves its own memory (memMib, 4 GiB by default) and one tap device
-       * from the pool setup-network.sh provisions (16 by default), so keep
-       * this in line with what the host can hold.
+       * reserves its own memory (the firecracker.size preset, 7680 MiB for
+       * the default medium, unless an explicit memMib override is set) and
+       * one tap device from the pool setup-network.sh provisions (16 by
+       * default), so keep this in line with what the host can hold.
        */
       concurrency: z.number().int().min(1).max(16).default(1),
       /** Hard wall-clock limit for a single run. */

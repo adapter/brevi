@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { FirecrackerConfig } from "@brevi/shared";
+import { resolveFirecrackerResources, type FirecrackerConfig } from "@brevi/shared";
 import { execa, type ResultPromise } from "execa";
 import { runCommand } from "../exec.js";
 import { resolveFirecrackerBinary } from "../host.js";
@@ -124,7 +124,11 @@ async function configure(
 ): Promise<void> {
   const api = new FirecrackerApi(socketPath);
   try {
-    await api.put("/machine-config", { vcpu_count: config.vcpus, mem_size_mib: config.memMib });
+    // Resolved here, at boot time, so a dashboard size change applies to the
+    // next VM (including rehydrated ones for `brevi attach`) without a
+    // restart: the provider holds a live reference to this config object.
+    const { vcpus, memMib } = resolveFirecrackerResources(config);
+    await api.put("/machine-config", { vcpu_count: vcpus, mem_size_mib: memMib });
     await api.put("/boot-source", {
       kernel_image_path: config.kernelImage,
       boot_args: bootArgs(network),

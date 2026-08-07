@@ -1,4 +1,4 @@
-import type { BreviConfig, LinearStatus } from "@brevi/shared";
+import type { BreviConfig, HealthResponse, LinearStatus } from "@brevi/shared";
 import type { ConfigSection } from "../lib/useOrchestrator";
 import { ConnectorsSection } from "./config/ConnectorsSection";
 import { RepositoriesSection } from "./config/RepositoriesSection";
@@ -18,12 +18,14 @@ const SECTIONS: { id: ConfigSection; label: string }[] = [
 export function ConfigurationPage({
   config,
   linearStatus,
+  health,
   section,
   onSection,
   onConfig,
 }: {
   config: BreviConfig | null;
   linearStatus: LinearStatus | null;
+  health: HealthResponse | null;
   section: ConfigSection;
   onSection: (section: ConfigSection) => void;
   onConfig: (config: BreviConfig) => void;
@@ -75,7 +77,9 @@ export function ConfigurationPage({
           {section === "repositories" && (
             <RepositoriesSection config={config} linearStatus={linearStatus} onConfig={onConfig} />
           )}
-          {section === "sandbox" && <SandboxSection config={config} onConfig={onConfig} />}
+          {section === "sandbox" && (
+            <SandboxSection config={config} health={health} onConfig={onConfig} />
+          )}
         </>
       ) : (
         <p className="mt-6 text-[12.5px] leading-relaxed text-haze-700">

@@ -3,6 +3,7 @@ import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   CONFIG_PATH,
+  FIRECRACKER_SIZES,
   redactConfig,
   repoConfigSchema,
   WORKSPACES_DIR,
@@ -663,16 +664,65 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   async updateSandboxSettings(
     request: SandboxSettingsUpdateRequest,
   ): Promise<SandboxSettingsUpdateResponse> {
-    const { concurrency } = request;
-    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
-      throw new OrchestratorError("invalid", "sandbox concurrency must be an integer between 1 and 16");
+    const { concurrency, size } = request;
+    if (concurrency === undefined && size === undefined) {
+      throw new OrchestratorError("invalid", "no sandbox settings provided");
     }
-    this.config.sandbox.concurrency = concurrency;
-    await this.#persistConfig();
+    if (concurrency !== undefined) {
+      if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
+        throw new OrchestratorError(
+          "invalid",
+          "sandbox concurrency must be an integer between 1 and 16",
+        );
+      }
+    }
+    // Own-property check: `size in FIRECRACKER_SIZES` would also accept
+    // inherited names like "constructor" and install them in the live config.
+    if (size !== undefined && !Object.hasOwn(FIRECRACKER_SIZES, size)) {
+      throw new OrchestratorError(
+        "invalid",
+        `sandbox size must be one of ${Object.keys(FIRECRACKER_SIZES).join(", ")}`,
+      );
+    }
+    const firecracker = this.config.sandbox.firecracker;
+    const previous = {
+      concurrency: this.config.sandbox.concurrency,
+      size: firecracker.size,
+      vcpus: firecracker.vcpus,
+      memMib: firecracker.memMib,
+    };
+    if (concurrency !== undefined) this.config.sandbox.concurrency = concurrency;
+    if (size !== undefined) {
+      firecracker.size = size;
+      // saveConfig persists resolved defaults, so nearly every existing
+      // config file already carries explicit vcpus/memMib; clear them here
+      // or the preset would silently never apply. The sandbox provider holds
+      // this same firecracker config object and resolves vcpus/memMib at VM
+      // boot, so the change reaches the next booted VM without a restart.
+      delete firecracker.vcpus;
+      delete firecracker.memMib;
+    }
+    try {
+      await this.#persistConfig();
+    } catch (error) {
+      // The caller gets an error, so the live config (shared by reference
+      // with the sandbox provider) must not keep settings that never reached
+      // disk; in particular the cleared overrides would change the next VM's
+      // resources despite the rejected save.
+      this.config.sandbox.concurrency = previous.concurrency;
+      firecracker.size = previous.size;
+      if (previous.vcpus === undefined) delete firecracker.vcpus;
+      else firecracker.vcpus = previous.vcpus;
+      if (previous.memMib === undefined) delete firecracker.memMib;
+      else firecracker.memMib = previous.memMib;
+      throw error;
+    }
     this.emit("config", redactConfig(this.config));
-    // Raising the limit can start queued runs right away; lowering it only
-    // affects new starts, already-running sandboxes finish out.
-    this.#kickWorker();
+    if (concurrency !== undefined) {
+      // Raising the limit can start queued runs right away; lowering it only
+      // affects new starts, already-running sandboxes finish out.
+      this.#kickWorker();
+    }
     return { config: redactConfig(this.config) };
   }
 

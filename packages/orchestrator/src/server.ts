@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { createRequire } from "node:module";
+import { totalmem } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
@@ -137,6 +138,7 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
       ok: true,
       version: VERSION,
       sandboxProvider: orchestrator.providerName,
+      hostMemMib: Math.round(totalmem() / (1024 * 1024)),
     };
     return c.json(health);
   });
@@ -318,11 +320,24 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
     } catch {
       return c.json({ error: "invalid JSON body" }, 400);
     }
-    if (typeof body.concurrency !== "number") {
-      return c.json({ error: "concurrency must be a number" }, 400);
+    const request: SandboxSettingsUpdateRequest = {};
+    if (body.concurrency !== undefined) {
+      if (typeof body.concurrency !== "number") {
+        return c.json({ error: "concurrency must be a number" }, 400);
+      }
+      request.concurrency = body.concurrency;
+    }
+    if (body.size !== undefined) {
+      if (typeof body.size !== "string") {
+        return c.json({ error: "size must be a string" }, 400);
+      }
+      request.size = body.size;
+    }
+    if (Object.keys(request).length === 0) {
+      return c.json({ error: "no sandbox settings provided" }, 400);
     }
     try {
-      return c.json(await orchestrator.updateSandboxSettings({ concurrency: body.concurrency }));
+      return c.json(await orchestrator.updateSandboxSettings(request));
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }

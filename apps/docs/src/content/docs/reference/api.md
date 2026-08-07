@@ -40,10 +40,10 @@ Errors are `{ "error": string }` with status `400` (invalid), `404` (not found),
 ### Health
 
 ```json
-{ "ok": true, "version": "0.1.0", "sandboxProvider": "process" }
+{ "ok": true, "version": "0.1.0", "sandboxProvider": "process", "hostMemMib": 16384 }
 ```
 
-`sandboxProvider` is the provider actually in use, after `auto` resolution.
+`sandboxProvider` is the provider actually in use, after `auto` resolution. `hostMemMib` is total host memory in MiB, used by the dashboard's capacity hint (memory per VM times `sandbox.concurrency`, with a warning when it exceeds host memory).
 
 ### Runs and artifacts
 
@@ -171,13 +171,13 @@ Each entry is validated against the repo schema; a bad remote or an unknown `def
 
 ### Sandbox settings
 
-`PUT /api/settings/sandbox` updates `sandbox.concurrency`, how many sandboxed runs execute at once:
+`PUT /api/settings/sandbox` updates `sandbox.concurrency` (how many sandboxed runs execute at once) and/or `sandbox.firecracker.size` (the Firecracker VM size preset); at least one of the two fields is required, and both may be sent together:
 
 ```json
-{ "concurrency": 2 }
+{ "concurrency": 2, "size": "large" }
 ```
 
-The value is persisted to `~/.brevi/config.json` and takes effect immediately, no restart needed: raising the limit starts queued runs right away, and lowering it lets already-running sandboxes finish out rather than cancelling them. Values outside `1` to `16`, or non-integers, are rejected with `400` and nothing is written.
+Both values are persisted to `~/.brevi/config.json` and take effect immediately, no restart needed: raising `concurrency` starts queued runs right away, and lowering it lets already-running sandboxes finish out rather than cancelling them. Setting `size` applies to newly booted VMs, including sandboxes rehydrated for `brevi attach`, and clears any explicit `vcpus`/`memMib` overrides from the config file so the preset takes effect; running VMs are untouched. A `concurrency` outside `1` to `16` or non-integer, an unrecognized `size`, or a body with neither field, is rejected with `400` and nothing is written.
 
 ### R2 connector
 

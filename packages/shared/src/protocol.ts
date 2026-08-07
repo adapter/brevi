@@ -1,5 +1,6 @@
 import type { BreviConfig, RepoConfig } from "./config.js";
 import type { Run, RunEvent, Ticket } from "./types.js";
+import type { FirecrackerVmSize } from "./sizes.js";
 
 /**
  * HTTP API served by the orchestrator (default port 4400):
@@ -63,8 +64,9 @@ import type { Run, RunEvent, Ticket } from "./types.js";
  *        body: ReposUpdateRequest. Replaces the repo mappings wholesale.
  *   PUT  /api/settings/sandbox           -> SandboxSettingsUpdateResponse
  *        body: SandboxSettingsUpdateRequest. Sets how many sandboxed runs may
- *        execute at once; persisted to the config file and applied without a
- *        restart.
+ *        execute at once and/or the Firecracker VM size preset; persisted to
+ *        the config file and applied without a restart (the size preset
+ *        applies to newly booted VMs).
  *   GET  /ws                             -> WebSocket, messages below
  *
  * Everything else serves the built dashboard (SPA fallback to index.html).
@@ -74,6 +76,11 @@ export interface HealthResponse {
   ok: boolean;
   version: string;
   sandboxProvider: string;
+  /**
+   * Total host memory in MiB, for the dashboard's capacity hint. Absent from
+   * older orchestrators.
+   */
+  hostMemMib?: number;
 }
 
 /**
@@ -275,10 +282,19 @@ export interface ResumeRunResponse {
   attach: RunAttachInfo;
 }
 
-/** Sandbox scheduling settings adjustable from the dashboard. */
+/**
+ * Sandbox scheduling settings adjustable from the dashboard. At least one
+ * field must be provided.
+ */
 export interface SandboxSettingsUpdateRequest {
   /** How many sandboxed runs may execute at once (1 to 16). */
-  concurrency: number;
+  concurrency?: number;
+  /**
+   * Firecracker VM size preset for newly booted VMs. Setting this clears any
+   * explicit vcpus/memMib overrides in the config file so the preset
+   * actually applies.
+   */
+  size?: FirecrackerVmSize;
 }
 
 export interface SandboxSettingsUpdateResponse {
