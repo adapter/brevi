@@ -459,9 +459,8 @@ async function verify(
         log.info(`Set sandbox.provider to "firecracker" in ${CONFIG_PATH}.`);
       }
     }
-    const message = `Firecracker sandbox is ready. Run ${pc.cyan("brevi start")}.`;
-    if (standalone) outro(message);
-    else log.success(message);
+    if (standalone) outro(`Firecracker sandbox is ready. Run ${pc.cyan("brevi start")}.`);
+    else log.success("Firecracker sandbox is ready.");
     return true;
   }
 

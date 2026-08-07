@@ -43,7 +43,7 @@ Creates `~/.brevi/config.json` and asks exactly one question, the sandbox provid
 
 | Choice | Meaning |
 | --- | --- |
-| `auto` | Firecracker on Linux with KVM, the process provider otherwise (recommended) |
+| `auto` | Firecracker when the host passes the full preflight (Linux, KVM, binary, images, key), the process provider otherwise (recommended) |
 | `firecracker` | Linux + KVM required, strongest isolation |
 | `process` | No isolation, development only |
 
@@ -70,7 +70,7 @@ The steps, in order:
 
 brevi never escalates privileges silently: every `sudo` command line is printed before it runs, and every step that uses one asks first. Setup ends with the same preflight check `brevi start` uses, plus a networking check (tap devices and IPv4 forwarding); when everything passes, setup offers to switch `sandbox.provider` from `process` to `firecracker` and reports the sandbox ready. Remaining problems are listed instead, with a pointer to re-run once fixed, and setup exits non-zero.
 
-Requires an interactive terminal and Linux; on other platforms there is nothing to set up, since brevi falls back to the [process provider](/guides/sandboxes/#the-process-provider). Works without a config too (`brevi init` picks the provisioned host up afterwards).
+Requires an interactive terminal and Linux; on other platforms there is nothing to set up, since the `auto` provider selects the [process provider](/guides/sandboxes/#the-process-provider) there (an explicit `firecracker` provider fails at startup instead). Works without a config too (`brevi init` picks the provisioned host up afterwards).
 
 ## `brevi start`
 

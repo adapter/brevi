@@ -32,9 +32,10 @@ relative paths given to `pushDirectory`/`writeFile`/… resolve against `workspa
 
 `createSandboxProvider` maps `sandbox.provider` from the brevi config:
 
-- `"auto"` selects Firecracker when **all** of: `process.platform === "linux"`, `/dev/kvm` is
-  readable and writable, and the firecracker binary resolves on `PATH` (or at the
-  configured `binary`). Otherwise the process provider. `auto` never fails; it downgrades.
+- `"auto"` selects Firecracker when the full preflight passes (the same checks
+  `ensureAvailable()` runs): Linux, `/dev/kvm` readable and writable, the binary resolving
+  on `PATH`, in `~/.brevi/bin`, or at the configured `binary`, and the kernel, rootfs, and
+  ssh key present. Otherwise the process provider. `auto` never fails; it downgrades.
 - `"firecracker"` / `"process"`: constructed and `ensureAvailable()`d immediately, so a
   misconfigured host fails at startup with one aggregated, actionable error rather than
   mid-run.

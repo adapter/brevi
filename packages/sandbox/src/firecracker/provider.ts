@@ -71,10 +71,14 @@ export class FirecrackerProvider implements SandboxProvider {
   async ensureAvailable(): Promise<void> {
     const problems = await collectFirecrackerProblems(this.#config);
     if (problems.length === 0) return;
+    const remedy =
+      process.platform === "linux"
+        ? `Run "brevi setup" to provision this host, or see ${SETUP_DOC} for manual setup.`
+        : `See ${SETUP_DOC} for what the firecracker provider needs.`;
     throw new Error(
       `The firecracker sandbox provider cannot run on this host:\n${problems
         .map((problem) => `  - ${problem}`)
-        .join("\n")}\nRun "brevi setup" to provision this host, or see ${SETUP_DOC} for manual setup.`,
+        .join("\n")}\n${remedy}`,
     );
   }
 

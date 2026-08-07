@@ -124,7 +124,16 @@ async function offerFirecrackerSetup(saved: BreviConfig): Promise<void> {
       initialValue: true,
     }),
   );
-  if (setupNow) await runSetup({ standalone: false });
+  if (!setupNow) return;
+
+  const ready = await runSetup({ standalone: false });
+  if (!ready) {
+    log.warn(
+      saved.sandbox.provider === "firecracker"
+        ? "brevi start will fail until the remaining problems are fixed."
+        : "brevi will fall back to the process provider (no isolation) until the remaining problems are fixed.",
+    );
+  }
 }
 
 async function loadExisting(): Promise<BreviConfig | undefined> {
