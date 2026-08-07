@@ -1,10 +1,8 @@
 import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { createWriteStream, existsSync } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
-import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadConfig, saveConfig } from "@brevi/orchestrator";
 import {
@@ -28,6 +26,7 @@ import {
 import { confirm, intro, log, outro, spinner } from "@clack/prompts";
 import type { Command } from "commander";
 import pc from "picocolors";
+import { downloadToFile } from "../lib/download.js";
 import { errorMessage, exitOnCancel } from "../lib/util.js";
 
 const FIRECRACKER_VERSION = "v1.10.1";
@@ -552,41 +551,4 @@ function extractTarball(tgz: string, dest: string): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile("tar", ["-xzf", tgz, "-C", dest], (err) => (err ? reject(err) : resolve()));
   });
-}
-
-/**
- * Streams a URL to disk via a .partial file, so an aborted download never looks
- * complete, and verifies the sha256 digest before the file lands at its final name.
- */
-async function downloadToFile(
-  url: string,
-  dest: string,
-  sha256: string,
-  onProgress?: (bytes: number) => void,
-): Promise<void> {
-  const res = await fetch(url);
-  if (!res.ok || res.body === null) throw new Error(`GET ${url} failed with HTTP ${res.status}`);
-  const body = res.body;
-
-  const partial = `${dest}.partial`;
-  const hash = createHash("sha256");
-  try {
-    let bytes = 0;
-    await pipeline(async function* () {
-      for await (const chunk of body) {
-        bytes += chunk.length;
-        hash.update(chunk);
-        onProgress?.(bytes);
-        yield chunk;
-      }
-    }, createWriteStream(partial));
-    const actual = hash.digest("hex");
-    if (actual !== sha256) {
-      throw new Error(`sha256 mismatch for ${url}: expected ${sha256}, got ${actual}`);
-    }
-  } catch (err) {
-    await rm(partial, { force: true });
-    throw err;
-  }
-  await rename(partial, dest);
 }
