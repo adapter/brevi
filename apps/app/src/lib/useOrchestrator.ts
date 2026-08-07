@@ -3,6 +3,7 @@ import type {
   BreviConfig,
   ClientMessage,
   HealthResponse,
+  LinearStatus,
   Run,
   RunEvent,
   ServerMessage,
@@ -20,6 +21,7 @@ interface State {
   runs: Run[];
   tickets: Ticket[];
   config: BreviConfig | null;
+  linearStatus: LinearStatus | null;
   health: HealthResponse | null;
   events: Record<string, RunEvent[] | undefined>;
   loadedRuns: Record<string, true | undefined>;
@@ -33,8 +35,9 @@ interface State {
 
 type Action =
   | { t: "conn"; conn: Connection }
-  | { t: "hello"; runs: Run[]; tickets: Ticket[]; config: BreviConfig }
+  | { t: "hello"; runs: Run[]; tickets: Ticket[]; config: BreviConfig; linearStatus: LinearStatus }
   | { t: "config"; config: BreviConfig }
+  | { t: "linear-status"; linearStatus: LinearStatus }
   | { t: "tickets"; tickets: Ticket[] }
   | { t: "run"; run: Run }
   | { t: "event"; event: RunEvent }
@@ -50,6 +53,7 @@ const initial: State = {
   runs: [],
   tickets: [],
   config: null,
+  linearStatus: null,
   health: null,
   events: {},
   loadedRuns: {},
@@ -108,10 +112,13 @@ function reducer(state: State, action: Action): State {
         runs: [...action.runs].sort(byNewest),
         tickets: action.tickets,
         config: action.config,
+        linearStatus: action.linearStatus,
         loaded: true,
       };
     case "config":
       return { ...state, config: action.config };
+    case "linear-status":
+      return { ...state, linearStatus: action.linearStatus };
     case "tickets":
       return { ...state, tickets: action.tickets };
     case "run": {
@@ -221,10 +228,19 @@ export function useOrchestrator() {
         if (!msg) return;
         switch (msg.type) {
           case "hello":
-            dispatch({ t: "hello", runs: msg.runs, tickets: msg.tickets, config: msg.config });
+            dispatch({
+              t: "hello",
+              runs: msg.runs,
+              tickets: msg.tickets,
+              config: msg.config,
+              linearStatus: msg.linearStatus,
+            });
             break;
           case "config":
             dispatch({ t: "config", config: msg.config });
+            break;
+          case "linear-status":
+            dispatch({ t: "linear-status", linearStatus: msg.linearStatus });
             break;
           case "tickets":
             dispatch({ t: "tickets", tickets: msg.tickets });

@@ -13,7 +13,7 @@ A freshly initialised config, with every default filled in:
 
 ```json
 {
-  "linear": { "apiKey": "", "teamKeys": [] },
+  "linear": { "apiKey": "", "refreshToken": "", "tokenExpiresAt": "", "teamKeys": [] },
   "github": { "token": "", "prDescription": "concise" },
   "r2": { "bucket": "", "publicBaseUrl": "" },
   "repos": {},
@@ -63,6 +63,8 @@ A freshly initialised config, with every default filled in:
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `apiKey` | string | `""` | Personal API key or OAuth access token. Empty means not connected. Set it from the dashboard's Configuration page. |
+| `refreshToken` | string | `""` | OAuth refresh token captured by the Connect flow, used to rotate an expiring `apiKey` automatically. Empty for plain `lin_api_` keys, which never expire. |
+| `tokenExpiresAt` | string | `""` | ISO timestamp the OAuth access token expires at. Empty when unknown (plain API keys, or before the first refresh). |
 | `teamKeys` | string[] | `[]` | Restrict polling to these team keys, e.g. `["ENG"]`. Empty polls all teams you can see. |
 
 Keys beginning with `lin_api_` are sent as a raw `Authorization` header; anything else is treated as an OAuth token and sent as `Bearer`.
@@ -219,4 +221,4 @@ Integer, minimum `10`, default `60`. How often brevi polls Linear for eligible t
 
 ## Redaction
 
-When the config is read back over the API or the WebSocket, `linear.apiKey`, `github.token`, all four `agent` credential fields, and `connect.linearClientSecret` are replaced with `"***"`. Empty strings stay empty so the dashboard can distinguish "not connected" from "connected".
+When the config is read back over the API or the WebSocket, `linear.apiKey`, `linear.refreshToken`, `github.token`, all four `agent` credential fields, and `connect.linearClientSecret` are replaced with `"***"`. Empty strings stay empty so the dashboard can distinguish "not connected" from "connected".

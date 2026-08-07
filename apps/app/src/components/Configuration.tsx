@@ -1,4 +1,4 @@
-import type { BreviConfig } from "@brevi/shared";
+import type { BreviConfig, LinearStatus } from "@brevi/shared";
 import type { ConfigSection } from "../lib/useOrchestrator";
 import { ConnectorsSection } from "./config/ConnectorsSection";
 import { RepositoriesSection } from "./config/RepositoriesSection";
@@ -17,11 +17,13 @@ const SECTIONS: { id: ConfigSection; label: string }[] = [
  */
 export function ConfigurationPage({
   config,
+  linearStatus,
   section,
   onSection,
   onConfig,
 }: {
   config: BreviConfig | null;
+  linearStatus: LinearStatus | null;
   section: ConfigSection;
   onSection: (section: ConfigSection) => void;
   onConfig: (config: BreviConfig) => void;
@@ -65,9 +67,11 @@ export function ConfigurationPage({
               (GitHub device polling, redirect or wrangler login waits) must
               survive a switch to another section, or the grant is lost. */}
           <div hidden={section !== "connectors"}>
-            <ConnectorsSection config={config} onConfig={onConfig} />
+            <ConnectorsSection config={config} linearStatus={linearStatus} onConfig={onConfig} />
           </div>
-          {section === "repositories" && <RepositoriesSection config={config} onConfig={onConfig} />}
+          {section === "repositories" && (
+            <RepositoriesSection config={config} linearStatus={linearStatus} onConfig={onConfig} />
+          )}
           {section === "sandbox" && <SandboxSection config={config} onConfig={onConfig} />}
         </>
       ) : (

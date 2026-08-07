@@ -225,18 +225,24 @@ Connect to `ws://localhost:4400/ws`. The server sends a `hello` immediately, the
 
 ```ts
 type ServerMessage =
-  | { type: "hello"; runs: Run[]; tickets: Ticket[]; config: BreviConfig }
+  | { type: "hello"; runs: Run[]; tickets: Ticket[]; config: BreviConfig; linearStatus: LinearStatus }
   | { type: "config"; config: BreviConfig }
   | { type: "tickets"; tickets: Ticket[] }
   | { type: "run-updated"; run: Run }
-  | { type: "run-event"; event: RunEvent };
+  | { type: "run-event"; event: RunEvent }
+  | { type: "linear-status"; linearStatus: LinearStatus };
+
+type LinearStatus = {
+  state: "disconnected" | "connected" | "auth-error" | "refresh-failing";
+  error?: string;
+};
 
 type ClientMessage =
   | { type: "subscribe"; runId: string }
   | { type: "unsubscribe"; runId: string };
 ```
 
-Every `config` payload is redacted. By default a client receives `run-event` messages for **all** runs; once it subscribes to at least one run id it receives events only for its subscriptions.
+Every `config` payload is redacted. By default a client receives `run-event` messages for **all** runs; once it subscribes to at least one run id it receives events only for its subscriptions. `linear-status` is pushed whenever the Linear connector's state changes, e.g. an OAuth token refresh failing, so the dashboard can show a Reconnect prompt without polling for it. `auth-error` means the stored credential is dead and polling is paused until a reconnect; `refresh-failing` means the expired token can't be refreshed for a transient reason (network, rate limit), polling is paused, and brevi retries by itself until a refresh succeeds.
 
 `RunEvent` is one of a status change, a log line (`stdout` / `stderr` / `system`), an `agent` event forwarded from the agent's `stream-json` output, an artifact reference, or a `cost` entry recording one agent execution's LLM usage. Events are also persisted as JSONL, which is what `GET /api/runs/:id/events` replays.
 
@@ -253,7 +259,10 @@ The local orchestrator calls it automatically when `connect.githubClientId` / `c
 | `POST` | `/oauth/github/device/token` | Poll that authorization for an access token |
 | `GET` | `/oauth/linear/authorize?state=&port=` | `302` to Linear's authorize URL with brevi's client id |
 | `POST` | `/oauth/linear/token` | Exchange `{ code, port }` for an access token, using the secret held server-side |
+| `POST` | `/oauth/linear/refresh` | Exchange `{ refresh_token }` for a fresh access token, using the secret held server-side |
 
 `/oauth/linear/authorize` builds the redirect back to `http://localhost:<port>/api/connect/linear/callback`, so the token exchange lands on your machine; `port` is your `server.port`. The `state` you pass through is the one the local orchestrator checks on the callback.
+
+Both `/oauth/linear/token` and `/oauth/linear/refresh` return `{ access_token, refresh_token?, expires_in? }`, forwarded from Linear's own response, so the orchestrator can store the refresh token and proactively refresh the access token before it expires. `/oauth/linear/refresh` returns `401` only when Linear rejects the grant itself (a revoked or invalid refresh token), passes a `429` rate limit through along with its `Retry-After` header, and returns `502` on other upstream failures, so clients can tell "reconnect required" apart from "try again later".
 
 Deploying your own copy needs three secrets (`GITHUB_CLIENT_ID`, `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`) and a Linear app registering `http://localhost:<port>/api/connect/linear/callback` redirect URIs for the ports you use.

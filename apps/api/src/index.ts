@@ -41,6 +41,7 @@ app.get("/", (c) =>
       "POST /oauth/github/device/token",
       "GET /oauth/linear/authorize?state=&port=",
       "POST /oauth/linear/token",
+      "POST /oauth/linear/refresh",
     ],
   }),
 );
@@ -112,9 +113,66 @@ app.post("/oauth/linear/token", async (c) => {
     }),
   });
   if (!res.ok) return c.json({ error: `Linear token exchange failed (${res.status})` }, 502);
-  const token = (await res.json()) as { access_token?: string };
+  const token = (await res.json()) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  };
   if (!token.access_token) return c.json({ error: "Linear returned no access token" }, 502);
-  return c.json({ access_token: token.access_token });
+  return c.json({
+    access_token: token.access_token,
+    ...(token.refresh_token !== undefined ? { refresh_token: token.refresh_token } : {}),
+    ...(token.expires_in !== undefined ? { expires_in: token.expires_in } : {}),
+  });
+});
+
+app.post("/oauth/linear/refresh", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { refresh_token?: string } | null;
+  if (!body?.refresh_token) return c.json({ error: "refresh_token is required" }, 400);
+  const res = await fetch("https://api.linear.app/oauth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: body.refresh_token,
+      client_id: c.env.LINEAR_CLIENT_ID,
+      client_secret: c.env.LINEAR_CLIENT_SECRET,
+    }),
+  });
+  if (!res.ok) {
+    const upstream = (await res.json().catch(() => null)) as {
+      error?: string;
+      error_description?: string;
+    } | null;
+    const detail = upstream?.error_description ?? upstream?.error;
+    const error = `Linear token refresh failed (${res.status}${detail ? `: ${detail}` : ""})`;
+    // Rate limiting is not a rejected grant: pass 429 (and Retry-After)
+    // through so the client backs off instead of asking the user to
+    // reconnect.
+    if (res.status === 429) {
+      const retryAfter = res.headers.get("Retry-After");
+      return c.json({ error }, 429, retryAfter ? { "Retry-After": retryAfter } : undefined);
+    }
+    // Only an explicit rejection of the grant (invalid_grant and friends,
+    // which Linear reports as 400/401/403) is permanent, meaning the client
+    // should stop retrying and ask the user to reconnect; anything else is
+    // transient and worth trying again later.
+    const status = res.status === 400 || res.status === 401 || res.status === 403 ? 401 : 502;
+    return c.json({ error }, status);
+  }
+  const token = (await res.json()) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  };
+  if (!token.access_token) {
+    return c.json({ error: "Linear token refresh failed (no access token)" }, 401);
+  }
+  return c.json({
+    access_token: token.access_token,
+    ...(token.refresh_token !== undefined ? { refresh_token: token.refresh_token } : {}),
+    ...(token.expires_in !== undefined ? { expires_in: token.expires_in } : {}),
+  });
 });
 
 export default app;

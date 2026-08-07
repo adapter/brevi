@@ -15,6 +15,7 @@ import {
   type DevicePollResponse,
   type GithubRepo,
   type LinearProject,
+  type LinearStatus,
   type R2ConnectResponse,
   type R2SettingsUpdateRequest,
   type R2SettingsUpdateResponse,
@@ -40,11 +41,14 @@ import {
   githubClientId,
   hostedApiReachable,
   linearOauthApp,
+  LinearRefreshError,
   pollGithubDeviceFlow,
+  refreshLinearToken,
   startGithubDeviceFlow,
   startLinearOauth,
   type GithubDeviceSession,
   type LinearOauthSession,
+  type LinearTokens,
 } from "./connect.js";
 import {
   validateAnthropicApiKey,
@@ -56,7 +60,7 @@ import {
 } from "./credentials.js";
 import { listRepos } from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
-import { LinearService } from "./linear.js";
+import { isLinearAuthError, LinearService, type LinearAuthHooks } from "./linear.js";
 import { checkWrangler, DEFAULT_EVIDENCE_BUCKET, provisionBucket, startWranglerLogin } from "./r2.js";
 import { buildResumeScript } from "./resume.js";
 import { collectAgentEnv, executeRun, playwrightBrowsersPath } from "./runner.js";
@@ -76,7 +80,34 @@ export class OrchestratorError extends Error {
 interface OrchestratorEvents {
   tickets: [Ticket[]];
   config: [BreviConfig];
+  "linear-status": [LinearStatus];
 }
+
+/**
+ * Refresh proactively this long before the recorded expiry so polling never
+ * runs into a dead token: fetchEligibleTickets shouldn't have to hit a 401
+ * just to learn a refresh was due.
+ */
+const LINEAR_REFRESH_MARGIN_MS = 5 * 60_000;
+
+/**
+ * Backoff between retries of a transiently failing token refresh (network,
+ * 5xx, rate limit): starts at the base, doubles per consecutive failure,
+ * caps at the max. A Retry-After from a 429 extends the wait when longer.
+ */
+const LINEAR_REFRESH_BACKOFF_BASE_MS = 60_000;
+const LINEAR_REFRESH_BACKOFF_MAX_MS = 15 * 60_000;
+
+/**
+ * Result of one attempt to refresh the stored Linear OAuth token. "stale"
+ * means the credential changed while the refresh was in flight and the
+ * response was discarded; the change's own connect/disconnect path is in
+ * charge now.
+ */
+type LinearRefreshOutcome =
+  | { ok: true }
+  | { ok: false; reason: "stale" }
+  | { ok: false; reason: "permanent" | "transient"; detail: string };
 
 /**
  * Ties everything together: polls Linear on an interval, auto-queues eligible
@@ -114,13 +145,39 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #linearOauth?: LinearOauthSession;
   /** In-flight `wrangler login`, so repeated Connect clicks don't spawn parallel logins. */
   #r2Login?: Promise<unknown>;
+  /** Set once the stored Linear credential is confirmed dead; polling is paused until a reconnect clears it. */
+  #linearAuthError?: string;
+  /** Set while the expired OAuth token can't be refreshed for a transient reason; polling is paused but retries on its own. */
+  #linearRefreshFailing?: string;
+  /** In-flight token refresh, so a proactive refresh and a reactive one triggered by a failed call never race. */
+  #linearRefresh?: Promise<LinearRefreshOutcome>;
+  /** Backoff between refresh attempts while the token endpoint keeps failing transiently. */
+  #linearRefreshBackoff?: { attempts: number; until: number; detail: string };
+  /**
+   * Bumped on every user-initiated Linear credential change (connect,
+   * reconnect, manual key, disconnect). A refresh captures it when it starts
+   * and discards its response when it no longer matches, so a stale response
+   * can never restore or overwrite a credential the user changed.
+   */
+  #linearGeneration = 0;
+  /** In-flight poll cycle; poll() piggybacks on it instead of overlapping. */
+  #polling?: Promise<void>;
+  /** A poll was requested while one was in flight; run one more cycle when it finishes. */
+  #pollAgain = false;
+  /** Tail of the config write chain; #persistConfig appends so writes never interleave. */
+  #configWrite: Promise<unknown> = Promise.resolve();
+  /** Recovery hooks handed to LinearService so every Linear call shares one refresh path. */
+  readonly #linearAuth: LinearAuthHooks = {
+    recover: () => this.#recoverLinearAuth(),
+    rejected: (detail) => this.#enterLinearAuthError(detail),
+  };
 
   constructor(config: BreviConfig, store: RunStore = new RunStore(), configPath?: string) {
     super();
     this.config = config;
     this.store = store;
     this.#configPath = configPath ?? CONFIG_PATH;
-    if (config.linear.apiKey) this.#linear = new LinearService(config);
+    if (config.linear.apiKey) this.#linear = new LinearService(config, this.#linearAuth);
   }
 
   get providerName(): string {
@@ -179,16 +236,83 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return this.#linear !== undefined;
   }
 
-  /** One poll cycle. Never throws; a bad poll must not take the server down. */
-  async poll(): Promise<void> {
+  /** Live state of the Linear connector, for the dashboard's Connectors page. */
+  get linearStatus(): LinearStatus {
+    if (!this.#linear) return { state: "disconnected" };
+    if (this.#linearAuthError) return { state: "auth-error", error: this.#linearAuthError };
+    if (this.#linearRefreshFailing) {
+      return { state: "refresh-failing", error: this.#linearRefreshFailing };
+    }
+    return { state: "connected" };
+  }
+
+  /**
+   * Poll for eligible tickets. Never throws; a bad poll must not take the
+   * server down. Single-flight: the interval timer, a reconnect, and a repo
+   * update can all ask for a poll while one is still running, and
+   * overlapping cycles would race on the connector state transitions. A
+   * request that lands mid-cycle runs one follow-up cycle instead of a
+   * parallel one, so a reconnect during a slow poll still gets its fresh
+   * poll.
+   */
+  poll(): Promise<void> {
+    if (this.#polling) {
+      this.#pollAgain = true;
+      return this.#polling;
+    }
+    this.#polling = (async () => {
+      do {
+        this.#pollAgain = false;
+        await this.#pollOnce();
+      } while (this.#pollAgain && !this.#stopped);
+    })().finally(() => {
+      this.#polling = undefined;
+    });
+    return this.#polling;
+  }
+
+  /** One poll cycle. */
+  async #pollOnce(): Promise<void> {
     if (this.#stopped) return;
     const linear = this.#linear;
     if (!linear) return; // Not connected yet; the dashboard's Connections panel starts us.
+    // A previous cycle already confirmed the stored credential is dead; wait
+    // for a reconnect from the dashboard instead of hammering Linear.
+    if (this.#linearAuthError) return;
+
+    if (this.#isLinearOauthToken()) {
+      const parsedExpiry = Date.parse(this.config.linear.tokenExpiresAt);
+      if (Number.isFinite(parsedExpiry) && parsedExpiry - Date.now() < LINEAR_REFRESH_MARGIN_MS) {
+        const outcome = await this.#refreshLinear();
+        if (!outcome.ok) {
+          if (outcome.reason === "stale") return;
+          if (outcome.reason === "permanent") {
+            this.#enterLinearAuthError(outcome.detail);
+            return;
+          }
+          // Transient: within the margin the old token may still work, so
+          // carry on and try refreshing again next cycle. Once it has
+          // actually expired every request would just 401; surface the
+          // paused state instead and wait for a refresh to succeed.
+          if (parsedExpiry <= Date.now()) {
+            this.#enterLinearRefreshFailing(outcome.detail);
+            return;
+          }
+        }
+      }
+    }
+
     let tickets: Ticket[];
     try {
       tickets = await linear.fetchEligibleTickets();
     } catch (error) {
-      console.error(`[brevi] linear poll failed: ${error instanceof Error ? error.message : String(error)}`);
+      // Auth failures were already handled inside the service's recovery
+      // wrapper (refresh, one retry, connector state transition and its
+      // single log line), so only ordinary transient failures are worth a
+      // line here.
+      if (!isLinearAuthError(error)) {
+        console.error(`[brevi] linear poll failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
       return;
     }
     this.#tickets = tickets;
@@ -253,6 +377,14 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     const [linear, github, anthropic, codex] = await Promise.all([
       apply(request.linearApiKey, validateLinearApiKey, (key) => {
         this.config.linear.apiKey = key;
+        // A manually pasted key (or a disconnect) replaces any OAuth grant;
+        // the stale refresh token/expiry would otherwise outlive the key
+        // they belonged to.
+        this.config.linear.refreshToken = "";
+        this.config.linear.tokenExpiresAt = "";
+        // Applied here rather than after the save: an in-flight refresh must
+        // see the generation bump before it can write stale tokens back.
+        this.#resetLinearConnection();
         linearChanged = true;
       }),
       apply(request.githubToken, validateGithubToken, (key) => {
@@ -276,11 +408,11 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
 
     const anyApplied = Object.values(results).some((r) => r.ok);
     if (anyApplied) {
-      await saveConfig(this.config, this.#configPath);
+      await this.#persistConfig();
       this.emit("config", redactConfig(this.config));
     }
     if (linearChanged) {
-      this.#linear = this.config.linear.apiKey ? new LinearService(this.config) : undefined;
+      this.emit("linear-status", this.linearStatus);
       if (this.#linear) {
         void this.poll();
       } else {
@@ -294,10 +426,13 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   /** Persist a credential mutation and hot-apply it. */
   async #saveCredential(set: () => void, linearChanged = false): Promise<void> {
     set();
-    await saveConfig(this.config, this.#configPath);
+    // Applied before the save so an in-flight refresh can't write a stale
+    // grant over the one just set.
+    if (linearChanged) this.#resetLinearConnection();
+    await this.#persistConfig();
     this.emit("config", redactConfig(this.config));
     if (linearChanged) {
-      this.#linear = this.config.linear.apiKey ? new LinearService(this.config) : undefined;
+      this.emit("linear-status", this.linearStatus);
       if (this.#linear) void this.poll();
     }
   }
@@ -465,11 +600,11 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     }
     this.#linearOauth = undefined;
     try {
-      const token = await exchangeLinearCode(session, code);
-      const result = await validateLinearApiKey(token);
+      const tokens = await exchangeLinearCode(session, code);
+      const result = await validateLinearApiKey(tokens.accessToken);
       if (!result.ok) return result;
       await this.#saveCredential(() => {
-        this.config.linear.apiKey = token;
+        this.#applyLinearTokens(tokens, { rotation: false });
       }, true);
       return result;
     } catch (error) {
@@ -517,7 +652,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
 
     this.config.repos = repos;
     this.config.defaultRepo = defaultRepo;
-    await saveConfig(this.config, this.#configPath);
+    await this.#persistConfig();
     this.emit("config", redactConfig(this.config));
     this.#warnedNoRepo.clear();
     void this.poll(); // Tickets may now resolve to a repo.
@@ -533,7 +668,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       throw new OrchestratorError("invalid", "sandbox concurrency must be an integer between 1 and 16");
     }
     this.config.sandbox.concurrency = concurrency;
-    await saveConfig(this.config, this.#configPath);
+    await this.#persistConfig();
     this.emit("config", redactConfig(this.config));
     // Raising the limit can start queued runs right away; lowering it only
     // affects new starts, already-running sandboxes finish out.
@@ -579,7 +714,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       }
       this.config.r2.bucket = provisioned.bucket;
       this.config.r2.publicBaseUrl = provisioned.publicBaseUrl;
-      await saveConfig(this.config, this.#configPath);
+      await this.#persistConfig();
       this.emit("config", redactConfig(this.config));
       return { status: "connected", r2: await this.r2Status() };
     }
@@ -614,7 +749,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     }
     if (bucket !== undefined) this.config.r2.bucket = bucket;
     if (publicBaseUrl !== undefined) this.config.r2.publicBaseUrl = publicBaseUrl;
-    await saveConfig(this.config, this.#configPath);
+    await this.#persistConfig();
     this.emit("config", redactConfig(this.config));
     return { config: redactConfig(this.config), r2: await this.r2Status() };
   }
@@ -810,6 +945,175 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #activeOrQueuedRun(ticketId: string): Run | undefined {
     // "waiting" counts: a run parked on a limit reset still owns its ticket.
     return this.store.runsForTicket(ticketId).find((run) => !isTerminal(run.status));
+  }
+
+  /** apiKey looks like an OAuth access token rather than a plain `lin_api_` personal key, which never expires. */
+  #isLinearOauthToken(): boolean {
+    const key = this.config.linear.apiKey;
+    return key !== "" && !key.startsWith("lin_api_");
+  }
+
+  /**
+   * Apply a fresh Linear token grant to config. On a rotation (a refresh) a
+   * response that omits refresh_token means Linear didn't issue a new one,
+   * so the existing one is kept; a fresh exchange always overwrites, since a
+   * leftover value from a previous connection would otherwise stick around.
+   */
+  #applyLinearTokens(tokens: LinearTokens, { rotation }: { rotation: boolean }): void {
+    this.config.linear.apiKey = tokens.accessToken;
+    this.config.linear.refreshToken = rotation
+      ? (tokens.refreshToken ?? this.config.linear.refreshToken)
+      : (tokens.refreshToken ?? "");
+    this.config.linear.tokenExpiresAt = tokens.expiresIn
+      ? new Date(Date.now() + tokens.expiresIn * 1000).toISOString()
+      : "";
+  }
+
+  /**
+   * Rebuild (or drop) the Linear client after a user-initiated credential
+   * change and invalidate everything tied to the previous credential: the
+   * generation bump makes any in-flight refresh discard its response, and
+   * the error and backoff states no longer apply either way.
+   */
+  #resetLinearConnection(): void {
+    this.#linearGeneration += 1;
+    this.#linearRefreshBackoff = undefined;
+    this.#linearAuthError = undefined;
+    this.#linearRefreshFailing = undefined;
+    this.#linear = this.config.linear.apiKey
+      ? new LinearService(this.config, this.#linearAuth)
+      : undefined;
+  }
+
+  /**
+   * Persist config through one chain so writes never interleave. config is
+   * shared by reference and serialized at write time, so the last chained
+   * write always matches the final in-memory state; without the chain a
+   * slow write from an older mutation (a token refresh) could land after a
+   * newer one (a disconnect) and revive credentials the user removed.
+   */
+  #persistConfig(): Promise<void> {
+    const write = this.#configWrite.then(() => saveConfig(this.config, this.#configPath));
+    // Keep the chain alive after a failed write; only the caller sees the error.
+    this.#configWrite = write.catch(() => undefined);
+    return write.then(() => undefined);
+  }
+
+  /** Pause polling on a dead Linear credential and tell the dashboard. Idempotent: repeat calls while already in the state say nothing. */
+  #enterLinearAuthError(detail: string): void {
+    if (this.#linearAuthError !== undefined) return;
+    this.#linearAuthError = detail;
+    this.#linearRefreshFailing = undefined;
+    console.error(
+      `[brevi] Linear authentication failed: ${detail}. Reconnect Linear from the dashboard's Connectors page; polling is paused until then.`,
+    );
+    this.emit("linear-status", this.linearStatus);
+  }
+
+  /**
+   * The expired token can't be refreshed right now for a retryable reason
+   * (network, 5xx, rate limit): pause polling, say so once, and keep
+   * retrying on the refresh backoff. Idempotent like the auth-error
+   * transition, and a no-op once the credential is confirmed dead.
+   */
+  #enterLinearRefreshFailing(detail: string): void {
+    if (this.#linearAuthError !== undefined || this.#linearRefreshFailing !== undefined) return;
+    this.#linearRefreshFailing = detail;
+    console.error(
+      `[brevi] Linear token refresh failed: ${detail}. Retrying automatically; polling is paused until a refresh succeeds.`,
+    );
+    this.emit("linear-status", this.linearStatus);
+  }
+
+  /** A refresh succeeded: leave the paused state and let polling pick back up. */
+  #clearLinearRefreshFailing(): void {
+    if (this.#linearRefreshFailing === undefined) return;
+    this.#linearRefreshFailing = undefined;
+    console.log("[brevi] Linear token refresh succeeded; polling resumed.");
+    this.emit("linear-status", this.linearStatus);
+  }
+
+  /**
+   * Reactive recovery, called by LinearService when any call fails
+   * authentication: try a refresh and report whether retrying the call is
+   * worthwhile. All connector state transitions happen here, so poll() and
+   * one-off calls (the dashboard's project list, a run posting its comment)
+   * behave identically.
+   */
+  async #recoverLinearAuth(): Promise<boolean> {
+    if (this.#linearAuthError !== undefined) return false;
+    const outcome = await this.#refreshLinear();
+    if (outcome.ok) return true;
+    if (outcome.reason === "stale") return false;
+    if (outcome.reason === "permanent") {
+      this.#enterLinearAuthError(outcome.detail);
+      return false;
+    }
+    this.#enterLinearRefreshFailing(outcome.detail);
+    return false;
+  }
+
+  /**
+   * Refresh the stored Linear OAuth token. Concurrent callers (a proactive
+   * refresh from the poll's expiry check and reactive ones from failed
+   * calls) share one in-flight attempt, and a transient failure arms a
+   * backoff (honoring Retry-After) during which further attempts fail fast
+   * without hitting the network. The response is applied and persisted only
+   * while the credential is still the one the refresh started from; a
+   * connect, disconnect, or manual key mid-flight makes it stale and it is
+   * discarded. LinearService picks up the new key on its own the next time
+   * it's used, since config is shared by reference.
+   */
+  #refreshLinear(): Promise<LinearRefreshOutcome> {
+    if (this.#linearRefresh) return this.#linearRefresh;
+    const backoff = this.#linearRefreshBackoff;
+    if (backoff && Date.now() < backoff.until) {
+      return Promise.resolve({ ok: false, reason: "transient", detail: backoff.detail });
+    }
+    this.#linearRefresh = (async (): Promise<LinearRefreshOutcome> => {
+      const generation = this.#linearGeneration;
+      const refreshToken = this.config.linear.refreshToken;
+      if (!refreshToken) {
+        return {
+          ok: false,
+          reason: "permanent",
+          detail: "the Linear token was rejected and no refresh token is stored",
+        };
+      }
+      const app = linearOauthApp(this.config);
+      const source = app ? { app } : { apiBase: this.config.connect.apiBase };
+      try {
+        const tokens = await refreshLinearToken(source, refreshToken);
+        if (
+          generation !== this.#linearGeneration ||
+          this.config.linear.refreshToken !== refreshToken
+        ) {
+          return { ok: false, reason: "stale" };
+        }
+        this.#applyLinearTokens(tokens, { rotation: true });
+        this.#linearRefreshBackoff = undefined;
+        this.#clearLinearRefreshFailing();
+        await this.#persistConfig();
+        this.emit("config", redactConfig(this.config));
+        return { ok: true };
+      } catch (error) {
+        if (generation !== this.#linearGeneration) return { ok: false, reason: "stale" };
+        if (error instanceof LinearRefreshError && error.permanent) {
+          return { ok: false, reason: "permanent", detail: error.message };
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        const attempts = (this.#linearRefreshBackoff?.attempts ?? 0) + 1;
+        const wait = Math.max(
+          Math.min(LINEAR_REFRESH_BACKOFF_BASE_MS * 2 ** (attempts - 1), LINEAR_REFRESH_BACKOFF_MAX_MS),
+          (error instanceof LinearRefreshError ? error.retryAfterMs : undefined) ?? 0,
+        );
+        this.#linearRefreshBackoff = { attempts, until: Date.now() + wait, detail };
+        return { ok: false, reason: "transient", detail };
+      }
+    })().finally(() => {
+      this.#linearRefresh = undefined;
+    });
+    return this.#linearRefresh;
   }
 
   /** Put a run back in the queue for its next attempt. */

@@ -10,7 +10,8 @@ brevi's hosted OAuth backend, a [Hono](https://hono.dev) app on Cloudflare Worke
 | `POST /oauth/github/device/code` | Start a GitHub device authorization with brevi's client id |
 | `POST /oauth/github/device/token` | Poll it (`{device_code}` → token or GitHub's pending/error fields) |
 | `GET /oauth/linear/authorize?state=&port=` | 302 to Linear's consent page; redirects back to `http://localhost:<port>/api/connect/linear/callback` |
-| `POST /oauth/linear/token` | `{code, port}` → `{access_token}`; the client secret never leaves the worker |
+| `POST /oauth/linear/token` | `{code, port}` → `{access_token, refresh_token?, expires_in?}`; the client secret never leaves the worker |
+| `POST /oauth/linear/refresh` | `{refresh_token}` → `{access_token, refresh_token?, expires_in?}`; used to refresh an expired OAuth access token |
 
 ## One-time setup
 

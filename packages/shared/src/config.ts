@@ -49,6 +49,17 @@ export const configSchema = z.object({
     .object({
       /** Empty = not connected yet; set via the dashboard's Connections panel. */
       apiKey: z.string().default(""),
+      /**
+       * OAuth refresh token captured by the Connect flow; empty for plain
+       * `lin_api_` keys. Defaulted so older config files keep parsing.
+       */
+      refreshToken: z.string().default(""),
+      /**
+       * ISO timestamp the OAuth access token expires at; empty when unknown
+       * or when the key never expires. Defaulted so older config files keep
+       * parsing.
+       */
+      tokenExpiresAt: z.string().default(""),
       /** Restrict polling to these team keys (e.g. ["ENG"]). Empty = all teams. */
       teamKeys: z.array(z.string()).default([]),
     })
@@ -214,7 +225,11 @@ function mask(secret: string): string {
 export function redactConfig(config: BreviConfig): BreviConfig {
   return {
     ...config,
-    linear: { ...config.linear, apiKey: mask(config.linear.apiKey) },
+    linear: {
+      ...config.linear,
+      apiKey: mask(config.linear.apiKey),
+      refreshToken: mask(config.linear.refreshToken),
+    },
     github: { ...config.github, token: mask(config.github.token) },
     agent: {
       ...config.agent,
