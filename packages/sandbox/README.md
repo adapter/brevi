@@ -119,7 +119,8 @@ sudo packages/sandbox/scripts/build-rootfs.sh --with-kernel
 ```
 
 Builds a ~2 GB ext4 image at `~/.brevi/images/rootfs.ext4` containing node 22, git, curl,
-tar, ripgrep, both agent CLIs (`@anthropic-ai/claude-code` and `@openai/codex`), and an
+tar, ripgrep, both agent CLIs (`@anthropic-ai/claude-code` and `@openai/codex`), `ccusage`
+(used by the orchestrator for live cost capture from the Claude Code transcripts), and an
 sshd whose `authorized_keys` holds the public half of `~/.brevi/images/id_ed25519`
 (generated on first run). Needs docker and root. Regenerating the key means rebuilding the
 image.

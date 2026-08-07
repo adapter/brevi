@@ -72,6 +72,22 @@ export interface ArtifactRef {
 }
 
 /**
+ * One model's share of an execution's usage, measured from the agent's
+ * transcripts (ccusage) rather than the output stream. An execution that
+ * spans several models (orchestrator loop, implementer subagent) gets one
+ * row per model; the owning entry's top-level figures are the roll-up.
+ */
+export interface CostModelUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  /** Absent when only tokens are known. */
+  costUsd?: number;
+}
+
+/**
  * LLM usage and cost of one agent execution within a run. Generic over
  * providers and phases: a run is N executions (attempts today, more phases or
  * subagents later), and the run's total is the sum over its entries.
@@ -90,6 +106,12 @@ export interface CostEntry {
   costUsd?: number;
   /** True when computed from a pricing table (or modeled on a subscription login) instead of reported by the provider. */
   estimated?: boolean;
+  /**
+   * Per-model rows behind the roll-up figures above, when a transcript-level
+   * measure (ccusage) captured them. Absent for stream-parsed entries (Codex,
+   * sandboxes without ccusage), which stay single-model.
+   */
+  breakdown?: CostModelUsage[];
 }
 
 /** Derived sums over a run's cost entries. */

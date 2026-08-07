@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { execa, type Result as ExecaResult } from "execa";
 import { BREVI_HOME, WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type LimitInfo, type RepoConfig, type RunResult, type Ticket } from "@brevi/shared";
 import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
+import { ccusageCostEntry, resolveCcusageCommand, startCcusageSampler, type CcusageSampler } from "./ccusage.js";
 import { usageCollector } from "./costs.js";
 import { authenticatedRemote, createPullRequest, plainRemote } from "./github.js";
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
@@ -60,6 +62,9 @@ export async function executeRun(ctx: RunContext): Promise<void> {
   // usage on paths that never reach the post-exec snapshot in runAgent
   // (cancellation, a sandbox that dies mid-exec).
   let recordPendingCost = async (): Promise<void> => {};
+  // The live ccusage sampler for the execution currently in flight, when one
+  // was started; recordPendingCost always stops and clears it.
+  let activeSampler: CcusageSampler | undefined;
 
   const attempt = await store.beginAttempt(run.id);
   try {
@@ -113,6 +118,13 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       await sandbox.exec("mkdir", ["-p", codexHome]);
       await sandbox.writeFile(`${codexHome}/auth.json`, config.agent.codexAuthJson);
     }
+    // Codex has no equivalent transcript reader, so live sampling only ever
+    // applies to Claude executions; a Codex run resolves and starts nothing.
+    const claude = agentProvider(config) === "claude";
+    const ccusageCommand = claude ? await resolveCcusageCommand(sandbox, provider.name, signal) : undefined;
+    if (claude && !ccusageCommand) {
+      log("system", "ccusage not available in the sandbox; live cost sampling disabled");
+    }
     try {
       await linear.moveToStarted(ticket.id);
     } catch (error) {
@@ -126,6 +138,11 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "thinking", phase, durationMs });
     });
     let usage = usageCollector();
+    // The current execution's Claude session id, captured from the stream's
+    // init event; the ccusage sampler filters on it to scope its readings to
+    // exactly this execution. Reset per execution in runAgent since each one
+    // is a fresh Claude session.
+    let currentSessionId: string | undefined;
     const stdoutSink = lineSink((line) => {
       let event: unknown;
       try {
@@ -143,6 +160,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       // --resume` needs to reattach later; persisted best-effort so a slow
       // store write never holds up log processing.
       if (isDict(event) && event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
+        currentSessionId = event.session_id;
         void store.update(run.id, { agentSessionId: event.session_id }).catch(() => undefined);
       }
       if (isDict(event) && event.type === "stream_event") {
@@ -162,16 +180,54 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     });
 
     let pendingCostLabel: string | undefined;
+    // Stable identity for the in-flight execution's cost entry: interim
+    // samples upsert under it and the final entry replaces them by it, so
+    // entries from other executions (earlier attempts reusing a label) are
+    // never touched.
+    let pendingCostId: string | undefined;
     recordPendingCost = async () => {
-      if (!pendingCostLabel) return;
+      // A sampler must never keep running (or emit) once its execution is
+      // done being recorded, even on the early-return path below.
+      const sampler = activeSampler;
+      activeSampler = undefined;
+      if (!pendingCostLabel) {
+        sampler?.stop();
+        return;
+      }
       const label = pendingCostLabel;
+      const executionId = pendingCostId;
       pendingCostLabel = undefined;
+      pendingCostId = undefined;
       stdoutSink.flush();
       stderrSink.flush();
       const provider = agentProvider(config);
       const subscription = provider === "claude" ? !config.agent.anthropicApiKey : !config.agent.codexApiKey;
-      const entry = usage.snapshot({ label, provider, subscription });
-      if (entry) await store.addCost(run.id, entry);
+      const streamEntry = usage.snapshot({ label, provider, subscription });
+
+      // ccusage reads the transcript directly, so when a final sample lands it
+      // replaces both the interim samples upserted during the run and the
+      // stream-parsed figure above, rather than being blended with it.
+      let entry = streamEntry;
+      if (sampler) {
+        sampler.stop();
+        const rows = await sampler.finalRead();
+        if (rows && rows.length > 0) {
+          const ccusageEntry = ccusageCostEntry({ label, rows, subscription, fallbackModel: streamEntry?.model });
+          if (streamEntry?.costUsd !== undefined && ccusageEntry.costUsd !== undefined) {
+            const larger = Math.max(ccusageEntry.costUsd, streamEntry.costUsd);
+            const diff = Math.abs(ccusageEntry.costUsd - streamEntry.costUsd);
+            // A cross-check, not a correction: the ccusage figure always wins below.
+            if (larger > 0 && diff / larger > 0.25) {
+              log(
+                "system",
+                `cost cross-check: ccusage $${ccusageEntry.costUsd.toFixed(2)} vs stream $${streamEntry.costUsd.toFixed(2)} for ${label}`,
+              );
+            }
+          }
+          entry = ccusageEntry;
+        }
+      }
+      if (entry) await store.addCost(run.id, entry, executionId);
       usage = usageCollector();
     };
 
@@ -198,6 +254,25 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       // Labeled before the racing await so an abort still knows which
       // execution's usage to persist.
       pendingCostLabel = attempt.number > 1 ? `${label} (attempt ${attempt.number})` : label;
+      pendingCostId = randomUUID();
+      // Each execution is a fresh Claude session; the sampler below waits for
+      // this to be set again by the init event before it starts filtering.
+      currentSessionId = undefined;
+      if (ccusageCommand) {
+        const sampleLabel = pendingCostLabel;
+        const executionId = pendingCostId;
+        const subscription = !config.agent.anthropicApiKey;
+        activeSampler = startCcusageSampler({
+          sandbox: activeSandbox,
+          command: ccusageCommand,
+          getSessionId: () => currentSessionId,
+          signal,
+          onSample: (rows) => {
+            const entry = ccusageCostEntry({ label: sampleLabel, rows, subscription, fallbackModel: undefined });
+            void store.upsertCost(run.id, executionId, entry).catch(() => undefined);
+          },
+        });
+      }
       // The signal terminates the agent subprocess on cancellation and exec
       // resolves once it is gone, so awaiting it (rather than racing past it)
       // guarantees nothing is still running when the sandbox is destroyed.
@@ -224,7 +299,6 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     // cheaper implementModel, at the configured orchestratorEffort. An
     // explicit `model` opts out of delegation, and Codex agents keep their
     // plain single-model flow with no effort flag.
-    const claude = agentProvider(config) === "claude";
     const mainModel = config.agent.model || (claude ? config.agent.orchestratorModel : undefined);
     const mainEffort = claude ? config.agent.orchestratorEffort : undefined;
     const delegate = claude && !config.agent.model;
@@ -250,7 +324,13 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         signal,
         codexHome,
         log,
-        addCost: (entry) => store.addCost(run.id, entry),
+        // Same attempt suffix runAgent puts on its labels, so a retried
+        // attempt's review entries are distinguishable from the first's.
+        addCost: (entry) =>
+          store.addCost(
+            run.id,
+            attempt.number > 1 ? { ...entry, label: `${entry.label} (attempt ${attempt.number})` } : entry,
+          ),
       });
       if (findings) {
         await runAgent(

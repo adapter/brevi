@@ -1,5 +1,5 @@
 import type { CostEntry, CostTotals } from "@brevi/shared";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { badgeVariants } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -103,23 +103,44 @@ function CostBreakdown({ entries, totals }: { entries: CostEntry[]; totals: Cost
         </thead>
         <tbody>
           {entries.map((entry, i) => (
-            <tr key={i} className="border-t border-background/15">
-              <td className="max-w-32 px-1.5 py-1 text-left align-top">
-                <div className="truncate">{entry.label}</div>
-                <div className="truncate text-background/50">
-                  {entry.provider}
-                  {entry.model ? ` · ${shortenModel(entry.model)}` : ""}
-                </div>
-              </td>
-              <td className="px-1.5 py-1 text-right align-top">{tokens(entry.inputTokens)}</td>
-              <td className="px-1.5 py-1 text-right align-top">{tokens(entry.outputTokens)}</td>
-              <td className="px-1.5 py-1 text-right align-top">
-                {cacheCell(entry.cacheReadTokens, entry.cacheWriteTokens)}
-              </td>
-              <td className="px-1.5 py-1 text-right align-top">
-                {entry.costUsd !== undefined ? `${entry.estimated ? "~" : ""}${usd(entry.costUsd)}` : "-"}
-              </td>
-            </tr>
+            <Fragment key={i}>
+              <tr className="border-t border-background/15">
+                <td className="max-w-32 px-1.5 py-1 text-left align-top">
+                  <div className="truncate">{entry.label}</div>
+                  <div className="truncate text-background/50">
+                    {entry.provider}
+                    {entry.breakdown && entry.breakdown.length > 1
+                      ? ` · ${entry.breakdown.length} models`
+                      : entry.model
+                        ? ` · ${shortenModel(entry.model)}`
+                        : ""}
+                  </div>
+                </td>
+                <td className="px-1.5 py-1 text-right align-top">{tokens(entry.inputTokens)}</td>
+                <td className="px-1.5 py-1 text-right align-top">{tokens(entry.outputTokens)}</td>
+                <td className="px-1.5 py-1 text-right align-top">
+                  {cacheCell(entry.cacheReadTokens, entry.cacheWriteTokens)}
+                </td>
+                <td className="px-1.5 py-1 text-right align-top">
+                  {entry.costUsd !== undefined ? `${entry.estimated ? "~" : ""}${usd(entry.costUsd)}` : "-"}
+                </td>
+              </tr>
+              {entry.breakdown?.map((model) => (
+                <tr key={`${i}-${model.model}`} className="border-t border-background/8 text-background/70">
+                  <td className="max-w-32 py-0.5 pr-1.5 pl-4 text-left align-top">
+                    <div className="truncate text-background/60">{shortenModel(model.model)}</div>
+                  </td>
+                  <td className="px-1.5 py-0.5 text-right align-top">{tokens(model.inputTokens)}</td>
+                  <td className="px-1.5 py-0.5 text-right align-top">{tokens(model.outputTokens)}</td>
+                  <td className="px-1.5 py-0.5 text-right align-top">
+                    {cacheCell(model.cacheReadTokens, model.cacheWriteTokens)}
+                  </td>
+                  <td className="px-1.5 py-0.5 text-right align-top">
+                    {model.costUsd !== undefined ? `${entry.estimated ? "~" : ""}${usd(model.costUsd)}` : "-"}
+                  </td>
+                </tr>
+              ))}
+            </Fragment>
           ))}
         </tbody>
         {totals && (

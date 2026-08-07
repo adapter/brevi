@@ -167,6 +167,8 @@ Without a Codex credential the review is likewise skipped cleanly and the run be
 
 Under the Firecracker provider, the review runs the Codex CLI inside the sandbox, so existing rootfs images need a rebuild with `packages/sandbox/scripts/build-rootfs.sh` before the review can run; under the process provider the host's `codex` binary is used directly.
 
+Live per-model cost sampling during Claude runs likewise needs `ccusage` in the rootfs image under the Firecracker provider: images built before it was added need the same rebuild with `packages/sandbox/scripts/build-rootfs.sh`. Without it, runs still work and cost falls back to today's end-of-run, stream-parsed behavior.
+
 At least one of the four credential fields (`anthropicApiKey`, `claudeCodeOauthToken`, `codexApiKey`, `codexAuthJson`) must be set or every run fails at startup with `no agent credentials configured`. Populate them from the dashboard's Configuration page rather than by hand; the dashboard verifies keys before saving.
 
 ## `sandbox`
@@ -185,7 +187,7 @@ At least one of the four credential fields (`anthropicApiKey`, `claudeCodeOauthT
 | --- | --- | --- | --- |
 | `binary` | string | `"firecracker"` | Resolved on `PATH` unless it's an absolute path. |
 | `kernelImage` | string | `~/.brevi/images/vmlinux` | Uncompressed Linux kernel. |
-| `rootfs` | string | `~/.brevi/images/rootfs.ext4` | Ext4 image with node, git, and both agent CLIs (`@anthropic-ai/claude-code`, `@openai/codex`) preinstalled. |
+| `rootfs` | string | `~/.brevi/images/rootfs.ext4` | Ext4 image with node, git, both agent CLIs (`@anthropic-ai/claude-code`, `@openai/codex`), and `ccusage` preinstalled. |
 | `vcpus` | integer ≥ 1 | `2` | vCPUs per microVM. |
 | `memMib` | integer ≥ 512 | `4096` | Memory per microVM, in MiB. |
 
