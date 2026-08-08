@@ -1,10 +1,11 @@
-import type { LimitInfo, Run, RunEvent } from "@brevi/shared";
+import type { LimitInfo, PrStatusResponse, Run, RunEvent } from "@brevi/shared";
 import { summarizeCosts } from "@brevi/shared/types";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { api } from "../lib/api";
 import { clock, duration, elapsed } from "../lib/format";
 import { isActive, isTerminal } from "../lib/status";
 import { Artifacts } from "./Artifacts";
@@ -12,7 +13,7 @@ import { AttachTerminal } from "./AttachTerminal";
 import { Plate, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { CostBadge, CostBreakdown } from "./CostBadge";
-import { External, Play, Stop } from "./Icons";
+import { External, Play, Refresh, Stop } from "./Icons";
 import { ResultCard } from "./ResultCard";
 
 export function RunDetail({
@@ -23,6 +24,7 @@ export function RunDetail({
   busy,
   onCancel,
   onRetry,
+  onFollowUp,
 }: {
   run: Run;
   /** owner/name of the mapped repo, resolved from config. */
@@ -32,6 +34,7 @@ export function RunDetail({
   busy: boolean;
   onCancel: () => void;
   onRetry: () => void;
+  onFollowUp: () => void | Promise<void>;
 }) {
   const live = isActive(run.status);
   const hasOutcome = isTerminal(run.status) || Boolean(run.result || run.error);
@@ -40,6 +43,44 @@ export function RunDetail({
   const retainedMs = run.sandbox.retainedUntil ? Date.parse(run.sandbox.retainedUntil) : Number.NaN;
   const sandboxRetained = retainedMs > now;
   const resumable = finished && sandboxRetained && Boolean(run.agentSessionId);
+  // A retry clears run.result, so an active run still carrying its PR result is a follow-up in flight.
+  const followUpInFlight = live && Boolean(run.result?.prUrl);
+  const followUpReady = run.status === "completed" && Boolean(run.result?.prUrl);
+  const [prState, setPrState] = useState<"unknown" | "open" | "merged" | "closed">("unknown");
+  const [probeTick, setProbeTick] = useState(0);
+  // Switching runs hides the button until the probe below confirms the new
+  // run's PR is open again.
+  useEffect(() => {
+    setPrState("unknown");
+  }, [run.id]);
+  // Poll while the button might be relevant, so a PR merged or closed while
+  // the run is on screen loses its button within half a minute.
+  useEffect(() => {
+    if (!followUpReady) return;
+    let cancelled = false;
+    const probe = () => {
+      api
+        .prStatus(run.id)
+        .then((status: PrStatusResponse) => {
+          if (!cancelled) setPrState(status.state);
+        })
+        .catch(() => {
+          // keep the last known state; the interval retries
+        });
+    };
+    probe();
+    const interval = setInterval(probe, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [run.id, followUpReady, probeTick]);
+  // The button renders only once GitHub confirms the PR is open; the server
+  // still enforces the real gating (409 when the PR turns out merged/closed).
+  const showFollowUp = (followUpReady && prState === "open") || followUpInFlight;
+  // Covers the gap between the click's POST and the active run snapshot
+  // arriving, so the slow GitHub preflight still shows a spinner.
+  const followUpPending = busy || followUpInFlight;
   const [tab, setTab] = useState<LeftTab>(hasOutcome ? "result" : "console");
   const [terminalStarted, setTerminalStarted] = useState(false);
   // Selecting a different run resets the view, and the outcome drives it while
@@ -84,7 +125,25 @@ export function RunDetail({
               {run.ticket.state}
             </span>
           </Badge>
-          {(live || retryable) && <span aria-hidden className="h-4 w-px shrink-0 bg-ink-700" />}
+          {(live || retryable || showFollowUp) && (
+            <span aria-hidden className="h-4 w-px shrink-0 bg-ink-700" />
+          )}
+          {/* Coexists with Cancel while a follow-up is running (live): the user
+              can watch the spinner state or cancel it like any other attempt. */}
+          {showFollowUp && (
+            <Button
+              variant="outline"
+              size="plate"
+              onClick={() => {
+                void Promise.resolve(onFollowUp()).finally(() => setProbeTick((t) => t + 1));
+              }}
+              disabled={followUpPending}
+              title="Rebase the PR onto its base branch and address review feedback"
+            >
+              <Refresh className={`size-3 ${followUpPending ? "animate-spin" : ""}`} />
+              {followUpPending ? "Taking another look" : "Take another look"}
+            </Button>
+          )}
           {live && (
             <Button variant="destructive" size="plate" onClick={onCancel} disabled={busy}>
               <Stop className="size-3" />

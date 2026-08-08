@@ -17,6 +17,14 @@ import type { FirecrackerVmSize } from "./sizes.js";
  *   POST /api/runs/:id/retry             -> Run
  *        Start a new attempt of a failed, cancelled, or waiting run. A waiting
  *        run resumes immediately instead of waiting for its limit to lift.
+ *   POST /api/runs/:id/followup          -> Run
+ *        Start a follow-up on a completed run's open PR: rebase onto the
+ *        latest base, address review feedback, push with force-with-lease,
+ *        and post a summary comment. 409 while another execution is active or
+ *        when the PR is merged/closed.
+ *   GET  /api/runs/:id/pr                -> PrStatusResponse
+ *        Open/merged/closed state of the run's PR, for the dashboard's
+ *        follow-up button.
  *   POST /api/runs/:id/resume            -> ResumeRunResponse
  *        Boot the run's retained sandbox back up (when needed) and prepare an
  *        interactive `claude --resume` session inside it; `brevi attach` calls
@@ -256,6 +264,13 @@ export interface ReposUpdateRequest {
 export interface ReposUpdateResponse {
   /** Redacted config after the update. */
   config: BreviConfig;
+}
+
+/** Live state of the pull request a completed run opened, probed from GitHub on demand. */
+export interface PrStatusResponse {
+  url: string;
+  number: number;
+  state: "open" | "merged" | "closed";
 }
 
 /** How `brevi attach` opens the interactive session a resume prepared. */

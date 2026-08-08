@@ -16,7 +16,7 @@ import { isContainedRegularFile, isSafePathSegment, resolveWithin } from "./safe
 import { isTerminal, type RunStore } from "./state.js";
 import { lineSink, RunCancelledError, throwIfAborted } from "./util.js";
 
-const BREVI_FOOTER = "🤖 Automated by [brevi]";
+export const BREVI_FOOTER = "🤖 Automated by [brevi]";
 
 export { RunCancelledError } from "./util.js";
 
@@ -25,8 +25,256 @@ export interface RunContext {
   config: BreviConfig;
   store: RunStore;
   provider: SandboxProvider;
-  linear: LinearService;
+  /** Required for implementation runs; follow-ups never touch Linear and run without it. */
+  linear?: LinearService;
   signal: AbortSignal;
+}
+
+export interface AgentSessionOptions {
+  runId: string;
+  store: RunStore;
+  config: BreviConfig;
+  sandbox: Sandbox;
+  signal: AbortSignal;
+  /** CODEX_HOME dir inside the workspace, when a Codex ChatGPT login is mounted. */
+  codexHome?: string;
+  /** Resolved ccusage invocation for live cost sampling, when available. */
+  ccusageCommand?: string;
+  /** Decorates cost labels, e.g. appending " (attempt 2)". Defaults to identity. */
+  labelFor?: (label: string) => string;
+}
+
+export interface AgentSession {
+  log(stream: "stdout" | "stderr" | "system", text: string): void;
+  /** Scan a line of agent output for a usage-limit message. */
+  noteLimit(line: string): void;
+  /** The usage limit detected so far, if any. */
+  detectedLimit(): LimitInfo | undefined;
+  runAgent(
+    prompt: string,
+    model: string | undefined,
+    effort: string | undefined,
+    label: string,
+    extraArgs?: string[],
+  ): Promise<void>;
+  /** Persist an in-flight execution's usage; safe to call when nothing is pending. */
+  recordPendingCost(): Promise<void>;
+}
+
+/**
+ * Builds the per-execution agent harness shared by every `runAgent` call in a
+ * run: usage-limit detection, thinking-block events, live/final cost
+ * recording, and the stream-json sink that turns agent output into stored
+ * events.
+ */
+export function createAgentSession(options: AgentSessionOptions): AgentSession {
+  const { runId, store, config, sandbox, signal, codexHome, ccusageCommand } = options;
+  const labelFor = options.labelFor ?? ((label: string) => label);
+
+  const log = (stream: "stdout" | "stderr" | "system", text: string): void => {
+    store.appendEvent({ runId, ts: new Date().toISOString(), type: "log", stream, text });
+  };
+
+  const limitProvider = agentProvider(config);
+  let detectedLimit: LimitInfo | undefined;
+  const noteLimit = (line: string): void => {
+    detectedLimit = detectLimit(line, limitProvider) ?? detectedLimit;
+  };
+
+  const trackThinking = thinkingTracker((phase, durationMs) => {
+    store.appendEvent({ runId, ts: new Date().toISOString(), type: "thinking", phase, durationMs });
+  });
+  let usage = usageCollector(limitProvider);
+  // The current execution's Claude session id, captured from the stream's
+  // init event; the ccusage sampler filters on it to scope its readings to
+  // exactly this execution. Reset per execution in runAgent since each one
+  // is a fresh Claude session.
+  let currentSessionId: string | undefined;
+  const stdoutSink = lineSink((line) => {
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      noteLimit(line);
+      log("stdout", line);
+      return;
+    }
+    // Observed before the stream_event/noise filtering below: token_count
+    // and result events must reach the collector even though most other
+    // event types are dropped from the persisted log.
+    usage.observe(event);
+    // The Claude stream's init event carries the session id that `claude
+    // --resume` needs to reattach later; persisted best-effort so a slow
+    // store write never holds up log processing.
+    if (isDict(event) && event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
+      currentSessionId = event.session_id;
+      void store.update(runId, { agentSessionId: event.session_id }).catch(() => undefined);
+    }
+    if (isDict(event) && event.type === "stream_event") {
+      // Subagent streams (parent_tool_use_id set) carry their own thinking
+      // block boundaries; only the top-level assistant stream drives the
+      // spinner, or one visible thinking spell would log several durations.
+      if (!event.parent_tool_use_id) trackThinking(event.event);
+      return;
+    }
+    if (isDict(event) && event.type === "system" && typeof event.subtype === "string" && NOISE_EVENT_SUBTYPES.has(event.subtype)) return;
+    if (isAgentFailureEvent(event)) noteLimit(line);
+    store.appendEvent({ runId, ts: new Date().toISOString(), type: "agent", event });
+  });
+  const stderrSink = lineSink((line) => {
+    noteLimit(line);
+    log("stderr", line);
+  });
+
+  let pendingCostLabel: string | undefined;
+  // Stable identity for the in-flight execution's cost entry: interim
+  // samples upsert under it and the final entry replaces them by it, so
+  // entries from other executions (earlier attempts reusing a label) are
+  // never touched.
+  let pendingCostId: string | undefined;
+  // The model the in-flight execution was configured with, kept so every
+  // snapshot path (post-exec, cancellation, usage limit) can still name and
+  // price the entry when the stream never carried a model id (Codex's new
+  // event format never does).
+  let pendingCostModel: string | undefined;
+  // The live ccusage sampler for the execution currently in flight, when one
+  // was started; recordPendingCost always stops and clears it.
+  let activeSampler: CcusageSampler | undefined;
+  // Persists an in-flight execution's usage on paths that never reach the
+  // post-exec snapshot in runAgent (cancellation, a sandbox that dies
+  // mid-exec).
+  const recordPendingCost = async (): Promise<void> => {
+    // A sampler must never keep running (or emit) once its execution is
+    // done being recorded, even on the early-return path below.
+    const sampler = activeSampler;
+    activeSampler = undefined;
+    if (!pendingCostLabel) {
+      sampler?.stop();
+      return;
+    }
+    const label = pendingCostLabel;
+    const executionId = pendingCostId;
+    const executionModel = pendingCostModel;
+    pendingCostLabel = undefined;
+    pendingCostId = undefined;
+    pendingCostModel = undefined;
+    stdoutSink.flush();
+    stderrSink.flush();
+    const subscription = limitProvider === "claude" ? !config.agent.anthropicApiKey : !config.agent.codexApiKey;
+    const streamEntry = usage.snapshot({ label, subscription, fallbackModel: executionModel });
+
+    // ccusage reads the transcript directly, so when a final sample lands it
+    // replaces both the interim samples upserted during the run and the
+    // stream-parsed figure above, rather than being blended with it.
+    let entry = streamEntry;
+    if (sampler) {
+      sampler.stop();
+      const rows = await sampler.finalRead();
+      if (rows && rows.length > 0) {
+        const ccusageEntry = ccusageCostEntry({ label, rows, subscription, fallbackModel: streamEntry?.model ?? executionModel });
+        if (streamEntry?.costUsd !== undefined && ccusageEntry.costUsd !== undefined) {
+          const larger = Math.max(ccusageEntry.costUsd, streamEntry.costUsd);
+          const diff = Math.abs(ccusageEntry.costUsd - streamEntry.costUsd);
+          // A cross-check, not a correction: the ccusage figure always wins below.
+          if (larger > 0 && diff / larger > 0.25) {
+            log(
+              "system",
+              `cost cross-check: ccusage $${ccusageEntry.costUsd.toFixed(2)} vs stream $${streamEntry.costUsd.toFixed(2)} for ${label}`,
+            );
+          }
+        }
+        entry = ccusageEntry;
+      }
+    }
+    if (entry) await store.addCost(runId, entry, executionId);
+    usage = usageCollector(limitProvider);
+  };
+
+  const activeSandbox = sandbox;
+  const runAgent = async (
+    prompt: string,
+    model: string | undefined,
+    effort: string | undefined,
+    label: string,
+    extraArgs: string[] = [],
+  ): Promise<void> => {
+    // --include-partial-messages exists only so the stream carries thinking
+    // block boundaries; the token-level deltas are reduced to thinking events
+    // above and never persisted.
+    // Auto permission mode rather than bypassPermissions: bypass is refused
+    // as root (the firecracker guest runs everything as root), and auto's
+    // classifier blocks exfiltration-shaped actions, which matters because
+    // agents chew on untrusted ticket and repo content.
+    const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", "auto"];
+    if (model) args.push("--model", model);
+    if (effort) args.push("--effort", effort);
+    args.push(...extraArgs, ...config.agent.args);
+    log("system", `running ${config.agent.command} (${label}${model ? ` on ${model}` : ""}, timeout ${config.sandbox.timeoutMinutes}m)`);
+    // Labeled before the racing await so an abort still knows which
+    // execution's usage to persist.
+    pendingCostLabel = labelFor(label);
+    pendingCostId = randomUUID();
+    pendingCostModel = model;
+    // Each execution is a fresh Claude session; the sampler below waits for
+    // this to be set again by the init event before it starts filtering.
+    currentSessionId = undefined;
+    if (ccusageCommand) {
+      const sampleLabel = pendingCostLabel;
+      const executionId = pendingCostId;
+      const subscription = !config.agent.anthropicApiKey;
+      activeSampler = startCcusageSampler({
+        sandbox: activeSandbox,
+        command: ccusageCommand,
+        getSessionId: () => currentSessionId,
+        signal,
+        onSample: (rows) => {
+          const entry = ccusageCostEntry({ label: sampleLabel, rows, subscription, fallbackModel: model });
+          void store.upsertCost(runId, executionId, entry).catch(() => undefined);
+        },
+      });
+    }
+    // The signal terminates the agent subprocess on cancellation and exec
+    // resolves once it is gone, so awaiting it (rather than racing past it)
+    // guarantees nothing is still running when the sandbox is destroyed.
+    const exec = await activeSandbox.exec(config.agent.command, args, {
+      cwd: activeSandbox.workspacePath,
+      env: codexHome ? { CODEX_HOME: codexHome } : undefined,
+      timeoutMs: config.sandbox.timeoutMinutes * 60_000,
+      signal,
+      onStdout: (chunk) => stdoutSink.write(chunk),
+      onStderr: (chunk) => stderrSink.write(chunk),
+    });
+    // Recorded before the exitCode check so failed, cancelled, and
+    // limit-ended executions still keep whatever usage they burned.
+    await recordPendingCost();
+    throwIfAborted(signal);
+    if (exec.exitCode !== 0) {
+      if (detectedLimit) throw new AgentLimitError(detectedLimit);
+      throw new Error(`agent exited with code ${exec.exitCode} (${label})`);
+    }
+  };
+
+  return {
+    log,
+    noteLimit,
+    detectedLimit: () => detectedLimit,
+    runAgent,
+    recordPendingCost,
+  };
+}
+
+/** Which model/effort the main loop runs on and whether it delegates to an implementer subagent. */
+export function agentModelPlan(config: BreviConfig): { mainModel: string | undefined; mainEffort: string | undefined; delegate: boolean } {
+  const claude = agentProvider(config) === "claude";
+  // Claude runs put the strong orchestratorModel in the main loop (planning,
+  // review) and route the coding labor to an `implementer` subagent on the
+  // cheaper implementModel, at the configured orchestratorEffort. An
+  // explicit `model` opts out of delegation, and Codex agents keep their
+  // plain single-model flow with no effort flag.
+  const mainModel = config.agent.model || (claude ? config.agent.orchestratorModel : undefined);
+  const mainEffort = claude ? config.agent.orchestratorEffort : undefined;
+  const delegate = claude && !config.agent.model;
+  return { mainModel, mainEffort, delegate };
 }
 
 /**
@@ -40,6 +288,9 @@ export interface RunContext {
  */
 export async function executeRun(ctx: RunContext): Promise<void> {
   const { config, store, provider, linear, signal } = ctx;
+  // The scheduler only routes implementation runs here while Linear is
+  // connected; this guard keeps the narrowing honest if that ever regresses.
+  if (!linear) throw new Error("Linear is not connected; implementation runs need it");
   const run = store.get(ctx.runId);
   if (!run) throw new Error(`unknown run ${ctx.runId}`);
   const ticket = run.ticket;
@@ -48,24 +299,13 @@ export async function executeRun(ctx: RunContext): Promise<void> {
   const checkoutDir = join(tempRoot, "checkout");
   const pulledDir = join(tempRoot, "out");
   let sandbox: Sandbox | undefined;
+  // Reachable from the catch block below even when the run fails before (or
+  // while) the session is created.
+  let session: AgentSession | undefined;
 
   const log = (stream: "stdout" | "stderr" | "system", text: string): void => {
     store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "log", stream, text });
   };
-
-  const limitProvider = agentProvider(config);
-  let detectedLimit: LimitInfo | undefined;
-  const noteLimit = (line: string): void => {
-    detectedLimit = detectLimit(line, limitProvider) ?? detectedLimit;
-  };
-
-  // Assigned once the agent sinks exist; persists an in-flight execution's
-  // usage on paths that never reach the post-exec snapshot in runAgent
-  // (cancellation, a sandbox that dies mid-exec).
-  let recordPendingCost = async (): Promise<void> => {};
-  // The live ccusage sampler for the execution currently in flight, when one
-  // was started; recordPendingCost always stops and clears it.
-  let activeSampler: CcusageSampler | undefined;
 
   const attempt = await store.beginAttempt(run.id);
   try {
@@ -142,183 +382,20 @@ export async function executeRun(ctx: RunContext): Promise<void> {
 
     // ---- running ---------------------------------------------------------
     await store.setStatus(run.id, "running");
-    const trackThinking = thinkingTracker((phase, durationMs) => {
-      store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "thinking", phase, durationMs });
-    });
-    let usage = usageCollector(limitProvider);
-    // The current execution's Claude session id, captured from the stream's
-    // init event; the ccusage sampler filters on it to scope its readings to
-    // exactly this execution. Reset per execution in runAgent since each one
-    // is a fresh Claude session.
-    let currentSessionId: string | undefined;
-    const stdoutSink = lineSink((line) => {
-      let event: unknown;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        noteLimit(line);
-        log("stdout", line);
-        return;
-      }
-      // Observed before the stream_event/noise filtering below: token_count
-      // and result events must reach the collector even though most other
-      // event types are dropped from the persisted log.
-      usage.observe(event);
-      // The Claude stream's init event carries the session id that `claude
-      // --resume` needs to reattach later; persisted best-effort so a slow
-      // store write never holds up log processing.
-      if (isDict(event) && event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
-        currentSessionId = event.session_id;
-        void store.update(run.id, { agentSessionId: event.session_id }).catch(() => undefined);
-      }
-      if (isDict(event) && event.type === "stream_event") {
-        // Subagent streams (parent_tool_use_id set) carry their own thinking
-        // block boundaries; only the top-level assistant stream drives the
-        // spinner, or one visible thinking spell would log several durations.
-        if (!event.parent_tool_use_id) trackThinking(event.event);
-        return;
-      }
-      if (isDict(event) && event.type === "system" && typeof event.subtype === "string" && NOISE_EVENT_SUBTYPES.has(event.subtype)) return;
-      if (isAgentFailureEvent(event)) noteLimit(line);
-      store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "agent", event });
-    });
-    const stderrSink = lineSink((line) => {
-      noteLimit(line);
-      log("stderr", line);
+    session = createAgentSession({
+      runId: run.id,
+      store,
+      config,
+      sandbox,
+      signal,
+      codexHome,
+      ccusageCommand,
+      labelFor: (label) => (attempt.number > 1 ? `${label} (attempt ${attempt.number})` : label),
     });
 
-    let pendingCostLabel: string | undefined;
-    // Stable identity for the in-flight execution's cost entry: interim
-    // samples upsert under it and the final entry replaces them by it, so
-    // entries from other executions (earlier attempts reusing a label) are
-    // never touched.
-    let pendingCostId: string | undefined;
-    // The model the in-flight execution was configured with, kept so every
-    // snapshot path (post-exec, cancellation, usage limit) can still name and
-    // price the entry when the stream never carried a model id (Codex's new
-    // event format never does).
-    let pendingCostModel: string | undefined;
-    recordPendingCost = async () => {
-      // A sampler must never keep running (or emit) once its execution is
-      // done being recorded, even on the early-return path below.
-      const sampler = activeSampler;
-      activeSampler = undefined;
-      if (!pendingCostLabel) {
-        sampler?.stop();
-        return;
-      }
-      const label = pendingCostLabel;
-      const executionId = pendingCostId;
-      const executionModel = pendingCostModel;
-      pendingCostLabel = undefined;
-      pendingCostId = undefined;
-      pendingCostModel = undefined;
-      stdoutSink.flush();
-      stderrSink.flush();
-      const subscription = limitProvider === "claude" ? !config.agent.anthropicApiKey : !config.agent.codexApiKey;
-      const streamEntry = usage.snapshot({ label, subscription, fallbackModel: executionModel });
+    const { mainModel, mainEffort, delegate } = agentModelPlan(config);
 
-      // ccusage reads the transcript directly, so when a final sample lands it
-      // replaces both the interim samples upserted during the run and the
-      // stream-parsed figure above, rather than being blended with it.
-      let entry = streamEntry;
-      if (sampler) {
-        sampler.stop();
-        const rows = await sampler.finalRead();
-        if (rows && rows.length > 0) {
-          const ccusageEntry = ccusageCostEntry({ label, rows, subscription, fallbackModel: streamEntry?.model ?? executionModel });
-          if (streamEntry?.costUsd !== undefined && ccusageEntry.costUsd !== undefined) {
-            const larger = Math.max(ccusageEntry.costUsd, streamEntry.costUsd);
-            const diff = Math.abs(ccusageEntry.costUsd - streamEntry.costUsd);
-            // A cross-check, not a correction: the ccusage figure always wins below.
-            if (larger > 0 && diff / larger > 0.25) {
-              log(
-                "system",
-                `cost cross-check: ccusage $${ccusageEntry.costUsd.toFixed(2)} vs stream $${streamEntry.costUsd.toFixed(2)} for ${label}`,
-              );
-            }
-          }
-          entry = ccusageEntry;
-        }
-      }
-      if (entry) await store.addCost(run.id, entry, executionId);
-      usage = usageCollector(limitProvider);
-    };
-
-    const activeSandbox = sandbox;
-    const runAgent = async (
-      prompt: string,
-      model: string | undefined,
-      effort: string | undefined,
-      label: string,
-      extraArgs: string[] = [],
-    ): Promise<void> => {
-      // --include-partial-messages exists only so the stream carries thinking
-      // block boundaries; the token-level deltas are reduced to thinking events
-      // above and never persisted.
-      // Auto permission mode rather than bypassPermissions: bypass is refused
-      // as root (the firecracker guest runs everything as root), and auto's
-      // classifier blocks exfiltration-shaped actions, which matters because
-      // agents chew on untrusted ticket and repo content.
-      const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", "auto"];
-      if (model) args.push("--model", model);
-      if (effort) args.push("--effort", effort);
-      args.push(...extraArgs, ...config.agent.args);
-      log("system", `running ${config.agent.command} (${label}${model ? ` on ${model}` : ""}, timeout ${config.sandbox.timeoutMinutes}m)`);
-      // Labeled before the racing await so an abort still knows which
-      // execution's usage to persist.
-      pendingCostLabel = attempt.number > 1 ? `${label} (attempt ${attempt.number})` : label;
-      pendingCostId = randomUUID();
-      pendingCostModel = model;
-      // Each execution is a fresh Claude session; the sampler below waits for
-      // this to be set again by the init event before it starts filtering.
-      currentSessionId = undefined;
-      if (ccusageCommand) {
-        const sampleLabel = pendingCostLabel;
-        const executionId = pendingCostId;
-        const subscription = !config.agent.anthropicApiKey;
-        activeSampler = startCcusageSampler({
-          sandbox: activeSandbox,
-          command: ccusageCommand,
-          getSessionId: () => currentSessionId,
-          signal,
-          onSample: (rows) => {
-            const entry = ccusageCostEntry({ label: sampleLabel, rows, subscription, fallbackModel: model });
-            void store.upsertCost(run.id, executionId, entry).catch(() => undefined);
-          },
-        });
-      }
-      // The signal terminates the agent subprocess on cancellation and exec
-      // resolves once it is gone, so awaiting it (rather than racing past it)
-      // guarantees nothing is still running when the sandbox is destroyed.
-      const exec = await activeSandbox.exec(config.agent.command, args, {
-        cwd: activeSandbox.workspacePath,
-        env: codexHome ? { CODEX_HOME: codexHome } : undefined,
-        timeoutMs: config.sandbox.timeoutMinutes * 60_000,
-        signal,
-        onStdout: (chunk) => stdoutSink.write(chunk),
-        onStderr: (chunk) => stderrSink.write(chunk),
-      });
-      // Recorded before the exitCode check so failed, cancelled, and
-      // limit-ended executions still keep whatever usage they burned.
-      await recordPendingCost();
-      throwIfAborted(signal);
-      if (exec.exitCode !== 0) {
-        if (detectedLimit) throw new AgentLimitError(detectedLimit);
-        throw new Error(`agent exited with code ${exec.exitCode} (${label})`);
-      }
-    };
-
-    // Claude runs put the strong orchestratorModel in the main loop (planning,
-    // review) and route the coding labor to an `implementer` subagent on the
-    // cheaper implementModel, at the configured orchestratorEffort. An
-    // explicit `model` opts out of delegation, and Codex agents keep their
-    // plain single-model flow with no effort flag.
-    const mainModel = config.agent.model || (claude ? config.agent.orchestratorModel : undefined);
-    const mainEffort = claude ? config.agent.orchestratorEffort : undefined;
-    const delegate = claude && !config.agent.model;
-
-    await runAgent(
+    await session.runAgent(
       buildImplementationPrompt(ticket, repo, config.github.prDescription, { repoMap, delegate }),
       mainModel,
       mainEffort,
@@ -333,7 +410,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     // the PR opens.
     if (codexReviewEnabled(config)) {
       const findings = await runCodexReview({
-        sandbox: activeSandbox,
+        sandbox,
         config,
         ticket,
         signal,
@@ -349,7 +426,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
           ),
       });
       if (findings) {
-        await runAgent(
+        await session.runAgent(
           buildReviewFixPrompt({ ticket, findings, delegate }),
           mainModel,
           mainEffort,
@@ -407,7 +484,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
   } catch (error) {
     // An execution interrupted mid-flight (cancellation, a sandbox failure)
     // never reached its snapshot in runAgent; keep the spend it burned.
-    await recordPendingCost().catch(() => undefined);
+    await session?.recordPendingCost().catch(() => undefined);
     const cancelled = signal.aborted || error instanceof RunCancelledError;
     const message = error instanceof Error ? error.message : String(error);
     const current = store.get(run.id);
@@ -420,7 +497,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       }
       // A limit can surface as a thrown AgentLimitError or as a generic
       // failure (e.g. "agent made no changes") after a limit message was seen.
-      const limit = error instanceof AgentLimitError ? error.limit : detectedLimit;
+      const limit = error instanceof AgentLimitError ? error.limit : session?.detectedLimit();
       if (!limit) {
         await store.endAttempt(run.id, { outcome: "failed", error: message });
         await store.setStatus(run.id, "failed", {
@@ -451,50 +528,66 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       }
     }
   } finally {
-    // A run that finished (completed or failed) with retention enabled keeps
-    // its sandbox disk around for interactive resume: compute is released,
-    // but the disk (and thus tempRoot, which holds it) survives. Every other
-    // outcome (cancelled, waiting, no sandbox, retention disabled) tears down
-    // the sandbox and its scratch space same as before.
-    const finalStatus = store.get(run.id)?.status;
-    const retain =
-      sandbox !== undefined &&
-      config.sandbox.retentionHours > 0 &&
-      (finalStatus === "completed" || finalStatus === "failed");
-    const current = retain ? store.get(run.id) : undefined;
-    if (retain && sandbox && current) {
-      try {
-        await sandbox.release();
-        const retainedUntil = new Date(Date.now() + config.sandbox.retentionHours * 3_600_000).toISOString();
-        await store.update(run.id, { sandbox: { ...current.sandbox, retainedUntil } });
-        log("system", `sandbox retained until ${retainedUntil}; resume with \`brevi attach ${run.id}\``);
-        // Only the host-side scratch goes; the retained disk lives inside
-        // tempRoot (rootfs.ext4 for firecracker, workspace/ for process).
-        await rm(checkoutDir, { recursive: true, force: true }).catch(() => undefined);
-        await rm(pulledDir, { recursive: true, force: true }).catch(() => undefined);
-      } catch {
-        // release() or the store update failed; fall back to a full teardown
-        // rather than leave a half-retained sandbox nobody can reach.
-        await sandbox.destroy().catch(() => undefined);
-        await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
-      }
-    } else {
-      if (sandbox) {
-        await sandbox.destroy().catch(() => undefined);
-      }
+    await finishRunSandbox({ sandbox, config, store, runId: run.id, tempRoot, checkoutDir, pulledDir, log });
+  }
+}
+
+/**
+ * A run that finished (completed or failed) with retention enabled keeps
+ * its sandbox disk around for interactive resume: compute is released,
+ * but the disk (and thus tempRoot, which holds it) survives. Every other
+ * outcome (cancelled, waiting, no sandbox, retention disabled) tears down
+ * the sandbox and its scratch space same as before.
+ */
+export async function finishRunSandbox(options: {
+  sandbox: Sandbox | undefined;
+  config: BreviConfig;
+  store: RunStore;
+  runId: string;
+  tempRoot: string;
+  checkoutDir: string;
+  pulledDir: string;
+  log: (stream: "stdout" | "stderr" | "system", text: string) => void;
+}): Promise<void> {
+  const { sandbox, config, store, runId, tempRoot, checkoutDir, pulledDir, log } = options;
+  const finalStatus = store.get(runId)?.status;
+  const retain =
+    sandbox !== undefined &&
+    config.sandbox.retentionHours > 0 &&
+    (finalStatus === "completed" || finalStatus === "failed");
+  const current = retain ? store.get(runId) : undefined;
+  if (retain && sandbox && current) {
+    try {
+      await sandbox.release();
+      const retainedUntil = new Date(Date.now() + config.sandbox.retentionHours * 3_600_000).toISOString();
+      await store.update(runId, { sandbox: { ...current.sandbox, retainedUntil } });
+      log("system", `sandbox retained until ${retainedUntil}; resume with \`brevi attach ${runId}\``);
+      // Only the host-side scratch goes; the retained disk lives inside
+      // tempRoot (rootfs.ext4 for firecracker, workspace/ for process).
+      await rm(checkoutDir, { recursive: true, force: true }).catch(() => undefined);
+      await rm(pulledDir, { recursive: true, force: true }).catch(() => undefined);
+    } catch {
+      // release() or the store update failed; fall back to a full teardown
+      // rather than leave a half-retained sandbox nobody can reach.
+      await sandbox.destroy().catch(() => undefined);
       await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     }
+  } else {
+    if (sandbox) {
+      await sandbox.destroy().catch(() => undefined);
+    }
+    await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
 /** Human line for logs and failure reasons, e.g. "Claude five-hour limit reached". */
-function limitLabel(limit: LimitInfo): string {
+export function limitLabel(limit: LimitInfo): string {
   const provider = limit.provider === "claude" ? "Claude" : "Codex";
   const kind = limit.kind === "unknown" ? "usage limit" : `${limit.kind} limit`;
   return `${provider} ${kind} reached`;
 }
 
-function branchNameFor(ticket: Ticket): string {
+export function branchNameFor(ticket: Ticket): string {
   return `brevi/${ticket.identifier.toLowerCase()}`;
 }
 
@@ -502,7 +595,7 @@ function branchNameFor(ticket: Ticket): string {
  * Definition for the Claude Code `--agents` flag: the subagent the
  * orchestrating model dispatches implementation tasks to.
  */
-function implementerAgent(model: string): Record<string, { description: string; prompt: string; model: string }> {
+export function implementerAgent(model: string): Record<string, { description: string; prompt: string; model: string }> {
   return {
     implementer: {
       description: "Implements one well-scoped coding task in this checkout exactly as instructed",
@@ -540,7 +633,7 @@ const REPO_MAP_MAX_FILES = 400;
  * recent history, generated from the checkout so it is never stale. Failure
  * only costs the agent some exploration turns, so it never fails the run.
  */
-async function buildRepoMap(checkoutDir: string, token: string): Promise<RepoMap | undefined> {
+export async function buildRepoMap(checkoutDir: string, token: string): Promise<RepoMap | undefined> {
   try {
     const files = await git(["ls-files"], checkoutDir, token);
     const log = await git(["log", "--oneline", "-n", "10"], checkoutDir, token);
@@ -575,7 +668,7 @@ export function collectAgentEnv(config: BreviConfig): Record<string, string> {
 }
 
 /** In-workspace directory holding a Codex ChatGPT login, wired up via CODEX_HOME. */
-const CODEX_HOME_DIR = ".brevi/codex-home";
+export const CODEX_HOME_DIR = ".brevi/codex-home";
 
 const isDict = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -619,7 +712,7 @@ function thinkingTracker(
 }
 
 /** Run git, scrubbing any embedded token out of error output. */
-async function git(args: string[], cwd: string, token: string): Promise<ExecaResult> {
+export async function git(args: string[], cwd: string, token: string): Promise<ExecaResult> {
   try {
     return await execa("git", args, { cwd });
   } catch (error) {
@@ -734,6 +827,9 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
     pulledDir,
     token,
   );
+  // Recorded so a later follow-up can fetch "comments since the last push"
+  // against a real push time instead of commit metadata.
+  const pushedAt = new Date().toISOString();
 
   const title = `${ticket.identifier}: ${ticket.title}`;
   const body = buildPrBody({ summary, ticket, evidence });
@@ -759,6 +855,7 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
   return {
     prUrl,
     branch,
+    pushedAt,
     summary,
     artifacts,
   };

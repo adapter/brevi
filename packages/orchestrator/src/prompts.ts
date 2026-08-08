@@ -117,6 +117,58 @@ export function buildImplementationPrompt(
   ].join("\n");
 }
 
+/** Prompt for a follow-up session: rebase the PR branch, address review feedback, prepare the reply. */
+export function buildFollowUpPrompt(options: {
+  ticket: Ticket;
+  prUrl: string;
+  branch: string;
+  baseBranch: string;
+  /** Pre-formatted feedback bundle (markdown), or empty when there is none. */
+  feedback: string;
+  rebase: { status: "clean" } | { status: "conflicted"; detail: string };
+  delegate?: boolean;
+}): string {
+  const { ticket, prUrl, branch, baseBranch, feedback, rebase, delegate } = options;
+  return [
+    `You are an autonomous coding agent working in a git checkout of the pull request branch \`${branch}\` for the ticket below. The PR (${prUrl}) has received review feedback and/or drifted behind its base branch \`${baseBranch}\`. Bring the branch up to date and address the feedback end to end without asking questions.`,
+    ...(delegate
+      ? [
+          "",
+          "## Orchestration",
+          "You are the orchestrator of this run, on a stronger model; an `implementer` subagent on a faster model is available through your agent tool. Keep the thinking for yourself and delegate the labor:",
+          "- Plan the change yourself, then break it into well-scoped tasks and dispatch every substantive implementation task (code edits, running tests, demo capture) to `implementer` subagents, in parallel when tasks are independent.",
+          "- Give each subagent complete instructions: the exact files, the change to make, the conventions to follow, and how to verify it. It starts with no context beyond your prompt.",
+          "- Review what each subagent returns and iterate; fixing small residual issues yourself is fine, re-implementing the whole ticket yourself is not.",
+        ]
+      : []),
+    "",
+    ticketSection(ticket),
+    "",
+    "## Rebase state",
+    rebase.status === "clean"
+      ? `The branch has already been rebased onto \`origin/${baseBranch}\` cleanly before this session; do not redo the rebase.`
+      : [
+          `A rebase onto \`origin/${baseBranch}\` is in progress and stopped on conflicts. Resolve every conflict faithfully, preserving both the PR's intent and the base branch's changes, then run \`GIT_EDITOR=true git rebase --continue\` until the rebase completes. Current conflict state:`,
+          "```",
+          rebase.detail,
+          "```",
+        ].join("\n"),
+    "",
+    "## Review feedback",
+    feedback || "(none: this follow-up only brings the branch up to date)",
+    "",
+    "## Rules",
+    "- Address every feedback item: implement what the reviewer asked, or, when you are convinced they are mistaken, leave the code alone and say why in your reply (below).",
+    "- Unlike other brevi sessions, you MUST commit your work here: make focused commits with clear messages so each feedback item maps to a commit. Do NOT push, and never commit anything under `.brevi/`.",
+    "- Do not resolve review threads, post comments, or otherwise touch GitHub yourself; replying is handled for you.",
+    "- Run the repo's tests/linters relevant to what you change and fix what you break.",
+    `- ${NO_EM_DASHES}`,
+    "",
+    "## Required output",
+    "`.brevi/reply.md`: the PR comment that will be posted verbatim after your work is pushed. One short bullet per feedback item saying what you did (name the commit subject) or why you declined; when the rebase had conflicts, one line on how you resolved them. Write this file even when you conclude no code change is needed: every feedback item still gets its explanation. Concise, no headings, no restating diffs.",
+  ].join("\n");
+}
+
 /** One independent brief in the adversarial Codex review; the angle list itself lives in review.ts. */
 export interface ReviewAngle {
   key: string;

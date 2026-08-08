@@ -17,6 +17,7 @@ import {
   type GithubRepo,
   type LinearProject,
   type LinearStatus,
+  type PrStatusResponse,
   type R2ConnectResponse,
   type R2SettingsUpdateRequest,
   type R2SettingsUpdateResponse,
@@ -59,9 +60,10 @@ import {
   validateGithubToken,
   validateLinearApiKey,
 } from "./credentials.js";
-import { listRepos } from "./github.js";
+import { fetchPrStatus, listRepos } from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
 import { isLinearAuthError, LinearService, type LinearAuthHooks } from "./linear.js";
+import { executeFollowUp } from "./followup.js";
 import { checkWrangler, DEFAULT_EVIDENCE_BUCKET, provisionBucket, startWranglerLogin } from "./r2.js";
 import { buildResumeScript } from "./resume.js";
 import { collectAgentEnv, executeRun, playwrightBrowsersPath } from "./runner.js";
@@ -141,6 +143,12 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #attached = new Map<string, { pending: Promise<Sandbox>; clients: number }>();
   /** One pending reap timer per run with a retained sandbox, keyed by run id. */
   #reapTimers = new Map<string, NodeJS.Timeout>();
+  /**
+   * Runs whose queued execution is a follow-up rather than a fresh
+   * implementation attempt. In-memory only: a restart fails queued runs
+   * anyway.
+   */
+  #followUps = new Set<string>();
   #stopped = false;
   #warnedNoRepo = new Set<string>();
   #githubDevice?: GithubDeviceSession;
@@ -813,6 +821,11 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     if (isTerminal(run.status)) return run;
     if (run.status === "queued") {
       this.#queue = this.#queue.filter((id) => id !== runId);
+      // A cancelled queued follow-up must not misroute a later retry into
+      // the follow-up path. It also still owns its retained disk's reap
+      // timer (starting the follow-up cleared it, and no worker will reach
+      // #execute's tail to re-arm it), so restore the reaper here.
+      if (this.#followUps.delete(runId)) this.#scheduleReap(runId);
       return this.store.setStatus(runId, "cancelled", { finishedAt: new Date().toISOString() });
     }
     if (run.status === "waiting") {
@@ -852,6 +865,126 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       );
     }
     return this.#requeue(runId);
+  }
+
+  /**
+   * Start a follow-up on a completed run's open PR: rebase onto the latest
+   * base, address review feedback, push, and comment. The ticket's Linear
+   * state is left untouched.
+   */
+  async followUpRun(runId: string): Promise<Run> {
+    if (!isSafePathSegment(runId)) throw new OrchestratorError("invalid", "malformed run id");
+    const run = this.store.get(runId);
+    if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
+    if (this.#followUps.has(runId)) {
+      throw new OrchestratorError("conflict", `a follow-up is already starting for run ${runId}`);
+    }
+    if (ACTIVE_STATUSES.has(run.status) || run.status === "waiting") {
+      throw new OrchestratorError("conflict", `run ${runId} is already ${run.status}`);
+    }
+    if (run.status !== "completed") {
+      throw new OrchestratorError(
+        "conflict",
+        "only completed runs can take another look; use retry for failed or cancelled runs",
+      );
+    }
+    const prUrl = run.result?.prUrl;
+    if (!prUrl) {
+      throw new OrchestratorError("invalid", "the run has no pull request to follow up on");
+    }
+    if (!this.config.github.token) {
+      throw new OrchestratorError(
+        "invalid",
+        "GitHub is not connected: add a token in the dashboard's Connections panel before running a follow-up",
+      );
+    }
+    const clash = this.store
+      .runsForTicket(run.ticket.id)
+      .find((other) => other.id !== runId && !isTerminal(other.status));
+    if (clash) {
+      throw new OrchestratorError(
+        "conflict",
+        `ticket ${run.ticket.identifier} already has an active run (${clash.id})`,
+      );
+    }
+    if (this.#attached.has(runId)) {
+      throw new OrchestratorError(
+        "conflict",
+        "an interactive session is attached to this run's sandbox; detach it before starting a follow-up",
+      );
+    }
+
+    // Reserve the run before the first await: two concurrent requests could
+    // otherwise both pass the checks above during the GitHub round-trip and
+    // queue the same run twice. The reservation doubles as the execution-kind
+    // marker that #execute claims; it is released only on failure here, when
+    // a queued follow-up is cancelled, or by #execute's claim.
+    this.#followUps.add(runId);
+    try {
+      try {
+        const pr = await fetchPrStatus(prUrl, this.config.github.token);
+        if (pr.state !== "open") {
+          throw new OrchestratorError("conflict", `the pull request is ${pr.state}`);
+        }
+      } catch (error) {
+        if (error instanceof OrchestratorError) throw error;
+        throw new OrchestratorError(
+          "invalid",
+          `could not check the pull request: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      // The GitHub check took real time; the run must still be eligible.
+      const current = this.store.get(runId);
+      if (!current || current.status !== "completed") {
+        throw new OrchestratorError("conflict", `run ${runId} is no longer completed`);
+      }
+
+      // Take ownership of the retained disk for the duration: clear any
+      // pending reap timer without discarding it. #execute re-arms the
+      // reaper after the run (see its existing tail below), and cancelling
+      // the queued follow-up re-arms it too.
+      const reapTimer = this.#reapTimers.get(runId);
+      if (reapTimer) clearTimeout(reapTimer);
+      this.#reapTimers.delete(runId);
+
+      // result is deliberately kept: the dashboard uses an active run that
+      // still carries its PR result to render the follow-up spinner, and the
+      // PR context must survive.
+      const queued = await this.store.setStatus(runId, "queued", {
+        queuedAt: new Date().toISOString(),
+        finishedAt: undefined,
+        error: undefined,
+        limit: undefined,
+        resumeAt: undefined,
+      });
+      if (!this.#queue.includes(runId)) this.#queue.push(runId);
+      this.#kickWorker();
+      return queued;
+    } catch (error) {
+      this.#followUps.delete(runId);
+      // Re-arm the reaper in case the timer was already cleared above; a
+      // no-op when the run holds no retained disk.
+      this.#scheduleReap(runId);
+      throw error;
+    }
+  }
+
+  /** Live open/merged/closed state of a run's PR, for the dashboard's follow-up button. */
+  async prStatus(runId: string): Promise<PrStatusResponse> {
+    if (!isSafePathSegment(runId)) throw new OrchestratorError("invalid", "malformed run id");
+    const run = this.store.get(runId);
+    if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
+    const prUrl = run.result?.prUrl;
+    if (!prUrl) throw new OrchestratorError("invalid", "the run has no pull request");
+    if (!this.config.github.token) throw new OrchestratorError("invalid", "GitHub is not connected");
+    try {
+      return await fetchPrStatus(prUrl, this.config.github.token);
+    } catch (error) {
+      throw new OrchestratorError(
+        "invalid",
+        `could not check the pull request: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**
@@ -1409,6 +1542,9 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     while (this.#running.size < limit && this.#queue.length > 0) {
       const runId = this.#queue.shift();
       if (!runId) break;
+      // A run already claimed by a worker must never start a second
+      // pipeline, whatever the queue held.
+      if (this.#running.has(runId)) continue;
       const run = this.store.get(runId);
       if (!run || run.status !== "queued") continue;
       const promise = this.#execute(runId).finally(() => {
@@ -1420,15 +1556,22 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   }
 
   async #execute(runId: string): Promise<void> {
+    // Claiming the run's execution kind and clearing its reservation is one
+    // synchronous step, so even a duplicate queue entry could never route
+    // the same run into both pipelines.
+    const followUp = this.#followUps.delete(runId);
     const provider = this.#provider;
     if (!provider) {
       // Only possible before start(); leave the run queued for the next kick.
+      if (followUp) this.#followUps.add(runId);
       this.#queue.unshift(runId);
       return;
     }
     const linear = this.#linear;
-    if (!linear) {
-      // Linear was disconnected after this run was queued.
+    if (!followUp && !linear) {
+      // Linear was disconnected after this run was queued. Follow-ups never
+      // talk to Linear (the ticket stays In Review), so only implementation
+      // runs fail here.
       await this.store
         .setStatus(runId, "failed", {
           error: "Linear was disconnected before the run started",
@@ -1440,7 +1583,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     const abort = new AbortController();
     this.#aborts.set(runId, abort);
     try {
-      await executeRun({
+      await (followUp ? executeFollowUp : executeRun)({
         runId,
         config: this.config,
         store: this.store,
