@@ -109,8 +109,14 @@ export class FirecrackerSandbox implements Sandbox {
   }
 
   async destroy(): Promise<void> {
-    await this.#vm.stop();
-    await rm(this.#rootDir, { recursive: true, force: true });
+    // The rootfs can carry provisioned credentials; a failed VM shutdown
+    // must not strand it on the host, so the removal runs regardless (and
+    // the shutdown error still propagates to the caller).
+    try {
+      await this.#vm.stop();
+    } finally {
+      await rm(this.#rootDir, { recursive: true, force: true });
+    }
   }
 }
 

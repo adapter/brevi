@@ -63,7 +63,7 @@ API keys are verified with a one-token completion on `gpt-5-nano`; if that model
 
 A ChatGPT login can't be probed the same way, so it is validated offline: the token set must parse and contain an access token, and if the access token has expired there must be a refresh token. brevi decodes the `id_token` to report who you are: `Connected as you@example.com (ChatGPT pro)`.
 
-At run time a ChatGPT login travels as a *file*, not an environment variable. brevi writes it to `.brevi/codex-home/auth.json` inside the sandbox workspace and points `CODEX_HOME` at that directory, which is what the Codex CLI reads. The directory is deleted again before anything is committed, so the login can never reach a branch.
+At run time a ChatGPT login travels as a *file*, not an environment variable. brevi writes it to a stable `CODEX_HOME` outside the workspace (`/root/.codex` in a Firecracker guest, or a `codex-home` directory beside the workspace in the run's directory for the process provider), which is what the Codex CLI reads. It never sits in the checkout, so it can never reach a branch. It is reinstalled with the currently connected credentials every time you attach to a retained sandbox, and deleted along with the sandbox's disk once the retention window ends.
 
 Connecting Codex only stores the credential; which CLI actually runs is `agent.command`, which defaults to `claude`. See the [configuration reference](/reference/configuration/).
 

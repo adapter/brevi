@@ -40,7 +40,7 @@ Runs execute serially (one at a time, FIFO) and move through the statuses `queue
 
 **Finalizing.** The workspace is pulled back out and artifacts collected: everything under `.brevi/demo/` (nested paths flattened, so `demo/web/home.png` is stored as `web__home.png`), plus `.brevi/summary.md`. Artifacts are kept with the run under `~/.brevi/runs/` and served by the dashboard.
 
-Then brevi removes everything under `.brevi/` (agent outputs stay with the run's artifacts; the mounted Codex login must never leak), stages the rest, and fails with `agent made no changes` if the tree is clean. Otherwise it commits `<ID>: <title>`, force-pushes `brevi/<ticket-id>`, and opens a pull request against the repo's default branch. The PR body is the agent's `summary.md`, `Fixes <ID>`, and a brevi footer. Finally brevi comments on the Linear issue with the PR link (a failure here does not fail the run).
+Then brevi removes everything under `.brevi/` (agent outputs stay with the run's artifacts), stages the rest, and fails with `agent made no changes` if the tree is clean. Otherwise it commits `<ID>: <title>`, force-pushes `brevi/<ticket-id>`, and opens a pull request against the repo's default branch. The PR body is the agent's `summary.md`, `Fixes <ID>`, and a brevi footer. Finally brevi comments on the Linear issue with the PR link (a failure here does not fail the run).
 
 When a run completes successfully, brevi also moves the Linear issue to a review state: the team's first `started`-type state whose name mentions "review" (e.g. **In Review**). Best effort: teams without such a state keep the issue where it is.
 
