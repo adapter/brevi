@@ -1,15 +1,17 @@
-import type { CostEntry, CostTotals } from "@brevi/shared";
-import { Fragment, useState } from "react";
+import type { CostEntry, CostModelTotal, CostTotals } from "@brevi/shared";
+import { summarizeCosts } from "@brevi/shared/types";
+import { useState } from "react";
 import { badgeVariants } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { tokens, usd } from "../lib/format";
 
 /**
- * The total LLM cost of a run, hoverable for a per-entry breakdown. Click
- * pins the breakdown open (click again, click outside, or Escape unpins);
- * pinning is local state layered on top of the tooltip's own hover state so
- * hovering elsewhere never closes a pinned breakdown.
+ * The total LLM cost of a run, hoverable for a per-model breakdown summed
+ * across the run's attempts and phases. Click pins the breakdown open (click
+ * again, click outside, or Escape unpins); pinning is local state layered on
+ * top of the tooltip's own hover state so hovering elsewhere never closes a
+ * pinned breakdown.
  */
 export function CostBadge({
   costs,
@@ -26,14 +28,16 @@ export function CostBadge({
   const [hoverOpen, setHoverOpen] = useState(false);
 
   const entries = costs ?? [];
-  const sums = totals ?? (entries.length > 0 ? sumEntries(entries) : undefined);
+  const computed = entries.length > 0 ? summarizeCosts(entries) : undefined;
+  const sums = totals ?? computed;
+  const byModel = totals?.byModel ?? computed?.byModel ?? [];
   if (entries.length === 0 && !sums) return null;
 
   const label =
     sums?.costUsd !== undefined
       ? usd(sums.costUsd)
       : sums
-        ? `${tokens(sums.inputTokens + sums.outputTokens)} tok`
+        ? `${tokens(totalTokens(sums))} tok`
         : undefined;
   if (label === undefined) return null;
 
@@ -80,60 +84,74 @@ export function CostBadge({
         align={align}
         className="w-fit max-w-none rounded-md border border-ink-700 bg-foreground px-0 py-0 text-background"
       >
-        <CostBreakdown entries={entries} totals={sums} />
+        <CostBreakdown byModel={byModel} totals={sums} />
       </TooltipContent>
     </Tooltip>
   );
 }
 
-function CostBreakdown({ entries, totals }: { entries: CostEntry[]; totals: CostTotals | undefined }) {
-  const anyEstimated = entries.some((e) => e.estimated) || totals?.estimated === true;
+const breakdownVariants = {
+  tooltip: {
+    container: "min-w-64 p-2",
+    header: "text-background/55",
+    row: "border-t border-background/15",
+    footer: "border-t border-background/25 font-medium",
+    note: "text-background/50",
+  },
+  panel: {
+    container: "p-0",
+    header: "text-haze-700",
+    row: "border-t border-ink-700/70",
+    footer: "border-t border-ink-600 font-medium",
+    note: "text-haze-600",
+  },
+};
+
+/**
+ * Per-model cost table shared by the badge's tooltip and the run detail
+ * page's cost card. "tooltip" keeps the inverted colors of the badge
+ * popover; "panel" matches the page's normal ramp for placement in a Card.
+ */
+export function CostBreakdown({
+  byModel,
+  totals,
+  variant = "tooltip",
+}: {
+  byModel: CostModelTotal[];
+  totals: CostTotals | undefined;
+  variant?: "tooltip" | "panel";
+}) {
+  const anyEstimated = byModel.some((m) => m.estimated) || totals?.estimated === true;
+  const v = breakdownVariants[variant];
 
   return (
-    <div className="min-w-64 p-2">
+    <div className={v.container}>
       <table className="w-full border-collapse font-mono text-[10.5px] tabular-nums">
         <thead>
-          <tr className="text-background/55">
-            <th className="px-1.5 py-1 text-left font-normal">Entry</th>
+          <tr className={v.header}>
+            <th className="px-1.5 py-1 text-left font-normal">Model</th>
+            <th className="px-1.5 py-1 text-right font-normal">Tokens</th>
             <th className="px-1.5 py-1 text-right font-normal">Cost</th>
           </tr>
         </thead>
         <tbody>
-          {entries.map((entry, i) => (
-            <Fragment key={i}>
-              <tr className="border-t border-background/15">
-                <td className="max-w-32 px-1.5 py-1 text-left align-top">
-                  <div className="truncate">{entry.label}</div>
-                  <div className="truncate text-background/50">
-                    {entry.provider}
-                    {entry.breakdown && entry.breakdown.length > 1
-                      ? ` · ${entry.breakdown.length} models`
-                      : entry.model
-                        ? ` · ${shortenModel(entry.model)}`
-                        : ""}
-                  </div>
-                </td>
-                <td className="px-1.5 py-1 text-right align-top">
-                  {entry.costUsd !== undefined ? `${entry.estimated ? "~" : ""}${usd(entry.costUsd)}` : "-"}
-                </td>
-              </tr>
-              {entry.breakdown?.map((model) => (
-                <tr key={`${i}-${model.model}`} className="border-t border-background/8 text-background/70">
-                  <td className="max-w-32 py-0.5 pr-1.5 pl-4 text-left align-top">
-                    <div className="truncate text-background/60">{shortenModel(model.model)}</div>
-                  </td>
-                  <td className="px-1.5 py-0.5 text-right align-top">
-                    {model.costUsd !== undefined ? `${entry.estimated ? "~" : ""}${usd(model.costUsd)}` : "-"}
-                  </td>
-                </tr>
-              ))}
-            </Fragment>
+          {byModel.map((row) => (
+            <tr key={row.model} className={v.row}>
+              <td className="max-w-32 px-1.5 py-1 text-left align-top">
+                <div className="truncate">{shortenModel(row.model)}</div>
+              </td>
+              <td className="px-1.5 py-1 text-right align-top">{tokens(totalTokens(row))}</td>
+              <td className="px-1.5 py-1 text-right align-top">
+                {row.costUsd !== undefined ? `${row.estimated ? "~" : ""}${usd(row.costUsd)}` : "-"}
+              </td>
+            </tr>
           ))}
         </tbody>
         {totals && (
           <tfoot>
-            <tr className="border-t border-background/25 font-medium">
+            <tr className={v.footer}>
               <td className="px-1.5 py-1 text-left">Total</td>
+              <td className="px-1.5 py-1 text-right">{tokens(totalTokens(totals))}</td>
               <td className="px-1.5 py-1 text-right">
                 {totals.costUsd !== undefined ? `${totals.estimated ? "~" : ""}${usd(totals.costUsd)}` : "-"}
               </td>
@@ -142,40 +160,18 @@ function CostBreakdown({ entries, totals }: { entries: CostEntry[]; totals: Cost
         )}
       </table>
       {anyEstimated && (
-        <p className="px-1.5 pt-1.5 font-mono text-[10px] text-background/50">
-          ~ estimated from model pricing
-        </p>
+        <p className={`px-1.5 pt-1.5 font-mono text-[10px] ${v.note}`}>~ estimated from model pricing</p>
       )}
     </div>
   );
 }
 
-/**
- * Fallback totals when the run doesn't carry server-computed ones. Local
- * rather than shared's summarizeCosts: a runtime import of @brevi/shared
- * would pull its Node-only config module into the browser bundle, so the
- * dashboard only ever imports shared types.
- */
-function sumEntries(entries: CostEntry[]): CostTotals {
-  const totals: CostTotals = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    estimated: false,
-  };
-  for (const entry of entries) {
-    totals.inputTokens += entry.inputTokens;
-    totals.outputTokens += entry.outputTokens;
-    totals.cacheReadTokens += entry.cacheReadTokens ?? 0;
-    totals.cacheWriteTokens += entry.cacheWriteTokens ?? 0;
-    if (entry.costUsd !== undefined) totals.costUsd = (totals.costUsd ?? 0) + entry.costUsd;
-    if (entry.estimated) totals.estimated = true;
-  }
-  return totals;
-}
-
 /** Strip the "claude-" prefix so model names stay narrow in the breakdown table. */
 function shortenModel(model: string): string {
   return model.replace(/^claude-/, "");
+}
+
+/** Sum every token category, including cache reads/writes, into the displayed total. */
+function totalTokens(t: CostModelTotal | CostTotals): number {
+  return t.inputTokens + t.outputTokens + (t.cacheReadTokens ?? 0) + (t.cacheWriteTokens ?? 0);
 }

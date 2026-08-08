@@ -72,10 +72,9 @@ export interface ArtifactRef {
 }
 
 /**
- * One model's share of an execution's usage, measured from the agent's
- * transcripts (ccusage) rather than the output stream. An execution that
- * spans several models (orchestrator loop, implementer subagent) gets one
- * row per model; the owning entry's top-level figures are the roll-up.
+ * One model's share of an execution's usage. An execution that spans several
+ * models (orchestrator loop, implementer subagent) gets one row per model;
+ * the owning entry's top-level figures are the roll-up.
  */
 export interface CostModelUsage {
   model: string;
@@ -107,11 +106,28 @@ export interface CostEntry {
   /** True when computed from a pricing table (or modeled on a subscription login) instead of reported by the provider. */
   estimated?: boolean;
   /**
-   * Per-model rows behind the roll-up figures above, when a transcript-level
-   * measure (ccusage) captured them. Absent for stream-parsed entries
-   * (sandboxes without ccusage), which stay single-model.
+   * Per-model rows behind the roll-up figures above, present when the
+   * execution spanned several models (e.g. a delegated Claude run), whether
+   * measured from the agent's transcripts (ccusage) or reconstructed from
+   * the output stream. Single-model executions stay flat.
    */
   breakdown?: CostModelUsage[];
+}
+
+/**
+ * One model's aggregated share of a run's cost: tokens and cost summed across
+ * every entry (attempt, phase, provider) that used the model.
+ */
+export interface CostModelTotal {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** Absent when only tokens are known for this model. */
+  costUsd?: number;
+  /** True when any contributing figure is estimated rather than provider-reported. */
+  estimated: boolean;
 }
 
 /** Derived sums over a run's cost entries. */
@@ -124,6 +140,73 @@ export interface CostTotals {
   cacheWriteTokens: number;
   /** True when any contributing entry is estimated rather than provider-reported. */
   estimated: boolean;
+  /** Per-model roll-up across every entry, highest cost first. Absent from totals persisted by older orchestrators. */
+  byModel?: CostModelTotal[];
+}
+
+/**
+ * One entry's contribution to a single model's totals, before merging across
+ * entries. Mirrors CostModelTotal's numeric fields but stays entry-scoped.
+ */
+interface ModelContribution {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd?: number;
+  estimated: boolean;
+}
+
+/**
+ * Flatten one entry into its per-model contributions. Entries without a
+ * breakdown contribute a single row from their own top-level figures; entries
+ * with a breakdown contribute one row per breakdown row instead of (never in
+ * addition to) the top-level figures, since the top-level figures are already
+ * the roll-up of the breakdown.
+ */
+function modelContributions(entry: CostEntry): ModelContribution[] {
+  const estimated = entry.estimated === true;
+  if (!entry.breakdown || entry.breakdown.length === 0) {
+    return [
+      {
+        model: entry.model ?? "unknown",
+        inputTokens: entry.inputTokens,
+        outputTokens: entry.outputTokens,
+        cacheReadTokens: entry.cacheReadTokens ?? 0,
+        cacheWriteTokens: entry.cacheWriteTokens ?? 0,
+        costUsd: entry.costUsd,
+        estimated,
+      },
+    ];
+  }
+
+  const contributions: ModelContribution[] = entry.breakdown.map((row) => ({
+    model: row.model,
+    inputTokens: row.inputTokens,
+    outputTokens: row.outputTokens,
+    cacheReadTokens: row.cacheReadTokens ?? 0,
+    cacheWriteTokens: row.cacheWriteTokens ?? 0,
+    costUsd: row.costUsd,
+    estimated,
+  }));
+
+  // Codex sessions price at the session level: the entry carries a costUsd
+  // but none of its breakdown rows do. Attribute it once so per-model costs
+  // still sum to the run total, preferring the row matching the entry's own
+  // model and falling back to the row with the most tokens.
+  const hasRowCost = contributions.some((c) => c.costUsd !== undefined);
+  if (entry.costUsd !== undefined && !hasRowCost) {
+    let target = contributions.find((c) => c.model === entry.model);
+    if (!target) {
+      target = contributions.reduce((best, c) =>
+        c.inputTokens + c.outputTokens > best.inputTokens + best.outputTokens ? c : best,
+      );
+    }
+    target.costUsd = entry.costUsd;
+  }
+
+  return contributions;
 }
 
 /** Sum cost entries into run-level totals. */
@@ -135,6 +218,7 @@ export function summarizeCosts(entries: CostEntry[]): CostTotals {
     cacheWriteTokens: 0,
     estimated: false,
   };
+  const byModel = new Map<string, CostModelTotal>();
   for (const entry of entries) {
     totals.inputTokens += entry.inputTokens;
     totals.outputTokens += entry.outputTokens;
@@ -142,7 +226,37 @@ export function summarizeCosts(entries: CostEntry[]): CostTotals {
     totals.cacheWriteTokens += entry.cacheWriteTokens ?? 0;
     if (entry.costUsd !== undefined) totals.costUsd = (totals.costUsd ?? 0) + entry.costUsd;
     if (entry.estimated) totals.estimated = true;
+
+    for (const contribution of modelContributions(entry)) {
+      const existing = byModel.get(contribution.model);
+      if (existing) {
+        existing.inputTokens += contribution.inputTokens;
+        existing.outputTokens += contribution.outputTokens;
+        existing.cacheReadTokens += contribution.cacheReadTokens;
+        existing.cacheWriteTokens += contribution.cacheWriteTokens;
+        if (contribution.costUsd !== undefined) existing.costUsd = (existing.costUsd ?? 0) + contribution.costUsd;
+        if (contribution.estimated) existing.estimated = true;
+      } else {
+        byModel.set(contribution.model, {
+          model: contribution.model,
+          inputTokens: contribution.inputTokens,
+          outputTokens: contribution.outputTokens,
+          cacheReadTokens: contribution.cacheReadTokens,
+          cacheWriteTokens: contribution.cacheWriteTokens,
+          costUsd: contribution.costUsd,
+          estimated: contribution.estimated,
+        });
+      }
+    }
   }
+
+  totals.byModel = [...byModel.values()].sort((a, b) => {
+    if (a.costUsd !== undefined && b.costUsd !== undefined) return b.costUsd - a.costUsd;
+    if (a.costUsd !== undefined) return -1;
+    if (b.costUsd !== undefined) return 1;
+    return b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens);
+  });
+
   return totals;
 }
 

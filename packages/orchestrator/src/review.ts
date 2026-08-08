@@ -180,7 +180,7 @@ interface RunCodexExecOptions {
  */
 async function runCodexExec(options: RunCodexExecOptions): Promise<number> {
   const { sandbox, config, signal, codexHome, ccusageCommand, prompt, addCost, costLabel } = options;
-  const usage = usageCollector();
+  const usage = usageCollector("codex");
   // Reviewer transcripts run three at a time; interleaving their raw output
   // into the console would be unreadable, so only usage observation reads
   // every line and nothing from stdout/stderr is logged directly.
@@ -221,7 +221,6 @@ async function runCodexExec(options: RunCodexExecOptions): Promise<number> {
   const subscription = !config.agent.codexApiKey;
   const streamEntry = usage.snapshot({
     label: costLabel,
-    provider: "codex",
     subscription,
     fallbackModel: config.agent.reviewModel,
   });

@@ -145,7 +145,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     const trackThinking = thinkingTracker((phase, durationMs) => {
       store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "thinking", phase, durationMs });
     });
-    let usage = usageCollector();
+    let usage = usageCollector(limitProvider);
     // The current execution's Claude session id, captured from the stream's
     // init event; the ccusage sampler filters on it to scope its readings to
     // exactly this execution. Reset per execution in runAgent since each one
@@ -193,6 +193,11 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     // entries from other executions (earlier attempts reusing a label) are
     // never touched.
     let pendingCostId: string | undefined;
+    // The model the in-flight execution was configured with, kept so every
+    // snapshot path (post-exec, cancellation, usage limit) can still name and
+    // price the entry when the stream never carried a model id (Codex's new
+    // event format never does).
+    let pendingCostModel: string | undefined;
     recordPendingCost = async () => {
       // A sampler must never keep running (or emit) once its execution is
       // done being recorded, even on the early-return path below.
@@ -204,13 +209,14 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       }
       const label = pendingCostLabel;
       const executionId = pendingCostId;
+      const executionModel = pendingCostModel;
       pendingCostLabel = undefined;
       pendingCostId = undefined;
+      pendingCostModel = undefined;
       stdoutSink.flush();
       stderrSink.flush();
-      const provider = agentProvider(config);
-      const subscription = provider === "claude" ? !config.agent.anthropicApiKey : !config.agent.codexApiKey;
-      const streamEntry = usage.snapshot({ label, provider, subscription });
+      const subscription = limitProvider === "claude" ? !config.agent.anthropicApiKey : !config.agent.codexApiKey;
+      const streamEntry = usage.snapshot({ label, subscription, fallbackModel: executionModel });
 
       // ccusage reads the transcript directly, so when a final sample lands it
       // replaces both the interim samples upserted during the run and the
@@ -220,7 +226,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         sampler.stop();
         const rows = await sampler.finalRead();
         if (rows && rows.length > 0) {
-          const ccusageEntry = ccusageCostEntry({ label, rows, subscription, fallbackModel: streamEntry?.model });
+          const ccusageEntry = ccusageCostEntry({ label, rows, subscription, fallbackModel: streamEntry?.model ?? executionModel });
           if (streamEntry?.costUsd !== undefined && ccusageEntry.costUsd !== undefined) {
             const larger = Math.max(ccusageEntry.costUsd, streamEntry.costUsd);
             const diff = Math.abs(ccusageEntry.costUsd - streamEntry.costUsd);
@@ -236,7 +242,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         }
       }
       if (entry) await store.addCost(run.id, entry, executionId);
-      usage = usageCollector();
+      usage = usageCollector(limitProvider);
     };
 
     const activeSandbox = sandbox;
@@ -263,6 +269,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       // execution's usage to persist.
       pendingCostLabel = attempt.number > 1 ? `${label} (attempt ${attempt.number})` : label;
       pendingCostId = randomUUID();
+      pendingCostModel = model;
       // Each execution is a fresh Claude session; the sampler below waits for
       // this to be set again by the init event before it starts filtering.
       currentSessionId = undefined;
@@ -276,7 +283,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
           getSessionId: () => currentSessionId,
           signal,
           onSample: (rows) => {
-            const entry = ccusageCostEntry({ label: sampleLabel, rows, subscription, fallbackModel: undefined });
+            const entry = ccusageCostEntry({ label: sampleLabel, rows, subscription, fallbackModel: model });
             void store.upsertCost(run.id, executionId, entry).catch(() => undefined);
           },
         });

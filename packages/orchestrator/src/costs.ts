@@ -1,23 +1,67 @@
-import type { CostEntry } from "@brevi/shared";
+import type { CostEntry, CostModelUsage } from "@brevi/shared";
 
 /**
  * Reduces a coding agent's raw stream-json events into one CostEntry per
- * execution. Tolerant of shapes it doesn't recognize (newer CLI versions,
- * partial/malformed events): unrecognized events are ignored rather than
- * thrown on, since usage capture must never break a run.
+ * execution. Each provider (Claude, Codex, ...) gets a thin EventAdapter that
+ * reduces its own event shapes to a NormalizedReading: per-model samples plus
+ * an optional provider-reported execution total. usageCollector itself is
+ * provider-agnostic, dispatching to the adapter registered for the requested
+ * provider and handing whatever it observed to buildCostEntry, the one place
+ * cost entries are assembled: ccusage transcript samples (ccusage.ts) feed the
+ * same function, so roll-up, pricing fallback, and estimated-flag semantics
+ * live here regardless of where the usage was measured. Adding a new coding
+ * agent means adding one adapter to ADAPTERS; nothing else changes. Tolerant
+ * of shapes it doesn't recognize (newer CLI versions, partial/malformed
+ * events): unrecognized events are ignored rather than thrown on, since usage
+ * capture must never break a run.
  */
 
 const isDict = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** Token usage accumulated so far, before cost is attached. */
-interface Usage {
+export interface Usage {
   inputTokens: number;
   outputTokens: number;
   /** Present only once a cache-read figure has actually been observed. */
   cacheReadTokens?: number;
   /** Present only once a cache-write figure has actually been observed. */
   cacheWriteTokens?: number;
+}
+
+/**
+ * One model's normalized contribution to an execution: the shape every usage
+ * source (stream adapters, ccusage samples) reduces to before entries are
+ * built.
+ */
+export interface NormalizedSample extends Usage {
+  /** Model that produced the usage, when the source names one. */
+  model?: string;
+  /** Cost the source itself reported for this share; absent when only tokens are known. */
+  costUsd?: number;
+}
+
+/** A provider adapter's normalized reading of the usage observed so far. */
+interface NormalizedReading {
+  /** Per-model contributions observed so far. */
+  samples: NormalizedSample[];
+  /**
+   * Authoritative execution-wide token totals, when the provider reports one
+   * (Claude's terminal "result" event); overrides the summed samples.
+   */
+  totalUsage?: Usage;
+  /** Cost reported by the provider for the whole execution; absent when it never reports one. */
+  totalCostUsd?: number;
+  /** Headline model of the execution (Claude's init event); samples may add more (subagents). */
+  model?: string;
+}
+
+/** Reduces one provider's raw stream events to a normalized usage reading. */
+interface EventAdapter {
+  observe(event: unknown): void;
+  sessionId(): string | undefined;
+  /** The normalized reading so far, or undefined if nothing was observed. */
+  usage(): NormalizedReading | undefined;
 }
 
 export interface UsageCollector {
@@ -27,7 +71,6 @@ export interface UsageCollector {
   /** One CostEntry for the execution so far, or undefined if nothing was observed. */
   snapshot(options: {
     label: string;
-    provider: "claude" | "codex";
     subscription: boolean;
     /** Used when no model id was ever observed on the stream, e.g. Codex's new event format never names one. */
     fallbackModel?: string;
@@ -35,7 +78,7 @@ export interface UsageCollector {
 }
 
 /**
- * Best-effort USD-per-million-token pricing, used only when the provider
+ * Best-effort USD-per-million-token pricing, used only when the source
  * itself doesn't report a cost: always for Codex (the CLI never reports
  * spend), and for Claude when a run crashes before its terminal "result"
  * event or is running on a subscription login (nothing is actually billed
@@ -86,7 +129,7 @@ function estimateCost(usage: Usage, model: string | undefined): number | undefin
   return round6(cost);
 }
 
-/** Merge one Claude/Codex usage reading into a running total, keeping "never seen" distinct from zero. */
+/** Merge one usage reading into a running total, keeping "never seen" distinct from zero. */
 function accumulate(acc: Usage, usage: Usage): Usage {
   return {
     inputTokens: acc.inputTokens + usage.inputTokens,
@@ -98,6 +141,125 @@ function accumulate(acc: Usage, usage: Usage): Usage {
         ? (acc.cacheWriteTokens ?? 0) + usage.cacheWriteTokens
         : acc.cacheWriteTokens,
   };
+}
+
+/**
+ * The one place cost entries are assembled, shared by every usage source:
+ * stream adapters hand their reading over via usageCollector.snapshot, and
+ * ccusage transcript samples come in through ccusageCostEntry (ccusage.ts).
+ *
+ * Samples are merged per model (unnamed samples fall to the execution's
+ * model when one is known). The entry's top-level figures are the roll-up:
+ * the provider-reported execution totals when present, else the summed
+ * samples. An execution that spanned several models also carries the merged
+ * rows as `breakdown`, so the per-model split survives into the run's
+ * byModel aggregation (summarizeCosts) without double counting: consumers
+ * read the breakdown instead of, never in addition to, the top-level
+ * figures. Cost precedence: the provider's execution-wide figure, else the
+ * sum of sample costs, else a pricing-table estimate (marked estimated, as
+ * is any figure on a subscription login where nothing is billed per token).
+ */
+export function buildCostEntry(options: {
+  label: string;
+  provider: string;
+  subscription: boolean;
+  samples: NormalizedSample[];
+  totalUsage?: Usage;
+  totalCostUsd?: number;
+  model?: string;
+  fallbackModel?: string;
+}): CostEntry {
+  const { label, provider, subscription, samples, totalUsage, totalCostUsd, model, fallbackModel } = options;
+
+  // Merge samples per model so several readings for one model still yield one
+  // row. A sample without a model is attributed to the execution's own model
+  // when one is known: it has no other plausible owner.
+  const defaultModel = model ?? fallbackModel;
+  const merged = new Map<string | undefined, NormalizedSample>();
+  for (const sample of samples) {
+    const key = sample.model ?? defaultModel;
+    const existing = merged.get(key);
+    if (!existing) {
+      const row: NormalizedSample = { ...sample };
+      if (key !== undefined) row.model = key;
+      merged.set(key, row);
+      continue;
+    }
+    const summed = accumulate(existing, sample);
+    existing.inputTokens = summed.inputTokens;
+    existing.outputTokens = summed.outputTokens;
+    if (summed.cacheReadTokens !== undefined) existing.cacheReadTokens = summed.cacheReadTokens;
+    if (summed.cacheWriteTokens !== undefined) existing.cacheWriteTokens = summed.cacheWriteTokens;
+    if (sample.costUsd !== undefined) existing.costUsd = (existing.costUsd ?? 0) + sample.costUsd;
+  }
+  const rows = [...merged.values()];
+
+  let summed: Usage = { inputTokens: 0, outputTokens: 0 };
+  let rowCostUsd: number | undefined;
+  // The row driving the reported `model` when the provider never named an
+  // execution-wide one: highest-cost row when any row has a cost, else the
+  // row with the most total tokens.
+  let bestRow: NormalizedSample | undefined;
+  for (const row of rows) {
+    summed = accumulate(summed, row);
+    if (row.costUsd !== undefined) rowCostUsd = (rowCostUsd ?? 0) + row.costUsd;
+    if (bestRow === undefined) {
+      bestRow = row;
+      continue;
+    }
+    const better =
+      row.costUsd !== undefined || bestRow.costUsd !== undefined
+        ? (row.costUsd ?? -1) > (bestRow.costUsd ?? -1)
+        : row.inputTokens + row.outputTokens > bestRow.inputTokens + bestRow.outputTokens;
+    if (better) bestRow = row;
+  }
+
+  const usage = totalUsage ?? summed;
+  const resolvedModel = model ?? bestRow?.model ?? fallbackModel;
+
+  const entry: CostEntry = {
+    label,
+    provider,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+  };
+  if (resolvedModel) entry.model = resolvedModel;
+  if (usage.cacheReadTokens !== undefined) entry.cacheReadTokens = usage.cacheReadTokens;
+  if (usage.cacheWriteTokens !== undefined) entry.cacheWriteTokens = usage.cacheWriteTokens;
+
+  // Only a genuinely multi-model execution carries a breakdown; single-model
+  // entries stay flat, their top-level figures being the only row. Rows that
+  // could not be attributed to any model would leave the breakdown summing
+  // short of the entry, so their presence suppresses it.
+  if (rows.length >= 2 && rows.every((row) => row.model !== undefined)) {
+    entry.breakdown = rows as CostModelUsage[];
+  }
+
+  const reportedCostUsd = totalCostUsd ?? rowCostUsd;
+  if (reportedCostUsd !== undefined) {
+    entry.costUsd = round6(reportedCostUsd);
+    // Nothing is actually billed per token on a subscription login; the
+    // reported figure is still a modeled cost, not a real charge.
+    if (subscription) entry.estimated = true;
+  } else {
+    // No source reported a cost, or none did this time (crash, usage limit):
+    // fall back to the pricing table, pricing each model's share at its own
+    // rate. The estimate lands on the row too (no row carried a cost, or the
+    // reported branch above would have run), so the entry's figure stays
+    // exactly the sum of its breakdown rows.
+    let estimated: number | undefined;
+    for (const row of rows) {
+      const cost = estimateCost(row, row.model);
+      if (cost !== undefined) {
+        estimated = (estimated ?? 0) + cost;
+        row.costUsd = cost;
+      }
+    }
+    if (estimated === undefined && rows.length === 0) estimated = estimateCost(usage, resolvedModel);
+    if (estimated !== undefined) entry.costUsd = round6(estimated);
+    entry.estimated = true;
+  }
+  return entry;
 }
 
 /**
@@ -144,24 +306,90 @@ function codexUsageFrom(raw: unknown): Usage | undefined {
 }
 
 /**
- * Collects usage across one agent execution's stream-json events and reduces
- * it to a single CostEntry. One collector per execution: create a fresh one
- * for each `runAgent` call.
+ * Claude Code's stream-json events: headline model and session id from the
+ * "system"/"init" event, per-message fallback accumulation from every
+ * "assistant" event keyed by that event's own model (so delegated executions
+ * keep one contribution per model: orchestrator loop and implementer
+ * subagent stay distinct), and the terminal "result" event supplying the
+ * authoritative execution-wide totals when it arrives.
  */
-export function usageCollector(): UsageCollector {
-  let model: string | undefined;
-  // Claude's session_id (from the init event) or Codex's thread_id/session_id
-  // (new-format thread.started, or old-format session_configured).
+function claudeStreamAdapter(): EventAdapter {
+  let mainModel: string | undefined;
   let sessionId: string | undefined;
 
-  // Per-message fallback (Claude): accumulated from every "assistant" event,
-  // including subagent messages. Only used when no "result" event arrives.
-  let fallback: Usage = { inputTokens: 0, outputTokens: 0 };
-  let fallbackSeen = false;
+  // Per-message accumulation from every "assistant" event, including subagent
+  // messages, keyed by the model on each event. Always the source of the
+  // per-model split; also the total when no "result" event arrives.
+  const perModel = new Map<string | undefined, Usage>();
 
-  // Terminal "result" event (Claude): authoritative when present, so it
-  // overrides the fallback accumulation above rather than adding to it.
+  // Terminal "result" event: its execution-wide usage and cost are
+  // authoritative when present, overriding the accumulated totals above (but
+  // never the per-model split, which it doesn't carry).
   let result: { usage: Usage | undefined; costUsd: number | undefined } | undefined;
+
+  return {
+    observe(event: unknown): void {
+      if (!isDict(event)) return;
+      if (event.type === "system" && event.subtype === "init") {
+        if (typeof event.model === "string") mainModel ??= event.model;
+        if (typeof event.session_id === "string") sessionId ??= event.session_id;
+        return;
+      }
+      if (event.type === "assistant") {
+        const message = event.message;
+        if (isDict(message)) {
+          const model = typeof message.model === "string" ? message.model : undefined;
+          if (model) mainModel ??= model;
+          const usage = claudeUsageFrom(message.usage);
+          if (usage) {
+            perModel.set(model, accumulate(perModel.get(model) ?? { inputTokens: 0, outputTokens: 0 }, usage));
+          }
+        }
+        return;
+      }
+      if (event.type === "result") {
+        result = {
+          usage: claudeUsageFrom(event.usage),
+          costUsd: typeof event.total_cost_usd === "number" ? event.total_cost_usd : undefined,
+        };
+        return;
+      }
+    },
+    sessionId(): string | undefined {
+      return sessionId;
+    },
+    usage(): NormalizedReading | undefined {
+      if (!result && perModel.size === 0) return undefined;
+      const samples: NormalizedSample[] = [...perModel.entries()].map(([model, usage]) => {
+        const sample: NormalizedSample = { ...usage };
+        if (model) sample.model = model;
+        return sample;
+      });
+      const reading: NormalizedReading = { samples };
+      // A result without a recognized usage object leaves the accumulated
+      // samples as the totals instead of zeroing the token counts.
+      if (result?.usage) reading.totalUsage = result.usage;
+      if (result && result.costUsd !== undefined) reading.totalCostUsd = result.costUsd;
+      if (mainModel) reading.model = mainModel;
+      return reading;
+    },
+  };
+}
+
+/**
+ * Codex's stream-json events. Session id from `thread.started` (new format)
+ * or `session_configured` (old envelopes), model from `session_configured`.
+ * Codex reports a cumulative session total on every token_count event, so
+ * each observation replaces the running total rather than accumulating into
+ * it; the newer `turn.completed` usage is per-turn, so it's accumulated
+ * across turns instead. Never reports its own cost: the Codex CLI never
+ * reports spend, so the reading never sets totalCostUsd.
+ */
+function codexStreamAdapter(): EventAdapter {
+  let model: string | undefined;
+  // Codex's thread_id/session_id (new-format thread.started, or old-format
+  // session_configured).
+  let sessionId: string | undefined;
 
   // Codex reports a cumulative session total on every token_count event, so
   // each observation replaces the snapshot rather than accumulating into it.
@@ -171,121 +399,92 @@ export function usageCollector(): UsageCollector {
   // it's accumulated across turns rather than replacing the running total.
   let codexTurns: Usage | undefined;
 
-  function observe(event: unknown): void {
-    if (!isDict(event)) return;
-
-    if (event.type === "system" && event.subtype === "init") {
-      if (typeof event.model === "string") model ??= event.model;
-      if (typeof event.session_id === "string") sessionId ??= event.session_id;
-      return;
-    }
-    if (event.type === "assistant") {
-      const message = event.message;
-      if (isDict(message)) {
-        if (typeof message.model === "string") model ??= message.model;
-        const usage = claudeUsageFrom(message.usage);
-        if (usage) {
-          fallback = accumulate(fallback, usage);
-          fallbackSeen = true;
-        }
-      }
-      return;
-    }
-    if (event.type === "result") {
-      result = {
-        usage: claudeUsageFrom(event.usage),
-        costUsd: typeof event.total_cost_usd === "number" ? event.total_cost_usd : undefined,
-      };
-      return;
-    }
-
-    // Codex CLI >= 0.44 emits a flat format (top-level `type`, no envelope);
-    // older CLIs emit `{id, msg: {...}}` envelopes, handled further below.
-    if (event.type === "thread.started") {
-      if (typeof event.thread_id === "string") sessionId ??= event.thread_id;
-      return;
-    }
-    if (event.type === "turn.completed") {
-      const usage = codexUsageFrom(event.usage);
-      if (usage) codexTurns = accumulate(codexTurns ?? { inputTokens: 0, outputTokens: 0 }, usage);
-      return;
-    }
-
-    // Codex CLI < 0.44 events are {id, msg: {...}} envelopes.
-    const msg = event.msg;
-    if (!isDict(msg)) return;
-    if (msg.type === "session_configured") {
-      if (typeof msg.model === "string") model ??= msg.model;
-      if (typeof msg.session_id === "string") sessionId ??= msg.session_id;
-      return;
-    }
-    if (msg.type === "token_count") {
-      const info = isDict(msg.info) ? msg.info : undefined;
-      const usage = codexUsageFrom(info ? info.total_token_usage : msg);
-      if (usage) codex = usage;
-    }
-  }
-
-  function claudeSnapshot(label: string, subscription: boolean, fallbackModel: string | undefined): CostEntry | undefined {
-    if (!result && !fallbackSeen) return undefined;
-    // The result event's usage is the authoritative roll-up (subagent usage
-    // included); when present the per-message fallback is ignored entirely
-    // rather than blended with it. A result without a recognized usage object
-    // keeps the accumulated fallback instead of zeroing the token counts.
-    const usage = result?.usage ?? fallback;
-    const resolvedModel = model ?? fallbackModel;
-    const entry: CostEntry = {
-      label,
-      provider: "claude",
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-    };
-    if (resolvedModel) entry.model = resolvedModel;
-    if (usage.cacheReadTokens !== undefined) entry.cacheReadTokens = usage.cacheReadTokens;
-    if (usage.cacheWriteTokens !== undefined) entry.cacheWriteTokens = usage.cacheWriteTokens;
-
-    if (result && result.costUsd !== undefined) {
-      entry.costUsd = result.costUsd;
-      // Nothing is actually billed per token on a subscription login; the
-      // provider's figure is still a modeled cost, not a real charge.
-      if (subscription) entry.estimated = true;
-    } else {
-      // No result event arrived (crash, usage limit) or it carried no cost:
-      // fall back to the pricing table.
-      const costUsd = estimateCost(usage, resolvedModel);
-      if (costUsd !== undefined) entry.costUsd = costUsd;
-      entry.estimated = true;
-    }
-    return entry;
-  }
-
-  function codexSnapshot(label: string, fallbackModel: string | undefined): CostEntry | undefined {
-    // Old-format cumulative snapshot wins when both somehow exist.
-    const usage = codex ?? codexTurns;
-    if (!usage) return undefined;
-    const resolvedModel = model ?? fallbackModel;
-    const entry: CostEntry = {
-      label,
-      provider: "codex",
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-      // Codex never reports its own spend; every entry is table-estimated.
-      estimated: true,
-    };
-    if (resolvedModel) entry.model = resolvedModel;
-    if (usage.cacheReadTokens !== undefined) entry.cacheReadTokens = usage.cacheReadTokens;
-    const costUsd = estimateCost(usage, resolvedModel);
-    if (costUsd !== undefined) entry.costUsd = costUsd;
-    return entry;
-  }
-
   return {
-    observe,
+    observe(event: unknown): void {
+      if (!isDict(event)) return;
+
+      // Codex CLI >= 0.44 emits a flat format (top-level `type`, no envelope);
+      // older CLIs emit `{id, msg: {...}}` envelopes, handled further below.
+      if (event.type === "thread.started") {
+        if (typeof event.thread_id === "string") sessionId ??= event.thread_id;
+        return;
+      }
+      if (event.type === "turn.completed") {
+        const usage = codexUsageFrom(event.usage);
+        if (usage) codexTurns = accumulate(codexTurns ?? { inputTokens: 0, outputTokens: 0 }, usage);
+        return;
+      }
+
+      // Codex CLI < 0.44 events are {id, msg: {...}} envelopes.
+      const msg = event.msg;
+      if (!isDict(msg)) return;
+      if (msg.type === "session_configured") {
+        if (typeof msg.model === "string") model ??= msg.model;
+        if (typeof msg.session_id === "string") sessionId ??= msg.session_id;
+        return;
+      }
+      if (msg.type === "token_count") {
+        const info = isDict(msg.info) ? msg.info : undefined;
+        const usage = codexUsageFrom(info ? info.total_token_usage : msg);
+        if (usage) codex = usage;
+      }
+    },
     sessionId(): string | undefined {
       return sessionId;
     },
-    snapshot({ label, provider, subscription, fallbackModel }): CostEntry | undefined {
-      return provider === "codex" ? codexSnapshot(label, fallbackModel) : claudeSnapshot(label, subscription, fallbackModel);
+    usage(): NormalizedReading | undefined {
+      // Old-format cumulative snapshot wins when both somehow exist.
+      const usage = codex ?? codexTurns;
+      if (!usage) return undefined;
+      const sample: NormalizedSample = { ...usage };
+      if (model) sample.model = model;
+      const reading: NormalizedReading = { samples: [sample] };
+      if (model) reading.model = model;
+      return reading;
+    },
+  };
+}
+
+/** An adapter that observes nothing: used for a provider with no registered adapter. */
+function inertAdapter(): EventAdapter {
+  return {
+    observe(): void {},
+    sessionId(): string | undefined {
+      return undefined;
+    },
+    usage(): NormalizedReading | undefined {
+      return undefined;
+    },
+  };
+}
+
+/** Adding a new coding agent means adding one adapter here; nothing downstream changes. */
+const ADAPTERS: Record<string, () => EventAdapter> = {
+  claude: claudeStreamAdapter,
+  codex: codexStreamAdapter,
+};
+
+/**
+ * Collects usage across one agent execution's stream-json events and reduces
+ * it to a single CostEntry. One collector per execution: create a fresh one
+ * for each `runAgent` call. An unknown provider gets an inert adapter
+ * (observes nothing, reports no usage) rather than a throw: usage capture
+ * must never break a run.
+ */
+export function usageCollector(provider: string): UsageCollector {
+  const adapter = (ADAPTERS[provider] ?? inertAdapter)();
+
+  return {
+    observe(event: unknown): void {
+      adapter.observe(event);
+    },
+    sessionId(): string | undefined {
+      return adapter.sessionId();
+    },
+    snapshot({ label, subscription, fallbackModel }): CostEntry | undefined {
+      const reading = adapter.usage();
+      if (!reading) return undefined;
+      return buildCostEntry({ label, provider, subscription, fallbackModel, ...reading });
     },
   };
 }
