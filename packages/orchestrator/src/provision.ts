@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { WORKSPACES_DIR } from "@brevi/shared";
 import type { Sandbox } from "@brevi/sandbox";
 import { buildCredentialProfile, buildGitAskpass } from "./resume.js";
+import { isSafePathSegment } from "./safepath.js";
 
 export interface ProvisionedCredentials {
   /** Absolute path of the installed credential profile (POSIX sh, mode 600). */
@@ -34,6 +35,10 @@ export async function provisionCredentials(options: {
   githubToken?: string;
 }): Promise<ProvisionedCredentials> {
   const { sandbox, runId, env, codexAuthJson, githubToken } = options;
+  // The attach flow's runId originates in a client request; re-checked here
+  // (the server and store boundaries validate it too) so a hostile id can
+  // never be joined into a host-side path that escapes WORKSPACES_DIR.
+  if (!isSafePathSegment(runId)) throw new Error(`unsafe run id: ${JSON.stringify(runId)}`);
   const ssh = sandbox.connection().kind === "ssh";
   // Firecracker (ssh): VM state in the guest, outside the workspace so the
   // run's tree stays clean. The guest is Ubuntu, so root login shells source
