@@ -108,8 +108,8 @@ export interface CostEntry {
   estimated?: boolean;
   /**
    * Per-model rows behind the roll-up figures above, when a transcript-level
-   * measure (ccusage) captured them. Absent for stream-parsed entries (Codex,
-   * sandboxes without ccusage), which stay single-model.
+   * measure (ccusage) captured them. Absent for stream-parsed entries
+   * (sandboxes without ccusage), which stay single-model.
    */
   breakdown?: CostModelUsage[];
 }
