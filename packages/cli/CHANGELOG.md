@@ -1,5 +1,30 @@
 # @brevi/cli
 
+## 0.5.0
+
+### Minor Changes
+
+- 9209977: Live run cost from ccusage: sampled inside the sandbox during Claude runs, with a per-model token and cost breakdown, reconciled when the run ends.
+- 9bedce0: Add `brevi doctor`, a full setup health check (config, server, sandbox, connectors, CLIs) with pass/warn/fail hints and optional Claude diagnosis.
+- a08723e: New `brevi setup` command interactively provisions a Linux host for the Firecracker sandbox: KVM access, binary, kernel and rootfs images, and networking.
+- c9b2415: Firecracker VM sizing is now a small/medium/large preset, selectable live from the dashboard's Sandbox page, with a capacity hint against host memory.
+- 2a1f9bd: brevi init now detects the CLIs brevi depends on (claude, codex, gh, wrangler), offers to install missing ones, and reports a per-tool status.
+- 6987912: New `server.host` config field sets the dashboard bind address: set it to `0.0.0.0` to reach brevi from other devices on your network (default unchanged).
+
+### Patch Changes
+
+- 0b2a258: Codex review passes now get real per-model pricing from ccusage reading the run's Codex session files, replacing rough stream-estimated cost figures.
+- 24e14a7: Run commits are now authored as the connected GitHub user via their noreply address, so squash merges stop pre-filling a Co-authored-by: brevi trailer.
+- fc9307e: The cost breakdown tooltip on the run cost badge now shows only each entry's label and cost, dropping the In, Out, and Cache token columns from the table.
+- 915499a: Harden brevi setup artifact downloads against SSRF: HTTPS-only host allowlist for firecracker and kernel downloads, with every redirect hop validated.
+- 658924c: Linear OAuth tokens now refresh automatically before they expire, and a revoked connection pauses polling and shows a reconnect prompt in the dashboard.
+- c65e4ea: Validate run ids, artifact names, and sandbox-pulled files (symlinks rejected) before any host-side read, closing path traversal and file disclosure holes.
+- 83460e0: Firecracker runs work now: claude runs in auto permission mode (bypass is refused as root inside the guest) and the rootfs build bakes in DNS config.
+- ca54a61: The dashboard now works on phones and tablets: the runs sidebar becomes an off-canvas drawer, layouts stack and wrap, and touch targets reach 44px.
+- 99840f3: Run detail now shows the Result tab only once a run has finished; active runs stay on Console, and the tab appears and takes focus when the run completes.
+- 863950d: Harden GitHub token handling in the orchestrator by using a constant-time comparison when resolving the commit identity, preventing timing attacks.
+- d5077ce: The dashboard now opens OAuth authorization and device-verification URLs only when they point at the provider or the configured connect service.
+
 ## 0.4.0
 
 ### Minor Changes
