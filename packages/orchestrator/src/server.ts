@@ -4,7 +4,7 @@ import type { Server as HttpServer, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { createRequire } from "node:module";
 import { totalmem } from "node:os";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -27,6 +27,7 @@ import {
 import { loadConfig } from "./config.js";
 import { attachOrchestratorLogFile } from "./logfile.js";
 import { Orchestrator, OrchestratorError } from "./scheduler.js";
+import { isSafePathSegment, resolveWithin } from "./safepath.js";
 import { handleAttachSocket } from "./terminal.js";
 
 export interface StartOptions {
@@ -159,6 +160,7 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
 
   app.get("/api/runs/:id/events", async (c) => {
     const id = c.req.param("id");
+    if (!isSafePathSegment(id)) return c.json({ error: "invalid run id" }, 400);
     if (!orchestrator.getRun(id)) return c.json({ error: "run not found" }, 404);
     return c.json(await orchestrator.getRunEvents(id));
   });
@@ -166,13 +168,14 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
   app.get("/api/runs/:id/artifacts/:name", async (c) => {
     const id = c.req.param("id");
     const name = c.req.param("name");
+    // Route params are URL-decoded after matching, so they can smuggle
+    // separators; reject before the id or name touches a path.
+    if (!isSafePathSegment(id)) return c.json({ error: "invalid run id" }, 400);
+    if (!isSafePathSegment(name)) return c.json({ error: "invalid artifact name" }, 400);
     const run = orchestrator.getRun(id);
     if (!run) return c.json({ error: "run not found" }, 404);
-    const dir = orchestrator.store.artifactsDir(id);
-    const path = resolve(dir, name);
-    if (!path.startsWith(resolve(dir) + "/")) {
-      return c.json({ error: "invalid artifact name" }, 400);
-    }
+    const path = resolveWithin(orchestrator.store.artifactsDir(id), name);
+    if (!path) return c.json({ error: "invalid artifact name" }, 400);
     try {
       const bytes = await readFile(path);
       return c.body(new Uint8Array(bytes), 200, { "content-type": contentTypeFor(name) });
@@ -374,9 +377,18 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
     const dist = appDist ?? resolveAppDist();
     if (!dist) return c.html(PLACEHOLDER_HTML);
 
-    const requested = resolve(dist, `.${decodeURIComponent(pathname)}`);
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(pathname);
+    } catch {
+      return c.json({ error: "not found" }, 404);
+    }
+    // The sep suffix rejects both traversal out of dist and a sibling
+    // directory that merely shares dist as a string prefix.
+    const distRoot = resolve(dist);
+    const requested = resolve(distRoot, `.${decoded}`);
     const candidates =
-      requested.startsWith(resolve(dist)) && pathname !== "/" ? [requested] : [];
+      requested.startsWith(distRoot + sep) && pathname !== "/" ? [requested] : [];
     candidates.push(join(dist, "index.html"));
     for (const candidate of candidates) {
       try {

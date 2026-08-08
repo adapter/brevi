@@ -13,6 +13,7 @@ import {
   type SandboxProviderName,
   type Ticket,
 } from "@brevi/shared";
+import { isSafePathSegment } from "./safepath.js";
 
 /** Statuses for runs with an agent execution in flight (or about to start). */
 export const ACTIVE_STATUSES: ReadonlySet<RunStatus> = new Set([
@@ -75,6 +76,7 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
     const entries = await readdir(this.runsDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
+      if (!isSafePathSegment(entry.name)) continue;
       let run: Run;
       try {
         const raw = await readFile(join(this.runsDir, entry.name, "run.json"), "utf8");
@@ -171,9 +173,10 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
   /** Append an event to the run's log. Emits synchronously; disk write is queued. */
   appendEvent(event: RunEvent): void {
     const line = `${JSON.stringify(event)}\n`;
-    const file = join(this.runsDir, event.runId, "events.jsonl");
+    const dir = this.#runDir(event.runId);
+    const file = join(dir, "events.jsonl");
     this.#enqueue(async () => {
-      await mkdir(join(this.runsDir, event.runId), { recursive: true });
+      await mkdir(dir, { recursive: true });
       await appendFile(file, line);
     });
     this.emit("run-event", event);
@@ -241,7 +244,7 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
     await this.flush();
     let raw: string;
     try {
-      raw = await readFile(join(this.runsDir, runId, "events.jsonl"), "utf8");
+      raw = await readFile(join(this.#runDir(runId), "events.jsonl"), "utf8");
     } catch {
       return [];
     }
@@ -258,7 +261,16 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
   }
 
   artifactsDir(runId: string): string {
-    return join(this.runsDir, runId, "artifacts");
+    return join(this.#runDir(runId), "artifacts");
+  }
+
+  /**
+   * Every path under runsDir goes through here: a run id that is not a plain
+   * single path segment must never reach join(), whatever produced it.
+   */
+  #runDir(runId: string): string {
+    if (!isSafePathSegment(runId)) throw new Error(`unsafe run id: ${JSON.stringify(runId)}`);
+    return join(this.runsDir, runId);
   }
 
   /** Wait for all queued disk writes to land. */
@@ -267,7 +279,7 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
   }
 
   #persist(run: Run): Promise<void> {
-    const dir = join(this.runsDir, run.id);
+    const dir = this.#runDir(run.id);
     const body = `${JSON.stringify(run, null, 2)}\n`;
     return this.#enqueue(async () => {
       await mkdir(dir, { recursive: true });
