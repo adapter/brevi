@@ -18,12 +18,12 @@ import {
 } from "./github.js";
 import { AgentLimitError, agentProvider } from "./limits.js";
 import { buildFollowUpPrompt } from "./prompts.js";
+import { provisionCredentials } from "./provision.js";
 import { isContainedRegularFile } from "./safepath.js";
 import { isTerminal } from "./state.js";
 import { RunCancelledError, throwIfAborted } from "./util.js";
 import {
   agentModelPlan,
-  CODEX_HOME_DIR,
   BREVI_FOOTER,
   collectAgentEnv,
   createAgentSession,
@@ -229,14 +229,17 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
     }
     await store.update(run.id, { sandbox: { provider: provider.name, id: sandbox.id } });
 
-    // A Codex ChatGPT login travels as a file, not an env var; scrubbed
-    // again before anything is committed.
-    let codexHome: string | undefined;
-    if (config.agent.codexAuthJson) {
-      codexHome = `${sandbox.workspacePath}/${CODEX_HOME_DIR}`;
-      await sandbox.exec("mkdir", ["-p", codexHome]);
-      await sandbox.writeFile(`${codexHome}/auth.json`, config.agent.codexAuthJson);
-    }
+    // Credentials are installed as sandbox-wide state (a shell profile plus
+    // the Codex auth.json at a stable CODEX_HOME, outside the workspace so
+    // the follow-up's tree stays clean), reinstalled fresh so a rehydrated
+    // retained sandbox picks up rotated credentials too. No githubToken:
+    // runs never hold push credentials.
+    const { codexHome } = await provisionCredentials({
+      sandbox,
+      runId: run.id,
+      env: agentEnv,
+      codexAuthJson: config.agent.codexAuthJson || undefined,
+    });
     const claude = agentProvider(config) === "claude";
     const ccusageCommand = claude ? await resolveCcusageCommand(sandbox, provider.name, signal) : undefined;
     if (claude && !ccusageCommand) {

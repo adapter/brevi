@@ -65,6 +65,7 @@ import { fetchPrStatus, fetchPullRequestState, listRepos } from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
 import { isLinearAuthError, LinearService, type LinearAuthHooks } from "./linear.js";
 import { executeFollowUp } from "./followup.js";
+import { provisionCredentials } from "./provision.js";
 import { checkWrangler, DEFAULT_EVIDENCE_BUCKET, provisionBucket, startWranglerLogin } from "./r2.js";
 import { buildResumeScript } from "./resume.js";
 import { collectAgentEnv, executeRun, playwrightBrowsersPath } from "./runner.js";
@@ -107,6 +108,8 @@ const LINEAR_REFRESH_BACKOFF_MAX_MS = 15 * 60_000;
 const PR_POLL_INTERVAL_MS = 120_000;
 /** Only this many of the newest eligible runs are checked per cycle. */
 const PR_POLL_RECENT_RUNS = 20;
+/** Delay before retrying a failed retained-sandbox reap (the disk holds credential material). */
+const REAP_RETRY_MS = 60_000;
 
 /**
  * Result of one attempt to refresh the stored Linear OAuth token. "stale"
@@ -237,7 +240,9 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     for (const run of this.store.list()) {
       const retainedUntil = run.sandbox.retainedUntil;
       if (!retainedUntil) continue;
-      if (Date.parse(retainedUntil) <= Date.now()) await this.#reap(run.id);
+      // Via #maybeReap, not #reap: a cleanup failure must arm the retry
+      // timer, not abort startup.
+      if (Date.parse(retainedUntil) <= Date.now()) await this.#maybeReap(run.id);
       else this.#scheduleReap(run.id);
     }
     // Clears workspace dirs left behind by a crashed or interrupted run:
@@ -1136,10 +1141,21 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     const sandbox = await entry.pending;
     entry.clients += 1;
 
-    // Installed fresh on every resume call: cheap, and keeps credentials
-    // current if they changed since the sandbox was retained.
+    // Reinstalled fresh on every resume call: cheap, and keeps credentials
+    // current if they changed since the sandbox was retained. Provisioning is
+    // sandbox-wide (shell profile + Codex auth.json + git askpass), so plain
+    // shells opened beside the resumed conversation are authenticated too,
+    // not just the resumed process. The GitHub token travels only on this
+    // attach path; runs never hold push credentials.
     const env = collectAgentEnv(this.config);
     env.PLAYWRIGHT_BROWSERS_PATH = await playwrightBrowsersPath(provider.name);
+    const provisioned = await provisionCredentials({
+      sandbox,
+      runId,
+      env,
+      codexAuthJson: this.config.agent.codexAuthJson || undefined,
+      githubToken: this.config.github.token || undefined,
+    });
     const connection = sandbox.connection();
     // Kept outside the workspace/checkout in both cases, so the script never
     // dirties the run's tree: /root for ssh, alongside (not inside) the
@@ -1150,7 +1166,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       scriptPath,
       buildResumeScript({
         workspacePath: sandbox.workspacePath,
-        env,
+        profilePath: provisioned.profilePath,
         command: this.config.agent.command,
         sessionId: run.agentSessionId,
       }),
@@ -1448,7 +1464,11 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    * Tear down a run's retained sandbox: an already-attached (rehydrated)
    * instance is destroyed directly, otherwise the provider is asked to
    * discard the disk. Shared by the reaper (retention window expired) and
-   * requeue (a retry makes any retained disk stale immediately).
+   * requeue (a retry makes any retained disk stale immediately). Cleanup
+   * failures propagate, and retainedUntil is cleared only after the disk is
+   * actually gone: the retained disk carries credential material, so a
+   * failed teardown must keep the metadata a retry needs rather than report
+   * the sandbox as removed.
    */
   async #discardRetained(runId: string): Promise<void> {
     const timer = this.#reapTimers.get(runId);
@@ -1459,9 +1479,12 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     if (entry) {
       this.#attached.delete(runId);
       const sandbox = await entry.pending.catch(() => undefined);
-      await sandbox?.destroy().catch(() => undefined);
+      // A rehydration that never produced a sandbox still leaves the
+      // retained disk on the host; fall through to the provider's discard.
+      if (sandbox) await sandbox.destroy();
+      else await this.#provider?.discard(runId);
     } else if (this.store.get(runId)?.sandbox.retainedUntil) {
-      await this.#provider?.discard(runId).catch(() => undefined);
+      await this.#provider?.discard(runId);
     }
 
     const run = this.store.get(runId);
@@ -1507,6 +1530,15 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       console.error(
         `[brevi] failed to reap retained sandbox for ${runId}: ${error instanceof Error ? error.message : String(error)}`,
       );
+      // retainedUntil survived the failure (see #discardRetained), but its
+      // timer was consumed; re-arm one or the credential-bearing disk would
+      // sit unreclaimed until the next restart's sweep.
+      const retry = setTimeout(() => {
+        this.#reapTimers.delete(runId);
+        void this.#maybeReap(runId);
+      }, REAP_RETRY_MS);
+      retry.unref();
+      this.#reapTimers.set(runId, retry);
     }
   }
 

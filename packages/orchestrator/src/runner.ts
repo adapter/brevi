@@ -10,6 +10,7 @@ import { authenticatedRemote, createPullRequest, FALLBACK_COMMIT_IDENTITY, plain
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
 import { buildImplementationPrompt, buildReviewFixPrompt, type RepoMap } from "./prompts.js";
+import { provisionCredentials } from "./provision.js";
 import { uploadRunEvidence, type UploadedEvidence } from "./r2.js";
 import { codexReviewEnabled, runCodexReview } from "./review.js";
 import { isContainedRegularFile, isSafePathSegment, resolveWithin } from "./safepath.js";
@@ -36,8 +37,8 @@ export interface AgentSessionOptions {
   config: BreviConfig;
   sandbox: Sandbox;
   signal: AbortSignal;
-  /** CODEX_HOME dir inside the workspace, when a Codex ChatGPT login is mounted. */
-  codexHome?: string;
+  /** Stable CODEX_HOME dir provisioned in the sandbox (see provision.ts). */
+  codexHome: string;
   /** Resolved ccusage invocation for live cost sampling, when available. */
   ccusageCommand?: string;
   /** Decorates cost labels, e.g. appending " (attempt 2)". Defaults to identity. */
@@ -238,7 +239,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     // guarantees nothing is still running when the sandbox is destroyed.
     const exec = await activeSandbox.exec(config.agent.command, args, {
       cwd: activeSandbox.workspacePath,
-      env: codexHome ? { CODEX_HOME: codexHome } : undefined,
+      env: { CODEX_HOME: codexHome },
       timeoutMs: config.sandbox.timeoutMinutes * 60_000,
       signal,
       onStdout: (chunk) => stdoutSink.write(chunk),
@@ -355,15 +356,17 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     sandbox = await provider.create({ id: run.id, env: agentEnv });
     await store.update(run.id, { sandbox: { provider: provider.name, id: sandbox.id } });
     await sandbox.pushDirectory(checkoutDir, sandbox.workspacePath);
-    // A Codex ChatGPT login travels as a file, not an env var: the Codex CLI
-    // reads $CODEX_HOME/auth.json. Kept inside the workspace so every provider
-    // can write it; scrubbed again before anything is committed.
-    let codexHome: string | undefined;
-    if (config.agent.codexAuthJson) {
-      codexHome = `${sandbox.workspacePath}/${CODEX_HOME_DIR}`;
-      await sandbox.exec("mkdir", ["-p", codexHome]);
-      await sandbox.writeFile(`${codexHome}/auth.json`, config.agent.codexAuthJson);
-    }
+    // Credentials are installed as sandbox-wide state (a shell profile plus
+    // the Codex auth.json at a stable CODEX_HOME, both outside the workspace
+    // so the run's tree stays clean): the agent execs below get them via the
+    // sandbox env, and any interactive shell opened beside or after the run
+    // (brevi attach) is authenticated the same way.
+    const { codexHome } = await provisionCredentials({
+      sandbox,
+      runId: run.id,
+      env: agentEnv,
+      codexAuthJson: config.agent.codexAuthJson || undefined,
+    });
     // Live sampling only ever applies to Claude executions; a Codex run
     // resolves and starts nothing here. The Codex review passes below still
     // reuse this resolved command, for a one-shot post-exec ccusage read of
@@ -672,9 +675,6 @@ export function collectAgentEnv(config: BreviConfig): Record<string, string> {
   return env;
 }
 
-/** In-workspace directory holding a Codex ChatGPT login, wired up via CODEX_HOME. */
-export const CODEX_HOME_DIR = ".brevi/codex-home";
-
 const isDict = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -813,8 +813,8 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
         .catch(() => fallbackSummary)
     : fallbackSummary;
 
-  // Agent outputs (summary, demos) live with the run's artifacts, and the
-  // mounted Codex login must never leak: nothing under .brevi reaches the branch.
+  // Agent outputs (summary, demos) live with the run's artifacts: nothing
+  // under .brevi reaches the branch.
   await rm(join(pulledDir, ".brevi"), { recursive: true, force: true });
   await git(["add", "-A"], pulledDir, token);
   const status = await git(["status", "--porcelain"], pulledDir, token);
