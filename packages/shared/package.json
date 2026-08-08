@@ -19,6 +19,10 @@
     "./sizes": {
       "types": "./dist/sizes.d.ts",
       "default": "./dist/sizes.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
     }
   },
   "files": [

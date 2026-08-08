@@ -1,4 +1,5 @@
 import type { LimitInfo, Run, RunEvent } from "@brevi/shared";
+import { summarizeCosts } from "@brevi/shared/types";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +11,7 @@ import { Artifacts } from "./Artifacts";
 import { AttachTerminal } from "./AttachTerminal";
 import { Plate, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
-import { CostBadge } from "./CostBadge";
+import { CostBadge, CostBreakdown } from "./CostBadge";
 import { External, Play, Stop } from "./Icons";
 import { ResultCard } from "./ResultCard";
 
@@ -53,6 +54,11 @@ export function RunDetail({
   const hasResult = Boolean(run.result);
   const hasArtifacts = artifacts.length > 0;
   const shipped = run.status === "completed";
+  // Older persisted runs may carry costTotals without a byModel breakdown;
+  // fall back to recomputing from the raw entries, mirroring CostBadge.
+  const computedCosts = run.costs.length > 0 ? summarizeCosts(run.costs) : undefined;
+  const costTotals = run.costTotals ?? computedCosts;
+  const costByModel = run.costTotals?.byModel ?? computedCosts?.byModel ?? [];
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -211,6 +217,15 @@ export function RunDetail({
                   <Field label="Run">{run.id}</Field>
                 </div>
               </Card>
+
+              {costTotals && (
+                <Card className="block shrink-0 px-4 py-3.5">
+                  <span className="plate text-haze-700">Cost</span>
+                  <div className="mt-2">
+                    <CostBreakdown byModel={costByModel} totals={costTotals} variant="panel" />
+                  </div>
+                </Card>
+              )}
 
               <Card className="flex min-h-[280px] flex-1 flex-col gap-0 overflow-hidden py-0">
                 <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">

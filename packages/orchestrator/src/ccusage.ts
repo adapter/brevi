@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { execa } from "execa";
 import { BREVI_HOME, type CostEntry, type CostModelUsage } from "@brevi/shared";
 import type { Sandbox } from "@brevi/sandbox";
+import { buildCostEntry } from "./costs.js";
 
 /**
  * Live, per-model cost from `ccusage`, run inside the run's sandbox while an
@@ -196,66 +197,30 @@ export function parseCodexCcusageSessions(stdout: string): CodexCcusageSession[]
 }
 
 /**
- * Roll a session's per-model ccusage rows up into one CostEntry, same shape
- * as the stream-parsed entries in costs.ts but carrying the per-model
- * `breakdown` alongside the summed totals.
+ * Adapt a session's per-model ccusage rows into the shared accumulator
+ * (buildCostEntry in costs.ts): the rows already are normalized per-model
+ * samples, so this only supplies the provider metadata and the session-level
+ * cost. Roll-up, model resolution, pricing fallback, and estimated-flag
+ * semantics all live in the one shared snapshot path.
  */
 export function ccusageCostEntry(options: {
   label: string;
   rows: CostModelUsage[];
   subscription: boolean;
   fallbackModel?: string;
-  provider?: "claude" | "codex";
-  /** Session-level cost (Codex reports pricing per session, not per model row). Used only when no row carried a cost. */
+  provider?: string;
+  /** Session-level cost (Codex reports pricing per session, not per model row): the authoritative execution total when present. */
   sessionCostUsd?: number;
 }): CostEntry {
   const { label, rows, subscription, fallbackModel, provider = "claude", sessionCostUsd } = options;
-
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let cacheReadTokens: number | undefined;
-  let cacheWriteTokens: number | undefined;
-  let costUsd: number | undefined;
-  // The row driving the reported `model`: highest-cost row when any row has a
-  // cost, else the row with the most total tokens.
-  let bestCostRow: CostModelUsage | undefined;
-  let bestTokenRow: CostModelUsage | undefined;
-
-  for (const row of rows) {
-    inputTokens += row.inputTokens;
-    outputTokens += row.outputTokens;
-    if (row.cacheReadTokens !== undefined) cacheReadTokens = (cacheReadTokens ?? 0) + row.cacheReadTokens;
-    if (row.cacheWriteTokens !== undefined) cacheWriteTokens = (cacheWriteTokens ?? 0) + row.cacheWriteTokens;
-    if (row.costUsd !== undefined) {
-      costUsd = (costUsd ?? 0) + row.costUsd;
-      if (bestCostRow === undefined || row.costUsd > (bestCostRow.costUsd ?? 0)) bestCostRow = row;
-    }
-    const tokens = row.inputTokens + row.outputTokens;
-    const bestTokens = bestTokenRow ? bestTokenRow.inputTokens + bestTokenRow.outputTokens : -1;
-    if (tokens > bestTokens) bestTokenRow = row;
-  }
-
-  // No row carried a cost (Codex rows are tokens-only: ccusage prices the
-  // session, not each model row): fall back to the session-level figure.
-  const resolvedCostUsd = costUsd !== undefined ? round6(costUsd) : sessionCostUsd !== undefined ? round6(sessionCostUsd) : undefined;
-
-  const entry: CostEntry = {
+  return buildCostEntry({
     label,
     provider,
-    inputTokens,
-    outputTokens,
-    breakdown: rows,
-  };
-  const model = bestCostRow?.model ?? bestTokenRow?.model ?? fallbackModel;
-  if (model) entry.model = model;
-  if (cacheReadTokens !== undefined) entry.cacheReadTokens = cacheReadTokens;
-  if (cacheWriteTokens !== undefined) entry.cacheWriteTokens = cacheWriteTokens;
-  if (resolvedCostUsd !== undefined) entry.costUsd = resolvedCostUsd;
-  // Nothing is actually billed per token on a subscription login, so that
-  // figure is modeled rather than real; an entry with no cost at all is
-  // token-only and gets the same flag for the same reason costs.ts sets it.
-  if (subscription || resolvedCostUsd === undefined) entry.estimated = true;
-  return entry;
+    subscription,
+    samples: rows,
+    totalCostUsd: sessionCostUsd,
+    fallbackModel,
+  });
 }
 
 export interface CcusageSampler {
