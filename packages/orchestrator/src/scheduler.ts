@@ -882,15 +882,17 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     if (ACTIVE_STATUSES.has(run.status) || run.status === "waiting") {
       throw new OrchestratorError("conflict", `run ${runId} is already ${run.status}`);
     }
-    if (run.status !== "completed") {
-      throw new OrchestratorError(
-        "conflict",
-        "only completed runs can take another look; use retry for failed or cancelled runs",
-      );
-    }
+    // Completed runs qualify, and so do failed or cancelled follow-ups: they
+    // keep their PR result (a retry clears it), so the feedback workflow can
+    // be tried again instead of forcing a retry that redoes the whole ticket.
     const prUrl = run.result?.prUrl;
     if (!prUrl) {
-      throw new OrchestratorError("invalid", "the run has no pull request to follow up on");
+      throw new OrchestratorError(
+        "invalid",
+        run.status === "completed"
+          ? "the run has no pull request to follow up on"
+          : "only runs that delivered a pull request can take another look; use retry to start the ticket over",
+      );
     }
     if (!this.config.github.token) {
       throw new OrchestratorError(
@@ -933,10 +935,19 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
           `could not check the pull request: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-      // The GitHub check took real time; the run must still be eligible.
+      // The GitHub check took real time; the run must still be eligible, and
+      // an interactive resume may have attached to the retained sandbox
+      // during the await (resumeRun also rejects while the reservation above
+      // is held, so this recheck is belt and braces).
       const current = this.store.get(runId);
-      if (!current || current.status !== "completed") {
-        throw new OrchestratorError("conflict", `run ${runId} is no longer completed`);
+      if (!current || !isTerminal(current.status) || !current.result?.prUrl) {
+        throw new OrchestratorError("conflict", `run ${runId} is no longer eligible for a follow-up`);
+      }
+      if (this.#attached.has(runId)) {
+        throw new OrchestratorError(
+          "conflict",
+          "an interactive session is attached to this run's sandbox; detach it before starting a follow-up",
+        );
       }
 
       // Take ownership of the retained disk for the duration: clear any
@@ -999,6 +1010,15 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
     if (run.status !== "completed" && run.status !== "failed") {
       throw new OrchestratorError("conflict", `run ${runId} is ${run.status}; only finished runs can be resumed`);
+    }
+    // A follow-up reservation covers the window between its synchronous
+    // checks and the run leaving "completed": attaching then would hand the
+    // interactive session a disk the queued follow-up is about to rehydrate.
+    if (this.#followUps.has(runId)) {
+      throw new OrchestratorError(
+        "conflict",
+        `a follow-up is starting for run ${runId}; wait for it to finish before attaching`,
+      );
     }
     const retainedUntil = run.sandbox.retainedUntil;
     if (!retainedUntil || Date.parse(retainedUntil) <= Date.now()) {

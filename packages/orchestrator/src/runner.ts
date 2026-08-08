@@ -712,9 +712,9 @@ function thinkingTracker(
 }
 
 /** Run git, scrubbing any embedded token out of error output. */
-export async function git(args: string[], cwd: string, token: string): Promise<ExecaResult> {
+export async function git(args: string[], cwd: string, token: string, signal?: AbortSignal): Promise<ExecaResult> {
   try {
-    return await execa("git", args, { cwd });
+    return await execa("git", args, { cwd, cancelSignal: signal });
   } catch (error) {
     const raw =
       error instanceof Error

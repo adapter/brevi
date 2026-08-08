@@ -45,7 +45,10 @@ export function RunDetail({
   const resumable = finished && sandboxRetained && Boolean(run.agentSessionId);
   // A retry clears run.result, so an active run still carrying its PR result is a follow-up in flight.
   const followUpInFlight = live && Boolean(run.result?.prUrl);
-  const followUpReady = run.status === "completed" && Boolean(run.result?.prUrl);
+  // Completed runs, plus failed or cancelled follow-ups: those keep their PR
+  // result (a retry clears it), so "Take another look" can run again instead
+  // of forcing a retry that redoes the whole ticket.
+  const followUpReady = isTerminal(run.status) && Boolean(run.result?.prUrl);
   const [prState, setPrState] = useState<"unknown" | "open" | "merged" | "closed">("unknown");
   const [probeTick, setProbeTick] = useState(0);
   // Switching runs hides the button until the probe below confirms the new

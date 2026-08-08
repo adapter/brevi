@@ -318,6 +318,9 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
     if (!headChanged) {
       log("system", "branch already matches the pull request head; nothing to push");
     } else {
+      // A cancel clicked during finalization must win before the branch is
+      // touched; the abortable push closes the remaining window.
+      throwIfAborted(signal);
       log("system", `pushing ${branch} (force-with-lease)`);
       // The lease pins the exact head observed at gather time, so a human
       // push that lands mid-follow-up is never overwritten.
@@ -330,6 +333,7 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
         ],
         pulledDir,
         token,
+        signal,
       );
       // Recorded immediately after the push (not at completion), so the next
       // follow-up's comment cutoff survives even if this one fails later.
@@ -344,6 +348,9 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
     // Reviewers' threads are deliberately left unresolved; resolving them is
     // the reviewer's call.
     if (headChanged || actionable) {
+      // Last signal check before the other remote side effect; a push that
+      // already landed stays (pushedAt above already recorded it).
+      throwIfAborted(signal);
       const summary =
         reply || (await fallbackReply({ feedback, base, headChanged, actionable, pulledDir, token }));
       await postFollowUpComment({ prUrl, token, body: `${summary}\n\n---\n${BREVI_FOOTER}`, log });
