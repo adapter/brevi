@@ -162,6 +162,8 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
     const id = c.req.param("id");
     if (!isSafePathSegment(id)) return c.json({ error: "invalid run id" }, 400);
     if (!orchestrator.getRun(id)) return c.json({ error: "run not found" }, 404);
+    // Opening a run's detail view is a natural moment to freshen its PR chip.
+    void orchestrator.refreshPrState(id);
     return c.json(await orchestrator.getRunEvents(id));
   });
 

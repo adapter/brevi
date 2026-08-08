@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { BreviConfig, HealthResponse, LinearStatus, Run, Ticket } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,13 +11,15 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Card } from "@/components/ui/card";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { duration, relative } from "../lib/format";
 import { linearConnected as isLinearConnected } from "../lib/linear";
 import { repoDisplay } from "../lib/repo";
 import { isActive, isTerminal, STATUS_TONE } from "../lib/status";
-import { Plate, RepoChip, StatusDot } from "./Bits";
+import { Plate, PrChip, RepoChip, StatusDot } from "./Bits";
 import { CostBadge } from "./CostBadge";
-import { External, Play } from "./Icons";
+import { Check, Close, Eye, External, Play, Retry } from "./Icons";
 import { ThemeToggle } from "./ThemeToggle";
 
 export function AppSidebar({
@@ -32,6 +35,9 @@ export function AppSidebar({
   unreachable,
   onRun,
   onOpenRun,
+  onCancelRun,
+  onRetryRun,
+  onAnotherLook,
 }: {
   tickets: Ticket[];
   runs: Run[];
@@ -47,6 +53,9 @@ export function AppSidebar({
   /** Queues a run for the ticket; resolves to the new run's id, or null. */
   onRun: (ticketId: string) => Promise<string | null>;
   onOpenRun: (runId: string) => void;
+  onCancelRun: (runId: string) => void;
+  onRetryRun: (runId: string) => void;
+  onAnotherLook: (runId: string) => void;
 }) {
   // config === null still counts as connected so the connect card doesn't
   // flash before the first config arrives.
@@ -131,7 +140,11 @@ export function AppSidebar({
                             repoName={repoDisplay(config, run.ticket.repo)}
                             now={now}
                             selected={run.id === selectedRunId}
+                            busy={busy[run.id] === true}
                             onOpen={() => openRun(run.id)}
+                            onCancel={() => onCancelRun(run.id)}
+                            onRetry={() => onRetryRun(run.id)}
+                            onAnotherLook={() => onAnotherLook(run.id)}
                           />
                         </li>
                       ))}
@@ -142,7 +155,11 @@ export function AppSidebar({
                             repoName={repoDisplay(config, run.ticket.repo)}
                             now={now}
                             selected={run.id === selectedRunId}
+                            busy={busy[run.id] === true}
                             onOpen={() => openRun(run.id)}
+                            onCancel={() => onCancelRun(run.id)}
+                            onRetry={() => onRetryRun(run.id)}
+                            onAnotherLook={() => onAnotherLook(run.id)}
                           />
                         </li>
                       ))}
@@ -176,7 +193,11 @@ export function AppSidebar({
                             repoName={repoDisplay(config, run.ticket.repo)}
                             now={now}
                             selected={run.id === selectedRunId}
+                            busy={busy[run.id] === true}
                             onOpen={() => openRun(run.id)}
+                            onCancel={() => onCancelRun(run.id)}
+                            onRetry={() => onRetryRun(run.id)}
+                            onAnotherLook={() => onAnotherLook(run.id)}
                           />
                         </li>
                       ))}
@@ -264,26 +285,51 @@ function TicketStrip({
 }
 
 /**
- * One run in the sidebar: status, ticket, and elapsed time. A real anchor to
- * /runs/<id> (so copy link and middle-click behave like any link) that hands
- * plain left-clicks to the router.
+ * One run in the sidebar: status, ticket, and elapsed time, plus inline
+ * actions and the PR chip. The run link is a stretched overlay anchor (so
+ * copy link and middle-click behave like any link) laid under the content;
+ * every interactive child opts back into pointer events so it takes its own
+ * clicks, and plain text falls through to the link underneath.
  */
 function RunStrip({
   run,
   repoName,
   now,
   selected,
+  busy,
   onOpen,
+  onCancel,
+  onRetry,
+  onAnotherLook,
 }: {
   run: Run;
   /** owner/name of the mapped repo, resolved from config. */
   repoName: string | undefined;
   now: number;
   selected: boolean;
+  busy: boolean;
   onOpen: () => void;
+  onCancel: () => void;
+  onRetry: () => void;
+  onAnotherLook: () => void;
 }) {
   const tone = STATUS_TONE[run.status];
   const live = isActive(run.status);
+  // Cancel is destructive and easy to fat-finger on touch; ask inline first.
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  useEffect(() => setConfirmingCancel(false), [run.id, run.status]);
+  const retryable = run.status === "failed" || run.status === "cancelled";
+  // The chip tracks the run-level PR, which survives retries; the follow-up
+  // button mirrors the server's gate instead: a terminal run still carrying
+  // its PR result (completed runs, plus failed or cancelled follow-ups)
+  // whose PR hasn't merged or closed.
+  const prUrl = run.prUrl;
+  const prState = prUrl ? (run.prState ?? "open") : undefined;
+  const lookable =
+    isTerminal(run.status) &&
+    Boolean(run.result?.prUrl) &&
+    prState !== "merged" &&
+    prState !== "closed";
   const span = live
     ? run.startedAt
       ? duration(run.startedAt, now)
@@ -293,24 +339,85 @@ function RunStrip({
       : "-";
 
   return (
-    <a
-      href={`/runs/${encodeURIComponent(run.id)}`}
-      onClick={(event) => {
-        if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
-        event.preventDefault();
-        onOpen();
-      }}
-      aria-current={selected ? "page" : undefined}
-      className={`flex overflow-hidden rounded-strip bg-card ring-1 transition-colors hover:bg-ink-800 ${
+    <div
+      className={`relative flex overflow-hidden rounded-strip bg-card ring-1 transition-colors hover:bg-ink-800 ${
         selected ? "bg-ink-800 ring-haze-600/50" : "ring-foreground/10"
       }`}
     >
+      {/* The whole card is one link; controls float above it. */}
+      <a
+        href={`/runs/${encodeURIComponent(run.id)}`}
+        onClick={(event) => {
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+          event.preventDefault();
+          onOpen();
+        }}
+        aria-current={selected ? "page" : undefined}
+        aria-label={`Open run for ${run.ticket.identifier}: ${run.ticket.title}`}
+        className="absolute inset-0 rounded-strip"
+      />
       <span className={`w-[3px] shrink-0 ${tone.fill}`} aria-hidden="true" />
-      <div className="min-w-0 flex-1 p-2.5">
+      <div className="pointer-events-none relative min-w-0 flex-1 p-2.5">
         <div className="flex items-center gap-1.5">
           <StatusDot status={run.status} size={6} />
           <span className={`plate ${tone.fg}`}>{tone.label}</span>
-          <span className="ml-auto font-mono text-[10px] tabular-nums text-haze-700">{span}</span>
+          <span className="ml-auto flex items-center gap-1">
+            {confirmingCancel ? (
+              <>
+                <span className="plate text-rust-400">Cancel?</span>
+                <StripAction
+                  icon={<Check className="size-3" />}
+                  label="Confirm cancel run"
+                  tooltip="Confirm cancel"
+                  disabled={busy}
+                  className="text-rust-400 hover:bg-rust-500/15 hover:text-rust-400"
+                  onClick={() => {
+                    setConfirmingCancel(false);
+                    onCancel();
+                  }}
+                />
+                <StripAction
+                  icon={<Close className="size-3" />}
+                  label="Keep running"
+                  tooltip="Keep running"
+                  disabled={busy}
+                  onClick={() => setConfirmingCancel(false)}
+                />
+              </>
+            ) : (
+              <>
+                {live && (
+                  <StripAction
+                    icon={<Close className="size-3" />}
+                    label="Cancel run"
+                    tooltip="Cancel run"
+                    disabled={busy}
+                    className="hover:text-rust-400"
+                    onClick={() => setConfirmingCancel(true)}
+                  />
+                )}
+                {retryable && (
+                  <StripAction
+                    icon={<Retry className="size-3" />}
+                    label="Retry run"
+                    tooltip="Retry run"
+                    disabled={busy}
+                    onClick={onRetry}
+                  />
+                )}
+                {lookable && (
+                  <StripAction
+                    icon={<Eye className="size-3" />}
+                    label="Take another look"
+                    tooltip="Take another look: rebase the PR and address review feedback"
+                    disabled={busy}
+                    onClick={onAnotherLook}
+                  />
+                )}
+              </>
+            )}
+            <span className="font-mono text-[10px] tabular-nums text-haze-700">{span}</span>
+          </span>
         </div>
         <div className="mt-1.5 flex items-baseline gap-2">
           <span className="shrink-0 font-plate text-[10px] tracking-[0.08em] text-haze-300">
@@ -322,13 +429,59 @@ function RunStrip({
         </div>
         <div className="mt-1.5 flex items-center gap-2">
           <RepoChip repo={repoName} />
-          <CostBadge costs={run.costs} totals={run.costTotals} align="end" />
+          {prUrl && prState && (
+            <PrChip url={prUrl} state={prState} className="pointer-events-auto" />
+          )}
+          <span className="pointer-events-auto">
+            <CostBadge costs={run.costs} totals={run.costTotals} align="end" />
+          </span>
           <span className="ml-auto font-mono text-[10px] text-haze-700">
             {relative(run.createdAt, now)}
           </span>
         </div>
       </div>
-    </a>
+    </div>
+  );
+}
+
+/**
+ * One icon-only action on a run strip: always visible (touch users must
+ * reach it), pinned above the strip's stretched link, and paired with both
+ * an aria-label and a tooltip.
+ */
+function StripAction({
+  icon,
+  label,
+  tooltip,
+  onClick,
+  disabled,
+  className,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  tooltip: string;
+  onClick: () => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={label}
+            disabled={disabled}
+            onClick={onClick}
+            className={cn("pointer-events-auto text-haze-600 hover:text-haze-200", className)}
+          >
+            {icon}
+          </Button>
+        }
+      />
+      <TooltipContent side="top">{tooltip}</TooltipContent>
+    </Tooltip>
   );
 }
 

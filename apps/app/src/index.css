@@ -49,6 +49,12 @@
   --color-peri-500: #3f4dc4;
   --color-peri-400: #4c5ad4;
   --color-iris-400: #7444c4;
+
+  /* GitHub PR states (Primer light). */
+  --color-pr-open: #1a7f37;
+  --color-pr-draft: #59636e;
+  --color-pr-merged: #8250df;
+  --color-pr-closed: #cf222e;
 }
 
 /*
@@ -97,6 +103,12 @@
   --color-peri-500: #5c6ee8;
   --color-peri-400: #7c8cf8;
   --color-iris-400: #a97bf0;
+
+  /* GitHub PR states (Primer dark), used only by the PR chip. */
+  --color-pr-open: #3fb950;
+  --color-pr-draft: #8b949e;
+  --color-pr-merged: #a371f7;
+  --color-pr-closed: #f85149;
 
   --radius-strip: 5px;
 
