@@ -208,6 +208,22 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
     }
   });
 
+  app.post("/api/runs/:id/followup", async (c) => {
+    try {
+      return c.json(await orchestrator.followUpRun(c.req.param("id")));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.get("/api/runs/:id/pr", async (c) => {
+    try {
+      return c.json(await orchestrator.prStatus(c.req.param("id")));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
   app.post("/api/runs/:id/resume", async (c) => {
     try {
       return c.json(await orchestrator.resumeRun(c.req.param("id")));

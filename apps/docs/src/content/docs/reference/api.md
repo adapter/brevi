@@ -20,6 +20,9 @@ There is no authentication: by default the server is loopback-only and anything 
 | `GET` | `/api/runs/:id/artifacts/:name` | Raw artifact bytes |
 | `POST` | `/api/tickets/:id/run` | `Run`: manually queue a ticket |
 | `POST` | `/api/runs/:id/cancel` | `Run` |
+| `POST` | `/api/runs/:id/retry` | `Run` |
+| `POST` | `/api/runs/:id/followup` | `Run`: start a follow-up on a completed run's open PR |
+| `GET` | `/api/runs/:id/pr` | `PrStatusResponse` |
 | `POST` | `/api/runs/:id/resume` | `ResumeRunResponse` |
 | `POST` | `/api/runs/:id/release` | `Run` |
 | `WS` | `/ws/runs/:id/attach` | Web-terminal bridge into the retained sandbox |
@@ -97,6 +100,14 @@ type RunAttachInfo =
 Errors: `404` when the run doesn't exist, `409` when the run hasn't finished yet or the configured sandbox provider has changed since it did, `410` once the retention window has passed and the disk was reclaimed, `400` when the run has no captured agent session id (resume is Claude-only for now; Codex runs don't report one).
 
 `POST /api/runs/:id/release` stops a resumed sandbox's compute again, keeping its disk until the retention window ends, and returns the updated `Run`. `brevi attach` calls it on detach; it's a no-op when nothing is booted.
+
+### Follow-ups
+
+`POST /api/runs/:id/followup` starts a follow-up on a completed run's open PR: it rebases the PR branch onto the latest base inside a sandbox (reusing the run's retained sandbox when still within the retention window, otherwise a fresh checkout), lets the agent resolve conflicts and address unresolved review threads, review summaries, and new comments, pushes with `--force-with-lease`, and posts one summary comment on the PR; the run's console streams the whole session and costs append as `follow-up` entries. The checkout and push target come from the PR itself (its own repository and live head branch), every push gets a summary comment (a drift-only rebase included), and the Linear ticket state is untouched; follow-ups run even while Linear is disconnected.
+
+Errors: `404` unknown run, `409` when the run is not completed, another execution is active, or the PR is merged/closed, `400` when the run has no PR or GitHub is not connected.
+
+`GET /api/runs/:id/pr` returns `{ url, number, state }` with state `open | merged | closed`, used by the dashboard to hide the follow-up button once the PR is merged or closed.
 
 ### Web terminal
 

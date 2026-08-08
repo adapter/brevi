@@ -53,6 +53,8 @@ export interface RunAttempt {
   /** 1-based sequence number within the run. */
   number: number;
   startedAt: string;
+  /** Set on follow-up executions (rebase + address PR feedback); absent for ordinary implementation attempts. */
+  kind?: "follow-up";
   finishedAt?: string;
   outcome?: AttemptOutcome;
   /** Failure detail when the outcome is "failed". */
@@ -265,6 +267,13 @@ export interface RunResult {
   prUrl?: string;
   /** Branch pushed for the run. */
   branch?: string;
+  /**
+   * ISO time of brevi's most recent push to the branch (the initial push or
+   * a follow-up's). Follow-ups use it as the "comments since the last push"
+   * cutoff; commit timestamps are no substitute, since a commit can be
+   * authored long before it is pushed.
+   */
+  pushedAt?: string;
   summary: string;
   artifacts: ArtifactRef[];
   /** Total LLM usage of the run at completion, summed across cost entries. */

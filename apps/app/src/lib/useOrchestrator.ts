@@ -414,6 +414,18 @@ export function useOrchestrator() {
     }
   }, []);
 
+  const followUpRun = useCallback(async (runId: string) => {
+    dispatch({ t: "busy", key: runId, on: true });
+    dispatch({ t: "notice", notice: null });
+    try {
+      dispatch({ t: "run", run: await api.followUpRun(runId) });
+    } catch (err) {
+      dispatch({ t: "notice", notice: `Could not start the follow-up. ${errorText(err)}` });
+    } finally {
+      dispatch({ t: "busy", key: runId, on: false });
+    }
+  }, []);
+
   const dismissNotice = useCallback(() => dispatch({ t: "notice", notice: null }), []);
 
   /** Adopt a redacted config returned by a settings mutation. */
@@ -436,6 +448,7 @@ export function useOrchestrator() {
     runTicket,
     cancelRun,
     retryRun,
+    followUpRun,
     dismissNotice,
     applyConfig,
   };

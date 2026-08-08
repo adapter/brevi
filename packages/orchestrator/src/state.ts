@@ -152,10 +152,14 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
   }
 
   /** Open a new attempt on the run and mark its start in the event log. */
-  async beginAttempt(runId: string): Promise<RunAttempt> {
+  async beginAttempt(runId: string, kind?: RunAttempt["kind"]): Promise<RunAttempt> {
     const run = this.#runs.get(runId);
     if (!run) throw new Error(`unknown run ${runId}`);
-    const attempt: RunAttempt = { number: run.attempts.length + 1, startedAt: new Date().toISOString() };
+    const attempt: RunAttempt = {
+      number: run.attempts.length + 1,
+      startedAt: new Date().toISOString(),
+      ...(kind ? { kind } : {}),
+    };
     await this.update(runId, { attempts: [...run.attempts, attempt] });
     this.appendEvent({ runId, ts: attempt.startedAt, type: "attempt", number: attempt.number });
     return attempt;

@@ -184,6 +184,13 @@ export const Monitor = (p: IconProps) => (
   </Svg>
 );
 
+export const Refresh = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3.2 8a4.8 4.8 0 0 1 8.1-3.5M12.8 8a4.8 4.8 0 0 1-8.1 3.5" />
+    <path d="M11.3 2.6v2.3H9M4.7 13.4v-2.3H7" />
+  </Svg>
+);
+
 export const Gear = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="8" cy="8" r="2.1" />

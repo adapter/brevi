@@ -7,6 +7,7 @@ import type {
   GithubRepo,
   HealthResponse,
   LinearProject,
+  PrStatusResponse,
   R2ConnectResponse,
   R2SettingsUpdateRequest,
   R2SettingsUpdateResponse,
@@ -45,6 +46,9 @@ export const api = {
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
   retryRun: (runId: string) =>
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/retry`, { method: "POST" }),
+  followUpRun: (runId: string) =>
+    json<Run>(`/api/runs/${encodeURIComponent(runId)}/followup`, { method: "POST" }),
+  prStatus: (runId: string) => json<PrStatusResponse>(`/api/runs/${encodeURIComponent(runId)}/pr`),
   updateCredentials: (request: CredentialsUpdateRequest) =>
     json<CredentialsUpdateResponse>("/api/settings/credentials", {
       method: "PUT",
