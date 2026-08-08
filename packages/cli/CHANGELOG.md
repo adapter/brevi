@@ -1,5 +1,17 @@
 # @brevi/cli
 
+## 0.6.0
+
+### Minor Changes
+
+- 629fb0a: Run detail adds a Take another look button: rebase a completed run's open PR onto its base, address review feedback, and push with force-with-lease.
+- 1361f59: Sidebar run cards gain inline Cancel, Retry, and Take another look actions plus a GitHub-colored PR chip that tracks open, draft, merged, and closed.
+
+### Patch Changes
+
+- aaf588b: Run cost tracking is now agent-agnostic and aggregated per model: the dashboard cost breakdown shows one row per model summed across all attempts and phases.
+- 804f7c5: Attach terminals in retained sandboxes stay authenticated for claude, codex, and git pushes in every shell, and reconnected credentials apply on re-attach.
+
 ## 0.5.0
 
 ### Minor Changes
