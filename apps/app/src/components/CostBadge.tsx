@@ -95,9 +95,6 @@ function CostBreakdown({ entries, totals }: { entries: CostEntry[]; totals: Cost
         <thead>
           <tr className="text-background/55">
             <th className="px-1.5 py-1 text-left font-normal">Entry</th>
-            <th className="px-1.5 py-1 text-right font-normal">In</th>
-            <th className="px-1.5 py-1 text-right font-normal">Out</th>
-            <th className="px-1.5 py-1 text-right font-normal">Cache</th>
             <th className="px-1.5 py-1 text-right font-normal">Cost</th>
           </tr>
         </thead>
@@ -116,11 +113,6 @@ function CostBreakdown({ entries, totals }: { entries: CostEntry[]; totals: Cost
                         : ""}
                   </div>
                 </td>
-                <td className="px-1.5 py-1 text-right align-top">{tokens(entry.inputTokens)}</td>
-                <td className="px-1.5 py-1 text-right align-top">{tokens(entry.outputTokens)}</td>
-                <td className="px-1.5 py-1 text-right align-top">
-                  {cacheCell(entry.cacheReadTokens, entry.cacheWriteTokens)}
-                </td>
                 <td className="px-1.5 py-1 text-right align-top">
                   {entry.costUsd !== undefined ? `${entry.estimated ? "~" : ""}${usd(entry.costUsd)}` : "-"}
                 </td>
@@ -129,11 +121,6 @@ function CostBreakdown({ entries, totals }: { entries: CostEntry[]; totals: Cost
                 <tr key={`${i}-${model.model}`} className="border-t border-background/8 text-background/70">
                   <td className="max-w-32 py-0.5 pr-1.5 pl-4 text-left align-top">
                     <div className="truncate text-background/60">{shortenModel(model.model)}</div>
-                  </td>
-                  <td className="px-1.5 py-0.5 text-right align-top">{tokens(model.inputTokens)}</td>
-                  <td className="px-1.5 py-0.5 text-right align-top">{tokens(model.outputTokens)}</td>
-                  <td className="px-1.5 py-0.5 text-right align-top">
-                    {cacheCell(model.cacheReadTokens, model.cacheWriteTokens)}
                   </td>
                   <td className="px-1.5 py-0.5 text-right align-top">
                     {model.costUsd !== undefined ? `${entry.estimated ? "~" : ""}${usd(model.costUsd)}` : "-"}
@@ -147,11 +134,6 @@ function CostBreakdown({ entries, totals }: { entries: CostEntry[]; totals: Cost
           <tfoot>
             <tr className="border-t border-background/25 font-medium">
               <td className="px-1.5 py-1 text-left">Total</td>
-              <td className="px-1.5 py-1 text-right">{tokens(totals.inputTokens)}</td>
-              <td className="px-1.5 py-1 text-right">{tokens(totals.outputTokens)}</td>
-              <td className="px-1.5 py-1 text-right">
-                {cacheCell(totals.cacheReadTokens, totals.cacheWriteTokens)}
-              </td>
               <td className="px-1.5 py-1 text-right">
                 {totals.costUsd !== undefined ? `${totals.estimated ? "~" : ""}${usd(totals.costUsd)}` : "-"}
               </td>
@@ -196,11 +178,4 @@ function sumEntries(entries: CostEntry[]): CostTotals {
 /** Strip the "claude-" prefix so model names stay narrow in the breakdown table. */
 function shortenModel(model: string): string {
   return model.replace(/^claude-/, "");
-}
-
-function cacheCell(read: number | undefined, write: number | undefined): string {
-  const parts: string[] = [];
-  if (read) parts.push(`${tokens(read)} r`);
-  if (write) parts.push(`${tokens(write)} w`);
-  return parts.length > 0 ? parts.join(" / ") : "-";
 }
