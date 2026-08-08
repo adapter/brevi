@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Octokit } from "octokit";
-import type { GithubRepo } from "@brevi/shared";
+import type { GithubRepo, PrState } from "@brevi/shared";
 
 export interface RemoteParts {
   owner: string;
@@ -91,6 +91,19 @@ export async function createPullRequest(options: CreatePullRequestOptions): Prom
   }
 }
 
+/**
+ * Live state of the pull request at an html url. Returns null when the url
+ * is not a GitHub PR url or GitHub cannot be reached, so a transient failure
+ * never flips a stored state.
+ */
+export async function fetchPullRequestState(prUrl: string, token: string): Promise<PrState | null> {
+  try {
+    return (await fetchPrStatus(prUrl, token)).state;
+  } catch {
+    return null;
+  }
+}
+
 /** Default branch reported by GitHub; used when repo config doesn't say. */
 export async function defaultBranchOf(remote: string, token: string): Promise<string> {
   const { owner, name } = parseRemote(remote);
@@ -174,8 +187,6 @@ export async function resolveCommitIdentity(
 // Marks brevi's own PR comments so gathering feedback never feeds them back into itself.
 const BREVI_MARKER = "Automated by [brevi]";
 
-export type PrState = "open" | "merged" | "closed";
-
 export interface PrStatus {
   url: string;
   number: number;
@@ -230,14 +241,20 @@ export function parsePrUrl(prUrl: string): { owner: string; name: string; number
   return { owner, name, number: Number(numberStr) };
 }
 
-/** Derive the open/merged/closed state from a pulls.get-shaped response. */
-function prStateOf(data: { merged?: boolean | null; merged_at?: string | null; state: string }): PrState {
+/** Derive the open/draft/merged/closed state from a pulls.get-shaped response. */
+function prStateOf(data: {
+  merged?: boolean | null;
+  merged_at?: string | null;
+  draft?: boolean | null;
+  state: string;
+}): PrState {
   if (data.merged || data.merged_at) return "merged";
   if (data.state === "closed") return "closed";
+  if (data.draft) return "draft";
   return "open";
 }
 
-/** Cheap open/merged/closed lookup for the dashboard's button gating. */
+/** Cheap open/draft/merged/closed lookup for the dashboard's button gating. */
 export async function fetchPrStatus(prUrl: string, token: string): Promise<PrStatus> {
   const parsed = parsePrUrl(prUrl);
   if (!parsed) throw new Error(`not a github pull request url: "${prUrl}"`);

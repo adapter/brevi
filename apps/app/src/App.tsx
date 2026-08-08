@@ -82,6 +82,9 @@ export default function App() {
         unreachable={unreachable}
         onRun={handleRun}
         onOpenRun={openRun}
+        onCancelRun={(id) => void cancelRun(id)}
+        onRetryRun={(id) => void retryRun(id)}
+        onAnotherLook={(id) => void followUpRun(id)}
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">

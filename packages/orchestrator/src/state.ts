@@ -88,6 +88,8 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
       if (!Array.isArray(run.attempts)) run = { ...run, attempts: [] };
       // Runs persisted before costs existed.
       if (!Array.isArray(run.costs)) run = { ...run, costs: [] };
+      // Runs persisted before run-level PR metadata existed.
+      if (run.prUrl === undefined && run.result?.prUrl) run = { ...run, prUrl: run.result.prUrl };
       if (!isTerminal(run.status) && run.status !== "waiting") {
         run = {
           ...run,

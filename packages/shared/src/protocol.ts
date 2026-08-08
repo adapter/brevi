@@ -1,5 +1,5 @@
 import type { BreviConfig, RepoConfig } from "./config.js";
-import type { Run, RunEvent, Ticket } from "./types.js";
+import type { PrState, Run, RunEvent, Ticket } from "./types.js";
 import type { FirecrackerVmSize } from "./sizes.js";
 
 /**
@@ -270,7 +270,7 @@ export interface ReposUpdateResponse {
 export interface PrStatusResponse {
   url: string;
   number: number;
-  state: "open" | "merged" | "closed";
+  state: PrState;
 }
 
 /** How `brevi attach` opens the interactive session a resume prepared. */

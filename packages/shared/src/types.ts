@@ -45,6 +45,13 @@ export interface LimitInfo {
 export type AttemptOutcome = "completed" | "failed" | "cancelled" | "limit";
 
 /**
+ * Lifecycle state of a run's pull request on GitHub, matching GitHub's own
+ * semantics: "open" and "draft" are still in review, "merged" and "closed"
+ * are final.
+ */
+export type PrState = "open" | "draft" | "merged" | "closed";
+
+/**
  * One agent execution within a run. A run retried after a usage limit (or
  * manually) accumulates attempts; each attempt's output is preserved in the
  * run's event log between its "attempt" markers.
@@ -314,6 +321,18 @@ export interface Run {
   costs: CostEntry[];
   /** Derived sums over costs; recomputed whenever an entry is appended. */
   costTotals?: CostTotals;
+  /**
+   * URL of the ticket's pull request, kept at run level so it survives a
+   * retry requeue (which clears result): set when a finished attempt opens
+   * or updates the PR.
+   */
+  prUrl?: string;
+  /**
+   * Last observed GitHub state of the run's PR (prUrl): set to "open"
+   * when the PR is created and refreshed by a lazy orchestrator poll until
+   * the PR merges or closes. Absent while no PR exists.
+   */
+  prState?: PrState;
   /** When status is "waiting", the earliest time the next attempt may start. */
   resumeAt?: string;
   /** The most recent usage limit that interrupted this run. */

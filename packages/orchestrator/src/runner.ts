@@ -476,9 +476,14 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     }
     throwIfAborted(signal);
     await store.endAttempt(run.id, { outcome: "completed" });
+    const current = store.get(run.id);
     await store.setStatus(run.id, "completed", {
       finishedAt: new Date().toISOString(),
-      result: { ...result, costTotals: store.get(run.id)?.costTotals },
+      result: { ...result, costTotals: current?.costTotals },
+      // A fresh PR (or an update push to the existing one) is open by
+      // definition; without one, keep whatever PR the run already tracked.
+      prUrl: result.prUrl ?? current?.prUrl,
+      prState: result.prUrl ? "open" : current?.prState,
     });
     log("system", `run completed: ${result.prUrl ?? "done"}`);
   } catch (error) {

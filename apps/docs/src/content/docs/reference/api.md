@@ -69,12 +69,16 @@ interface Run {
   error?: string;
   costs: CostEntry[];
   costTotals?: CostTotals;
+  prUrl?: string;       // the ticket's PR, kept at run level so it survives retries
+  prState?: "open" | "draft" | "merged" | "closed";
 }
 ```
 
 `GET /api/runs/:id/artifacts/:name` serves a file from the run's artifact directory with a guessed content type. Names that escape the directory are rejected with `400`.
 
 Cancelling a terminal run is a no-op and returns it unchanged; cancelling a queued run marks it `cancelled` immediately; cancelling the active run aborts it.
+
+`prUrl` and `prState` are set once a run opens a PR and track it at run level, so a retry (which clears `result`) never loses sight of the PR. `prState` is the last observed GitHub state: refreshed by a lazy background poll (about every 2 minutes, for the most recent runs whose PR hasn't merged or closed, whatever the run's own status) and whenever a run's detail view is opened, and streamed to the dashboard over the WebSocket as a `run-updated` message. The sidebar's PR chip and inline actions render from it.
 
 `costs` has one `CostEntry` per agent execution (an attempt, or a future phase/subagent), each carrying `label`, `provider`, an optional `model`, token counts (`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`), an optional `costUsd` (absent when only tokens are known), and `estimated`, true when the cost is computed from a pricing table or modeled on a subscription login rather than reported by the provider. An entry may also carry an optional `breakdown`: an array of per-model `CostModelUsage` rows, each with `model`, its own token counts (`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`), and an optional `costUsd`; the entry's own token and cost figures are the roll-up (sum) of its breakdown rows. `breakdown` is present when the execution spanned several models (e.g. a delegated Claude run with an implementer subagent), whether measured from the agent's transcripts by ccusage inside the sandbox or reconstructed from the output stream; single-model executions stay flat. `costTotals` sums those entries for the whole run, and beyond the run-wide sums it also carries `byModel`: an array of `CostModelTotal` rows, one per distinct model used anywhere in the run, each with summed token counts (`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`), an optional `costUsd`, and an `estimated` flag; a model used by several attempts or phases appears once with summed figures, and the dashboard displays this per-model roll-up rather than the per-execution entries.
 
@@ -107,7 +111,7 @@ Errors: `404` when the run doesn't exist, `409` when the run hasn't finished yet
 
 Errors: `404` unknown run, `409` when the run is not completed, another execution is active, or the PR is merged/closed, `400` when the run has no PR or GitHub is not connected.
 
-`GET /api/runs/:id/pr` returns `{ url, number, state }` with state `open | merged | closed`, used by the dashboard to hide the follow-up button once the PR is merged or closed.
+`GET /api/runs/:id/pr` returns `{ url, number, state }` with state `open | draft | merged | closed`, used by the dashboard to hide the follow-up button once the PR is merged or closed.
 
 ### Web terminal
 

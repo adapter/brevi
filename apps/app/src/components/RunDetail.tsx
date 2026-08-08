@@ -1,4 +1,4 @@
-import type { LimitInfo, PrStatusResponse, Run, RunEvent } from "@brevi/shared";
+import type { LimitInfo, PrState, PrStatusResponse, Run, RunEvent } from "@brevi/shared";
 import { summarizeCosts } from "@brevi/shared/types";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -10,7 +10,7 @@ import { clock, duration, elapsed } from "../lib/format";
 import { isActive, isTerminal } from "../lib/status";
 import { Artifacts } from "./Artifacts";
 import { AttachTerminal } from "./AttachTerminal";
-import { Plate, RepoChip, StatusChip } from "./Bits";
+import { Plate, PrChip, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { CostBadge, CostBreakdown } from "./CostBadge";
 import { External, Play, Refresh, Stop } from "./Icons";
@@ -39,6 +39,11 @@ export function RunDetail({
   const live = isActive(run.status);
   const hasOutcome = isTerminal(run.status) || Boolean(run.result || run.error);
   const retryable = run.status === "failed" || run.status === "cancelled";
+  // The header chip renders from the run-level PR metadata streamed by the
+  // orchestrator's background poll; the follow-up button below keeps its own
+  // fresher 30s probe.
+  const prChipUrl = run.prUrl;
+  const prChipState = prChipUrl ? (run.prState ?? "open") : undefined;
   const finished = run.status === "completed" || run.status === "failed";
   const retainedMs = run.sandbox.retainedUntil ? Date.parse(run.sandbox.retainedUntil) : Number.NaN;
   const sandboxRetained = retainedMs > now;
@@ -49,7 +54,7 @@ export function RunDetail({
   // result (a retry clears it), so "Take another look" can run again instead
   // of forcing a retry that redoes the whole ticket.
   const followUpReady = isTerminal(run.status) && Boolean(run.result?.prUrl);
-  const [prState, setPrState] = useState<"unknown" | "open" | "merged" | "closed">("unknown");
+  const [prState, setPrState] = useState<"unknown" | PrState>("unknown");
   const [probeTick, setProbeTick] = useState(0);
   // Switching runs hides the button until the probe below confirms the new
   // run's PR is open again.
@@ -78,9 +83,11 @@ export function RunDetail({
       clearInterval(interval);
     };
   }, [run.id, followUpReady, probeTick]);
-  // The button renders only once GitHub confirms the PR is open; the server
-  // still enforces the real gating (409 when the PR turns out merged/closed).
-  const showFollowUp = (followUpReady && prState === "open") || followUpInFlight;
+  // The button renders only once GitHub confirms the PR is open (a draft
+  // counts: it still takes feedback and pushes); the server still enforces
+  // the real gating (409 when the PR turns out merged/closed).
+  const showFollowUp =
+    (followUpReady && (prState === "open" || prState === "draft")) || followUpInFlight;
   // Covers the gap between the click's POST and the active run snapshot
   // arriving, so the slow GitHub preflight still shows a spinner.
   const followUpPending = busy || followUpInFlight;
@@ -128,6 +135,7 @@ export function RunDetail({
               {run.ticket.state}
             </span>
           </Badge>
+          {prChipUrl && prChipState && <PrChip url={prChipUrl} state={prChipState} />}
           {(live || retryable || showFollowUp) && (
             <span aria-hidden className="h-4 w-px shrink-0 bg-ink-700" />
           )}

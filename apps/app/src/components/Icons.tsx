@@ -134,6 +134,16 @@ export const Merge = (p: IconProps) => (
   </Svg>
 );
 
+/** Git pull request, in the same family as Branch and Merge. */
+export const Pull = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="4.5" cy="3.8" r="1.6" />
+    <circle cx="4.5" cy="12.2" r="1.6" />
+    <circle cx="11.5" cy="12.2" r="1.6" />
+    <path d="M4.5 5.4v5.2M8.3 3.8h1.6a1.6 1.6 0 0 1 1.6 1.6v5.2" />
+  </Svg>
+);
+
 export const Comment = (p: IconProps) => (
   <Svg {...p}>
     <path d="M13.5 9.4a1.6 1.6 0 0 1-1.6 1.6H6l-3 2.4V4.2a1.6 1.6 0 0 1 1.6-1.6h7.3a1.6 1.6 0 0 1 1.6 1.6z" />
@@ -188,6 +198,22 @@ export const Refresh = (p: IconProps) => (
   <Svg {...p}>
     <path d="M3.2 8a4.8 4.8 0 0 1 8.1-3.5M12.8 8a4.8 4.8 0 0 1-8.1 3.5" />
     <path d="M11.3 2.6v2.3H9M4.7 13.4v-2.3H7" />
+  </Svg>
+);
+
+/** Circular arrow: run it again. */
+export const Retry = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12.9 8A4.9 4.9 0 1 1 11 4.1" />
+    <path d="M11.4 1.8v2.5H8.9" />
+  </Svg>
+);
+
+/** Take another look at shipped work. */
+export const Eye = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M1.8 8S4.1 3.9 8 3.9 14.2 8 14.2 8 11.9 12.1 8 12.1 1.8 8 1.8 8z" />
+    <circle cx="8" cy="8" r="1.9" />
   </Svg>
 );
 

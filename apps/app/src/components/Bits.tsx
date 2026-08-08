@@ -1,9 +1,9 @@
-import type { RunStatus } from "@brevi/shared";
-import { Badge } from "@/components/ui/badge";
+import type { PrState, RunStatus } from "@brevi/shared";
+import { Badge, badgeVariants } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { STATUS_TONE } from "../lib/status";
-import { Repo, Warn } from "./Icons";
+import { Merge, Pull, Repo, Warn } from "./Icons";
 
 /** Small shared parts. Every field on a strip is built from these. */
 
@@ -47,6 +47,48 @@ export function RepoChip({ repo }: { repo?: string }) {
       <Repo className="size-3 text-haze-600" />
       <span className="font-mono text-[11px] leading-none tracking-normal normal-case">{repo}</span>
     </Badge>
+  );
+}
+
+/** GitHub's four PR states, in GitHub's own colours (see index.css). */
+const PR_TONE: Record<PrState, { label: string; fg: string; wash: string; edge: string }> = {
+  open: { label: "Open", fg: "text-pr-open", wash: "bg-pr-open/12", edge: "border-pr-open/40" },
+  draft: { label: "Draft", fg: "text-pr-draft", wash: "bg-pr-draft/12", edge: "border-pr-draft/40" },
+  merged: { label: "Merged", fg: "text-pr-merged", wash: "bg-pr-merged/12", edge: "border-pr-merged/40" },
+  closed: { label: "Closed", fg: "text-pr-closed", wash: "bg-pr-closed/12", edge: "border-pr-closed/40" },
+};
+
+/** The run's PR and its fate on GitHub; links out without touching the card. */
+export function PrChip({
+  url,
+  state,
+  className,
+}: {
+  url: string;
+  state: PrState;
+  className?: string;
+}) {
+  const tone = PR_TONE[state];
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Pull request ${tone.label.toLowerCase()}, opens on GitHub`}
+      title={`Pull request ${tone.label.toLowerCase()} on GitHub`}
+      onClick={(event) => event.stopPropagation()}
+      className={cn(
+        badgeVariants({ variant: "outline" }),
+        "touch-target transition-[filter] hover:brightness-110",
+        tone.wash,
+        tone.edge,
+        tone.fg,
+        className,
+      )}
+    >
+      {state === "merged" ? <Merge className="size-3" /> : <Pull className="size-3" />}
+      {tone.label}
+    </a>
   );
 }
 

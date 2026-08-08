@@ -17,6 +17,7 @@ import {
   type GithubRepo,
   type LinearProject,
   type LinearStatus,
+  type PrState,
   type PrStatusResponse,
   type R2ConnectResponse,
   type R2SettingsUpdateRequest,
@@ -60,7 +61,7 @@ import {
   validateGithubToken,
   validateLinearApiKey,
 } from "./credentials.js";
-import { fetchPrStatus, listRepos } from "./github.js";
+import { fetchPrStatus, fetchPullRequestState, listRepos } from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
 import { isLinearAuthError, LinearService, type LinearAuthHooks } from "./linear.js";
 import { executeFollowUp } from "./followup.js";
@@ -102,6 +103,11 @@ const LINEAR_REFRESH_MARGIN_MS = 5 * 60_000;
 const LINEAR_REFRESH_BACKOFF_BASE_MS = 60_000;
 const LINEAR_REFRESH_BACKOFF_MAX_MS = 15 * 60_000;
 
+/** How often the orchestrator re-checks the PR state of recent runs with a live PR. */
+const PR_POLL_INTERVAL_MS = 120_000;
+/** Only this many of the newest eligible runs are checked per cycle. */
+const PR_POLL_RECENT_RUNS = 20;
+
 /**
  * Result of one attempt to refresh the stored Linear OAuth token. "stale"
  * means the credential changed while the refresh was in flight and the
@@ -132,8 +138,14 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   /** Settled when a run's execution finishes; awaited by stop(). */
   #running = new Map<string, Promise<void>>();
   #pollTimer?: NodeJS.Timeout;
+  /** Lazy GitHub PR-state poll for recent runs with a live PR. */
+  #prTimer?: NodeJS.Timeout;
+  /** In-flight PR-state refresh per run, so bursts share one GitHub request. */
+  #prRefreshes = new Map<string, Promise<PrState | null>>();
   /** One pending resume timer per run waiting on a usage-limit reset. */
   #resumeTimers = new Map<string, NodeJS.Timeout>();
+  /** Tail of each run's command chain; cancel/retry/follow-up serialize through it so two commands can never act on the same stale snapshot. */
+  #runLocks = new Map<string, Promise<void>>();
   /**
    * Sandboxes rehydrated for interactive resume, keyed by run id; a promise so
    * concurrent resume calls share one boot. `clients` counts the attach
@@ -240,6 +252,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     void this.poll();
     this.#pollTimer = setInterval(() => void this.poll(), this.config.pollIntervalSeconds * 1000);
     this.#pollTimer.unref();
+    this.#prTimer = setInterval(() => void this.#pollPrStates(), PR_POLL_INTERVAL_MS);
+    this.#prTimer.unref();
   }
 
   /** True once a Linear API key is configured. */
@@ -335,6 +349,56 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         console.error(`[brevi] failed to queue ${ticket.identifier}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+  }
+
+  /**
+   * One lazy PR-state cycle: re-check the newest runs whose PR has not yet
+   * merged or closed (whatever the run's own status; a follow-up attempt
+   * keeps its PR). Sequential on purpose; this is background housekeeping,
+   * not a hot path.
+   */
+  async #pollPrStates(): Promise<void> {
+    if (this.#stopped || !this.config.github.token) return;
+    const candidates = this.store
+      .list()
+      .filter((run) => run.prUrl !== undefined && run.prState !== "merged" && run.prState !== "closed")
+      .slice(0, PR_POLL_RECENT_RUNS);
+    for (const run of candidates) {
+      if (this.#stopped) return;
+      await this.refreshPrState(run.id);
+    }
+  }
+
+  /**
+   * Refresh one run's PR state from GitHub, persist it when it changed (the
+   * run-updated broadcast streams it to the dashboard), and return the live
+   * state, or null when it could not be verified (no PR, no token, or the
+   * fetch failed; the last stored state is kept). Single-flight per run and
+   * never throws.
+   */
+  refreshPrState(runId: string): Promise<PrState | null> {
+    const inFlight = this.#prRefreshes.get(runId);
+    if (inFlight) return inFlight;
+    const pending = (async () => {
+      const run = this.store.get(runId);
+      const prUrl = run?.prUrl;
+      const token = this.config.github.token;
+      if (!prUrl || !token) return null;
+      const state = await fetchPullRequestState(prUrl, token);
+      if (state !== null && state !== this.store.get(runId)?.prState) {
+        await this.store.update(runId, { prState: state });
+      }
+      return state;
+    })()
+      .catch((error: unknown): null => {
+        console.error(`[brevi] PR state refresh for ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
+        return null;
+      })
+      .finally(() => {
+        this.#prRefreshes.delete(runId);
+      });
+    this.#prRefreshes.set(runId, pending);
+    return pending;
   }
 
   /** Manually queue a ticket from the dashboard. */
@@ -815,65 +879,74 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   }
 
   /** Cancel a queued, waiting, or active run. Terminal runs are returned unchanged. */
-  async cancelRun(runId: string): Promise<Run> {
-    const run = this.store.get(runId);
-    if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
-    if (isTerminal(run.status)) return run;
-    if (run.status === "queued") {
-      this.#queue = this.#queue.filter((id) => id !== runId);
-      // A cancelled queued follow-up must not misroute a later retry into
-      // the follow-up path. It also still owns its retained disk's reap
-      // timer (starting the follow-up cleared it, and no worker will reach
-      // #execute's tail to re-arm it), so restore the reaper here.
-      if (this.#followUps.delete(runId)) this.#scheduleReap(runId);
-      return this.store.setStatus(runId, "cancelled", { finishedAt: new Date().toISOString() });
-    }
-    if (run.status === "waiting") {
-      this.#clearResume(runId);
-      return this.store.setStatus(runId, "cancelled", {
-        finishedAt: new Date().toISOString(),
-        resumeAt: undefined,
-      });
-    }
-    this.#aborts.get(runId)?.abort();
-    return this.store.get(runId) ?? run;
+  cancelRun(runId: string): Promise<Run> {
+    return this.#withRunLock(runId, async () => {
+      const run = this.store.get(runId);
+      if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
+      if (isTerminal(run.status)) return run;
+      if (run.status === "queued") {
+        this.#queue = this.#queue.filter((id) => id !== runId);
+        // A cancelled queued follow-up must not misroute a later retry into
+        // the follow-up path. It also still owns its retained disk's reap
+        // timer (starting the follow-up cleared it, and no worker will reach
+        // #execute's tail to re-arm it), so restore the reaper here.
+        if (this.#followUps.delete(runId)) this.#scheduleReap(runId);
+        return this.store.setStatus(runId, "cancelled", { finishedAt: new Date().toISOString() });
+      }
+      if (run.status === "waiting") {
+        this.#clearResume(runId);
+        return this.store.setStatus(runId, "cancelled", {
+          finishedAt: new Date().toISOString(),
+          resumeAt: undefined,
+        });
+      }
+      this.#aborts.get(runId)?.abort();
+      return this.store.get(runId) ?? run;
+    });
   }
 
   /**
    * Manually start a new attempt of a failed, cancelled, or waiting run. For
    * a waiting run this skips the rest of the wait and re-queues immediately.
    */
-  async retryRun(runId: string): Promise<Run> {
-    const run = this.store.get(runId);
-    if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
-    if (ACTIVE_STATUSES.has(run.status)) {
-      throw new OrchestratorError("conflict", `run ${runId} is already ${run.status}`);
-    }
-    if (run.status === "completed") {
-      throw new OrchestratorError(
-        "conflict",
-        `run ${runId} completed; update the ticket to trigger a fresh run instead`,
-      );
-    }
-    const clash = this.store
-      .runsForTicket(run.ticket.id)
-      .find((other) => other.id !== runId && !isTerminal(other.status));
-    if (clash) {
-      throw new OrchestratorError(
-        "conflict",
-        `ticket ${run.ticket.identifier} already has an active run (${clash.id})`,
-      );
-    }
-    return this.#requeue(runId);
+  retryRun(runId: string): Promise<Run> {
+    return this.#withRunLock(runId, async () => {
+      const run = this.store.get(runId);
+      if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
+      if (ACTIVE_STATUSES.has(run.status)) {
+        throw new OrchestratorError("conflict", `run ${runId} is already ${run.status}`);
+      }
+      if (run.status === "completed") {
+        throw new OrchestratorError(
+          "conflict",
+          `run ${runId} completed; update the ticket to trigger a fresh run instead`,
+        );
+      }
+      const clash = this.store
+        .runsForTicket(run.ticket.id)
+        .find((other) => other.id !== runId && !isTerminal(other.status));
+      if (clash) {
+        throw new OrchestratorError(
+          "conflict",
+          `ticket ${run.ticket.identifier} already has an active run (${clash.id})`,
+        );
+      }
+      return this.#requeue(runId);
+    });
   }
 
   /**
    * Start a follow-up on a completed run's open PR: rebase onto the latest
    * base, address review feedback, push, and comment. The ticket's Linear
-   * state is left untouched.
+   * state is left untouched. Serialized under the run's mutation lock so it
+   * can never interleave with a cancel or retry of the same run.
    */
-  async followUpRun(runId: string): Promise<Run> {
+  followUpRun(runId: string): Promise<Run> {
     if (!isSafePathSegment(runId)) throw new OrchestratorError("invalid", "malformed run id");
+    return this.#withRunLock(runId, () => this.#followUpRunLocked(runId));
+  }
+
+  async #followUpRunLocked(runId: string): Promise<Run> {
     const run = this.store.get(runId);
     if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
     if (this.#followUps.has(runId)) {
@@ -925,7 +998,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     try {
       try {
         const pr = await fetchPrStatus(prUrl, this.config.github.token);
-        if (pr.state !== "open") {
+        // A draft is still an open PR: it can receive feedback and pushes.
+        if (pr.state !== "open" && pr.state !== "draft") {
           throw new OrchestratorError("conflict", `the pull request is ${pr.state}`);
         }
       } catch (error) {
@@ -1124,6 +1198,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   async stop(): Promise<void> {
     this.#stopped = true;
     if (this.#pollTimer) clearInterval(this.#pollTimer);
+    if (this.#prTimer) clearInterval(this.#prTimer);
     // Waiting runs stay "waiting" on disk; the next boot reschedules them.
     for (const timer of this.#resumeTimers.values()) clearTimeout(timer);
     this.#resumeTimers.clear();
@@ -1322,6 +1397,21 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return this.#linearRefresh;
   }
 
+  /** Run one state-changing command under the run's mutation lock. */
+  #withRunLock<T>(runId: string, fn: () => Promise<T>): Promise<T> {
+    const tail = this.#runLocks.get(runId) ?? Promise.resolve();
+    const next = tail.then(fn, fn);
+    const settled = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#runLocks.set(runId, settled);
+    void settled.then(() => {
+      if (this.#runLocks.get(runId) === settled) this.#runLocks.delete(runId);
+    });
+    return next;
+  }
+
   /** Put a run back in the queue for its next attempt. */
   async #requeue(runId: string): Promise<Run> {
     this.#clearResume(runId);
@@ -1332,7 +1422,9 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     // Shed the previous attempt's outcome right away rather than at the
     // "preparing" transition: the queued snapshot goes straight to clients,
     // and a stale result/error would keep the dashboard's Result tab alive
-    // for as long as the run waits for a free worker.
+    // for as long as the run waits for a free worker. Run-level PR metadata
+    // (prUrl, prState) survives: the PR still exists while the retry runs,
+    // and finalization replaces it.
     const run = await this.store.setStatus(runId, "queued", {
       resumeAt: undefined,
       queuedAt: new Date().toISOString(),
@@ -1341,7 +1433,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       limit: undefined,
       result: undefined,
     });
-    this.#queue.push(runId);
+    if (!this.#queue.includes(runId)) this.#queue.push(runId);
     this.#kickWorker();
     return run;
   }
@@ -1501,7 +1593,12 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         return;
       }
       log(`limit lifted (${probe.detail}); starting next attempt`);
-      await this.#requeue(runId);
+      await this.#withRunLock(runId, async () => {
+        // A cancel or manual retry may have raced the probe; only a run
+        // still waiting on its limit belongs to this auto-restart.
+        if (this.store.get(runId)?.status !== "waiting") return;
+        await this.#requeue(runId);
+      });
     } catch (error) {
       // A broken probe must not strand the run; try again next interval.
       const message = error instanceof Error ? error.message : String(error);
@@ -1559,12 +1656,16 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #kickWorker(): void {
     if (this.#stopped) return;
     const limit = Math.max(1, this.config.sandbox.concurrency);
+    // An id still executing must not start a second time; it waits here until
+    // that execution's finally() removes it from #running and kicks again.
+    const deferred: string[] = [];
     while (this.#running.size < limit && this.#queue.length > 0) {
       const runId = this.#queue.shift();
       if (!runId) break;
-      // A run already claimed by a worker must never start a second
-      // pipeline, whatever the queue held.
-      if (this.#running.has(runId)) continue;
+      if (this.#running.has(runId)) {
+        deferred.push(runId);
+        continue;
+      }
       const run = this.store.get(runId);
       if (!run || run.status !== "queued") continue;
       const promise = this.#execute(runId).finally(() => {
@@ -1573,6 +1674,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       });
       this.#running.set(runId, promise);
     }
+    this.#queue.unshift(...deferred);
   }
 
   async #execute(runId: string): Promise<void> {
