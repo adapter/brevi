@@ -5,6 +5,7 @@ import { confirm, log, note } from "@clack/prompts";
 import pc from "picocolors";
 import { detectInstallMethod } from "./update.js";
 import { errorMessage, exitOnCancel } from "./util.js";
+import { readPackageVersion } from "./version.js";
 
 /**
  * Result of probing a tool. Only "ok" counts as usable: an executable that is on PATH but
@@ -81,7 +82,7 @@ async function agentsHostRequired(saved: BreviConfig): Promise<boolean> {
   if (provider === "firecracker") return false;
   // "auto": firecracker on a passing Linux host, process provider otherwise.
   if (process.platform !== "linux") return true;
-  return (await collectFirecrackerProblems(saved.sandbox.firecracker)).length > 0;
+  return (await collectFirecrackerProblems(saved.sandbox.firecracker, readPackageVersion())).length > 0;
 }
 
 async function checkTool(def: ToolDef, required: boolean): Promise<ToolResult> {

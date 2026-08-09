@@ -34,8 +34,10 @@ relative paths given to `pushDirectory`/`writeFile`/… resolve against `workspa
 
 - `"auto"` selects Firecracker when the full preflight passes (the same checks
   `ensureAvailable()` runs): Linux, `/dev/kvm` readable and writable, the binary resolving
-  on `PATH`, in `~/.brevi/bin`, or at the configured `binary`, and the kernel, rootfs, and
-  ssh key present. Otherwise the process provider. `auto` never fails; it downgrades.
+  on `PATH`, in `~/.brevi/bin`, or at the configured `binary`, the kernel and ssh key
+  present, and a rootfs resolvable, from `sandbox.firecracker.rootfs` if it's a custom
+  path, otherwise a from-source build at the default path or, failing that, the versioned
+  download cache. Otherwise the process provider. `auto` never fails; it downgrades.
 - `"firecracker"` / `"process"`: constructed and `ensureAvailable()`d immediately, so a
   misconfigured host fails at startup with one aggregated, actionable error rather than
   mid-run.
@@ -114,6 +116,13 @@ init also parses the `ip=` argument itself.
 
 ### 2. Rootfs
 
+The recommended path needs no local build: `brevi setup` (or automatically at `brevi
+start`, once the other gates above pass) downloads the prebuilt, checksum-verified image
+published for the running `@brevi/cli` release and caches it, so most hosts never run
+Docker at all. See "Prebuilt images" below.
+
+To build from source instead, for development or an air-gapped host:
+
 ```sh
 sudo packages/sandbox/scripts/build-rootfs.sh --with-kernel
 ```
@@ -121,9 +130,12 @@ sudo packages/sandbox/scripts/build-rootfs.sh --with-kernel
 Builds a ~2 GB ext4 image at `~/.brevi/images/rootfs.ext4` containing node 22, git, curl,
 tar, ripgrep, both agent CLIs (`@anthropic-ai/claude-code` and `@openai/codex`), `ccusage`
 (used by the orchestrator for live cost capture from the Claude Code transcripts), and an
-sshd whose `authorized_keys` holds the public half of `~/.brevi/images/id_ed25519`
-(generated on first run). Needs docker and root. Regenerating the key means rebuilding the
-image.
+sshd. Needs docker and root. The image no longer depends on a baked-in key (from-source
+builds still bake the local one as a fallback): brevi passes the host's public key at boot
+via the `brevi.authorized_keys` kernel argument, and the guest installs it before starting
+sshd, so one image works on any machine. The key itself,
+`~/.brevi/images/id_ed25519`, is generated on demand (by `brevi setup`, or automatically the
+first time it's needed) if missing, independent of the rootfs image.
 
 ### 3. Networking
 
@@ -145,6 +157,25 @@ the devices are lost on reboot, so re-run after restarting. `--clean` removes th
 ```sh
 sudo usermod -aG kvm "$(whoami)"   # log out and back in
 ```
+
+## Prebuilt images
+
+Published in lockstep with each `@brevi/cli` release, at
+`https://images.brevi.dev/rootfs/<cli release>/<arch>/`, one `manifest.json` and one
+`rootfs.ext4.gz` per release and architecture (`x86_64`, `aarch64`); the manifest also
+carries the rootfs contract version (`ROOTFS_VERSION`), used for the compatibility
+handshake below. The base URL is `sandbox.firecracker.rootfsBaseUrl`, overridable for a
+self-hosted mirror. Downloads verify sha256 of both the compressed and decompressed image
+before an atomic rename into `~/.brevi/cache/rootfs/<cli release>/rootfs.ext4`; the cached
+image is re-verified against its recorded digest at startup and again each time a sandbox
+is created, with a corrupted cache triggering an automatic redownload rather than a boot
+failure. Concurrent installs (two brevi processes) are serialized by a per-version lock
+file with per-installer staging directories, so an install can never corrupt another one in
+progress. After an install, cached entries unused for 30 days are pruned; an entry still in
+use is never pruned, so two installed brevi versions keep separate cached images without
+conflict. A custom `sandbox.firecracker.rootfs` path is always used as-is and never
+downloaded over; the default path also wins when a valid from-source image already lives
+there.
 
 ## Troubleshooting
 

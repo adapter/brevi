@@ -58,7 +58,11 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
     process.exit(1);
   });
 
-  const handle = await startOrchestrator({ config, appDist: bundledAppDist() }).catch((err: unknown) => {
+  const handle = await startOrchestrator({
+    config,
+    appDist: bundledAppDist(),
+    cliVersion: readPackageVersion(),
+  }).catch((err: unknown) => {
     console.error(pc.red(`✖ Failed to start the orchestrator: ${errorMessage(err)}`));
     process.exit(1);
   });

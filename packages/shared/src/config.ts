@@ -57,9 +57,13 @@ export const firecrackerConfigSchema = z.preprocess(
     kernelImage: z.string().default(""),
     /**
      * Ext4 rootfs with node, git, and the coding agent preinstalled. Empty
-     * means the image brevi manages, `~/.brevi/images/rootfs.ext4`.
+     * means the image brevi manages: a prebuilt image downloaded and cached
+     * per release, or a from-source build at `~/.brevi/images/rootfs.ext4`.
+     * A path set here is used verbatim and is never downloaded over.
      */
     rootfs: z.string().default(""),
+    /** Base URL prebuilt rootfs images are downloaded from; point at a mirror for self-hosted or air-gapped setups. */
+    rootfsBaseUrl: z.string().default("https://images.brevi.dev/rootfs"),
     /**
      * VM size preset: small (1 vCPU / 3.75 GB), medium (2 vCPU / 7.5 GB), or
      * large (4 vCPU / 15 GB). Adjustable live from the dashboard's Sandbox
