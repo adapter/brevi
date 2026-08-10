@@ -1,6 +1,6 @@
-import type { BreviConfig, RepoConfig } from "./config.js";
+import type { BreviConfig } from "./config.js";
+import type { ConfigPatch, SettingsApplied } from "./settings.js";
 import type { PrState, Run, RunEvent, Ticket } from "./types.js";
-import type { FirecrackerVmSize } from "./sizes.js";
 
 /**
  * HTTP API served by the orchestrator (default port 4400):
@@ -60,21 +60,17 @@ import type { FirecrackerVmSize } from "./sizes.js";
  *        pre-existing bucket is reused only when already public) and
  *        persists the result to config. Already configured: reports
  *        connected without touching anything.
- *   PUT  /api/settings/r2                -> R2SettingsUpdateResponse
- *        body: R2SettingsUpdateRequest. Sets the evidence bucket and its
- *        public base URL.
+ *   PUT  /api/settings                   -> SettingsUpdateResponse
+ *        body: SettingsUpdateRequest. The one write path for config.json: a
+ *        deep-partial patch (null clears an optional field) is merged onto
+ *        the config on disk, validated against the whole schema, and written
+ *        atomically. Credential fields are refused here; the response says
+ *        whether the change applied live or needs a restart.
  *   GET  /api/connect/linear/callback    -> HTML (OAuth redirect target; the
  *        server exchanges the code, saves the token, and broadcasts config)
  *   GET  /api/github/repos               -> GithubRepo[]   (repos visible to the
  *        connected GitHub token, most recently pushed first; 400 when GitHub
  *        isn't connected)
- *   PUT  /api/settings/repos             -> ReposUpdateResponse
- *        body: ReposUpdateRequest. Replaces the repo mappings wholesale.
- *   PUT  /api/settings/sandbox           -> SandboxSettingsUpdateResponse
- *        body: SandboxSettingsUpdateRequest. Sets how many sandboxed runs may
- *        execute at once and/or the Firecracker VM size preset; persisted to
- *        the config file and applied without a restart (the size preset
- *        applies to newly booted VMs).
  *   GET  /ws                             -> WebSocket, messages below
  *
  * Everything else serves the built dashboard (SPA fallback to index.html).
@@ -225,19 +221,6 @@ export type R2ConnectResponse =
       reason: string;
     };
 
-/** Only provided fields are touched; empty string clears that field. */
-export interface R2SettingsUpdateRequest {
-  bucket?: string;
-  publicBaseUrl?: string;
-}
-
-export interface R2SettingsUpdateResponse {
-  /** Redacted config after the update. */
-  config: BreviConfig;
-  /** Live connector state after the update. */
-  r2: R2Status;
-}
-
 /** A Linear project visible to the connected credential, for the repo mapping picker. */
 export interface LinearProject {
   id: string;
@@ -253,17 +236,6 @@ export interface GithubRepo {
   description: string;
   /** ISO timestamp of the last push. */
   pushedAt: string;
-}
-
-/** Replaces config.repos and defaultRepo wholesale. */
-export interface ReposUpdateRequest {
-  repos: Record<string, RepoConfig>;
-  defaultRepo?: string;
-}
-
-export interface ReposUpdateResponse {
-  /** Redacted config after the update. */
-  config: BreviConfig;
 }
 
 /** Live state of the pull request a completed run opened, probed from GitHub on demand. */
@@ -298,23 +270,23 @@ export interface ResumeRunResponse {
 }
 
 /**
- * Sandbox scheduling settings adjustable from the dashboard. At least one
- * field must be provided.
+ * The one write path for `~/.brevi/config.json`: a deep-partial patch of the
+ * fields one settings card owns. Everything else on disk is left exactly as
+ * it is, so concurrent hand edits and other cards survive the save.
  */
-export interface SandboxSettingsUpdateRequest {
-  /** How many sandboxed runs may execute at once (1 to 16). */
-  concurrency?: number;
-  /**
-   * Firecracker VM size preset for newly booted VMs. Setting this clears any
-   * explicit vcpus/memMib overrides in the config file so the preset
-   * actually applies.
-   */
-  size?: FirecrackerVmSize;
+export interface SettingsUpdateRequest {
+  patch: ConfigPatch;
 }
 
-export interface SandboxSettingsUpdateResponse {
-  /** Redacted config after the update. */
+export interface SettingsUpdateResponse {
+  /** Redacted config after the update, for re-rendering every form. */
   config: BreviConfig;
+  /**
+   * "live" when the change reaches the next run on its own, "restart" when
+   * the process has to be restarted to pick it up (see
+   * SETTINGS_RESTART_PATHS).
+   */
+  applied: SettingsApplied;
 }
 
 /**

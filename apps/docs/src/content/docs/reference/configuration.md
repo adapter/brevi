@@ -3,9 +3,33 @@ title: Configuration
 description: "Every field in ~/.brevi/config.json: Linear, GitHub, repositories, agent, sandbox, connect, triggers and server settings."
 ---
 
-brevi's entire configuration is one JSON file at **`~/.brevi/config.json`**. It is created by `brevi init` and then mostly written for you by the dashboard. The file is validated on load; an unknown shape or an out-of-range value makes brevi refuse to start rather than run with a surprise.
+brevi's entire configuration is one JSON file at **`~/.brevi/config.json`**. It is created by `brevi init` and then written for you by the dashboard. The file is validated on load; an unknown shape or an out-of-range value makes brevi refuse to start rather than run with a surprise.
 
 The orchestrator reads no environment variables for configuration.
+
+## Editing it
+
+Every field on this page is editable from the dashboard's Configuration page, at `/config`:
+
+| Page | Covers |
+| --- | --- |
+| Connectors | Connect/Disconnect per provider, `linear.teamKeys`, `github.prDescription`, `r2` |
+| Repositories | `repos`, `defaultRepo` |
+| Agent | `agent` (models, effort, command, args, Codex review) |
+| Sandbox | `sandbox`, including the Firecracker fields |
+| Orchestrator | `trigger`, `pollIntervalSeconds`, `restart` |
+| Server | `server`, `connect` |
+
+Each card is saved explicitly, and a save sends only the fields on that card: nothing else in the file is rewritten, so two tabs (or a tab and your editor) cannot clobber each other. Fields with a non-empty default show it as placeholder text and offer a reset once the value differs from it. Invalid input is rejected with the same message the schema would produce, and the file on disk is never left invalid: it is validated in full, then replaced atomically (and left readable only by you).
+
+Almost everything applies to the next run without a restart. Three fields are read once at startup and are marked with a **restart** badge in the UI: `server.port`, `server.host`, and `sandbox.provider`.
+
+Two groups of fields are deliberately not editable there:
+
+- **Credentials.** They are masked whenever the config is read back (see [Redaction](#redaction)), so they are never rendered as editable values; use the Connect and Disconnect buttons instead. `connect.linearClientSecret` is the one write-only field: it can be replaced, never read back. `linear.refreshToken` and `linear.tokenExpiresAt` are owned by the OAuth flow.
+- **`sandbox.firecracker.vcpus` and `memMib`.** When either is set, the Sandbox page shows the resulting allocation read-only with the override named, plus a button that clears both so the size preset applies again.
+
+Hand edits keep working. The file stays the source of truth in both directions: brevi watches it and picks up an external edit without a restart, and the dashboard updates by itself. An edit that fails validation is logged and ignored, leaving the running settings alone.
 
 ## Defaults
 
@@ -36,8 +60,8 @@ A freshly initialised config, with every default filled in:
     "concurrency": 1,
     "firecracker": {
       "binary": "firecracker",
-      "kernelImage": "~/.brevi/images/vmlinux",
-      "rootfs": "~/.brevi/images/rootfs.ext4",
+      "kernelImage": "",
+      "rootfs": "",
       "size": "medium"
     },
     "timeoutMinutes": 60,
@@ -50,12 +74,13 @@ A freshly initialised config, with every default filled in:
     "linearClientSecret": ""
   },
   "trigger": { "label": "brevi" },
-  "server": { "port": 4400 },
+  "restart": { "auto": true, "maxAttempts": 5, "probeIntervalMinutes": 15 },
+  "server": { "port": 4400, "host": "127.0.0.1" },
   "pollIntervalSeconds": 60
 }
 ```
 
-`kernelImage` and `rootfs` default to absolute paths inside your home directory; they are shown abbreviated here.
+`kernelImage` and `rootfs` are empty by default, which means "the images brevi manages" under `~/.brevi/images/`; set either to point at your own.
 
 ## `linear`
 
@@ -83,8 +108,8 @@ Optional. When both fields are set, demo evidence (screenshots and recordings) f
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `bucket` | string | `""` | Public R2 bucket evidence is uploaded to. Empty means uploads are disabled. |
-| `publicBaseUrl` | string | `""` | Public base URL the bucket serves from: its r2.dev development URL, or a custom domain. Used verbatim to build the asset links embedded in PR descriptions. |
+| `bucket` | string | `""` | Public R2 bucket evidence is uploaded to. Empty means uploads are disabled. Trimmed on load. |
+| `publicBaseUrl` | string | `""` | Public base URL the bucket serves from: its r2.dev development URL, or a custom domain. Used verbatim to build the asset links embedded in PR descriptions, so it is trimmed and stripped of trailing slashes on load. |
 
 There is no credential field here. Authentication goes through the host's `wrangler` CLI, the same one you use for any other Cloudflare work: `wrangler login` for auth, `wrangler r2 object put` for the upload. Connect and configure both fields from the dashboard's Configuration page; see [Connections](/guides/connections/).
 
@@ -132,7 +157,7 @@ brevi also never deletes uploaded objects. Clean them up yourself, or attach an 
 | `devUrl` | string | - | URL the dev server listens on, so the agent knows when it's up and what to screenshot. |
 | `demo` | `"always"` \| `"auto"` \| `"never"` | `"auto"` | How much demo evidence runs capture. `always` is the full dev-server/screenshot flow; `auto` lets the agent downgrade to test output or a CLI transcript for changes with no visible surface (docs, tests, refactors); `never` skips the demo requirement. |
 
-`defaultRepo` is the key used when a ticket matches no mapping. It must name an existing entry. If you clear it, brevi falls back to the first repo rather than stranding tickets.
+`defaultRepo` is the key used when a ticket matches no mapping. It must name an existing entry, or the config is rejected; leave it unset and unmatched tickets simply don't run. Removing a repo from the dashboard clears `defaultRepo` along with it when it pointed there.
 
 ## `agent`
 
@@ -140,7 +165,7 @@ The coding agent executed inside the sandbox.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `command` | string | `"claude"` | The agent CLI to run inside the sandbox. |
+| `command` | string | `"claude"` | The agent CLI brevi runs. It must be available where the run executes: on the host's `PATH` under the process provider, baked into the rootfs image under Firecracker. |
 | `args` | string[] | `[]` | Extra arguments appended after brevi's own. |
 | `model` | string | - | When set, the whole run uses this one model with no subagent delegation, overriding `orchestratorModel` and `implementModel`. |
 | `orchestratorModel` | string | `"claude-fable-5"` | Model the main agent loop runs on (planning, review, delegation). Claude agents only. |
@@ -185,8 +210,8 @@ At least one of the four credential fields (`anthropicApiKey`, `claudeCodeOauthT
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `binary` | string | `"firecracker"` | Resolved on `PATH` unless it's an absolute path. |
-| `kernelImage` | string | `~/.brevi/images/vmlinux` | Uncompressed Linux kernel. |
-| `rootfs` | string | `~/.brevi/images/rootfs.ext4` | Ext4 image with node, git, both agent CLIs (`@anthropic-ai/claude-code`, `@openai/codex`), and `ccusage` preinstalled. `build-rootfs.sh` also writes a `rootfs.ext4.manifest.json` next to the image; an image that's empty, corrupt, or missing a current manifest (built by an older brevi) fails preflight until it's rebuilt. |
+| `kernelImage` | string | `""` | Uncompressed Linux kernel. Empty resolves to `~/.brevi/images/vmlinux`, the image `brevi setup` downloads. |
+| `rootfs` | string | `""` | Empty resolves to `~/.brevi/images/rootfs.ext4`. Ext4 image with node, git, both agent CLIs (`@anthropic-ai/claude-code`, `@openai/codex`), and `ccusage` preinstalled. `build-rootfs.sh` also writes a `rootfs.ext4.manifest.json` next to the image; an image that's empty, corrupt, or missing a current manifest (built by an older brevi) fails preflight until it's rebuilt. |
 | `size` | `"small"` \| `"medium"` \| `"large"` | `"medium"` | VM size preset: `small` (1 vCPU, 3.75 GB), `medium` (2 vCPU, 7.5 GB), `large` (4 vCPU, 15 GB). Selectable live from the dashboard's Sandbox page (Configuration > Sandbox) when the active provider is Firecracker; a change applies to newly booted VMs only, running VMs are untouched. |
 | `vcpus` | integer ≥ 1 | unset | Explicit vCPU override. Wins over `size` when set; existing config files with an explicit value keep their exact behavior. Picking a preset in the dashboard clears it. |
 | `memMib` | integer ≥ 512 | unset | Explicit memory override, in MiB. Wins over `size` when set; existing config files with an explicit value keep their exact behavior. Picking a preset in the dashboard clears it. |
@@ -212,16 +237,26 @@ A self-hosted Linear OAuth app must register the redirect URI `http://localhost:
 | --- | --- | --- | --- |
 | `label` | string | `"brevi"` | Label that opts a ticket in. Matched case-insensitively. |
 
+## `restart`
+
+What happens when the agent hits a provider usage limit mid-run. Instead of failing the run, brevi parks it as `waiting` and starts a fresh attempt once the limit lifts.
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `auto` | boolean | `true` | Automatically wait out agent usage limits and start a new attempt. With it off, a limited run fails immediately. |
+| `maxAttempts` | integer ≥ 1 | `5` | Cap on agent executions per run, counting the first. |
+| `probeIntervalMinutes` | integer ≥ 1 | `15` | Minutes between liveness probes while waiting on a limit whose reset time the agent didn't report, and after a probe that is still limited. |
+
 ## `server`
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `port` | integer | `4400` | The orchestrator serves both the API and the dashboard on this port. |
+| `port` | integer 1-65535 | `4400` | The orchestrator serves both the API and the dashboard on this port. |
 | `host` | string | `"127.0.0.1"` | Bind address. The default keeps the dashboard reachable only from the machine itself; set `"0.0.0.0"` to reach it from other devices on the network. Prefer `"0.0.0.0"` over a specific interface address: loopback stays bound too, so `brevi status` and `brevi stop` keep working. **The dashboard and API have no authentication**, so anyone who can reach the port has full control of brevi, including a shell into its sandboxes; only expose it on networks you trust. |
 
 ## `pollIntervalSeconds`
 
-Integer, minimum `10`, default `60`. How often brevi polls Linear for eligible tickets. brevi also polls immediately at startup and whenever Linear or the repo mappings change.
+Integer, minimum `10`, default `60`. How often brevi polls Linear for eligible tickets. brevi also polls immediately at startup and whenever Linear, the trigger label, or the repo mappings change.
 
 ## Redaction
 

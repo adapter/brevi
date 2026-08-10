@@ -1,22 +1,32 @@
-import type { BreviConfig, HealthResponse, LinearStatus } from "@brevi/shared";
+import type { BreviConfig, HealthResponse, LinearStatus, Run } from "@brevi/shared";
 import type { ConfigSection } from "../lib/useOrchestrator";
+import { AgentSection } from "./config/AgentSection";
 import { ConnectorsSection } from "./config/ConnectorsSection";
+import { OrchestratorSection } from "./config/OrchestratorSection";
 import { RepositoriesSection } from "./config/RepositoriesSection";
 import { SandboxSection } from "./config/SandboxSection";
+import { ServerSection } from "./config/ServerSection";
 
 const SECTIONS: { id: ConfigSection; label: string }[] = [
   { id: "connectors", label: "Connectors" },
   { id: "repositories", label: "Repositories" },
+  { id: "agent", label: "Agent" },
   { id: "sandbox", label: "Sandbox" },
+  { id: "orchestrator", label: "Orchestrator" },
+  { id: "server", label: "Server" },
 ];
 
 /**
- * The Configuration page: provider connections, repository mappings, and
- * sandbox settings, split into subpages behind a submenu. Rendered in the
- * main content area at /config/<section>.
+ * The Configuration page: every field of ~/.brevi/config.json, split into
+ * subpages behind a submenu. Rendered in the main content area at
+ * /config/<section>. Each control is hand-built against the zod schema in
+ * @brevi/shared, which stays the single source of truth for validation,
+ * defaults, and the help text below: a new config field is only done once
+ * its control lands here too.
  */
 export function ConfigurationPage({
   config,
+  runs,
   linearStatus,
   health,
   section,
@@ -24,6 +34,7 @@ export function ConfigurationPage({
   onConfig,
 }: {
   config: BreviConfig | null;
+  runs: Run[];
   linearStatus: LinearStatus | null;
   health: HealthResponse | null;
   section: ConfigSection;
@@ -38,7 +49,9 @@ export function ConfigurationPage({
         </h2>
       </header>
       <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
-        Connections and run settings for this orchestrator.
+        Everything in <code className="font-mono text-[11px]">~/.brevi/config.json</code>. Changes
+        are written straight back to that file and, unless a field says otherwise, reach the next
+        run without a restart.
       </p>
 
       <nav
@@ -68,18 +81,34 @@ export function ConfigurationPage({
 
       {config ? (
         <>
-          {/* Connectors stays mounted while hidden: an in-flight connect flow
-              (GitHub device polling, redirect or wrangler login waits) must
-              survive a switch to another section, or the grant is lost. */}
+          {/* Every section stays mounted while hidden. Unmounting would throw
+              away a card's unsaved edits on a stray click in the submenu, with
+              no warning and no way back, and it would drop an in-flight
+              connect flow (GitHub device polling, a redirect or wrangler login
+              wait) on the floor. */}
           <div hidden={section !== "connectors"}>
             <ConnectorsSection config={config} linearStatus={linearStatus} onConfig={onConfig} />
           </div>
-          {section === "repositories" && (
-            <RepositoriesSection config={config} linearStatus={linearStatus} onConfig={onConfig} />
-          )}
-          {section === "sandbox" && (
+          <div hidden={section !== "repositories"}>
+            <RepositoriesSection
+              config={config}
+              runs={runs}
+              linearStatus={linearStatus}
+              onConfig={onConfig}
+            />
+          </div>
+          <div hidden={section !== "agent"}>
+            <AgentSection config={config} onConfig={onConfig} />
+          </div>
+          <div hidden={section !== "sandbox"}>
             <SandboxSection config={config} health={health} onConfig={onConfig} />
-          )}
+          </div>
+          <div hidden={section !== "orchestrator"}>
+            <OrchestratorSection config={config} onConfig={onConfig} />
+          </div>
+          <div hidden={section !== "server"}>
+            <ServerSection config={config} onConfig={onConfig} />
+          </div>
         </>
       ) : (
         <p className="mt-6 text-[12.5px] leading-relaxed text-haze-700">

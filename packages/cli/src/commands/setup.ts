@@ -19,7 +19,8 @@ import {
   BREVI_HOME,
   CONFIG_PATH,
   firecrackerConfigSchema,
-  IMAGES_DIR,
+  DEFAULT_ROOTFS,
+  resolveFirecrackerImages,
   type BreviConfig,
   type FirecrackerConfig,
 } from "@brevi/shared";
@@ -338,13 +339,14 @@ async function ensureKernel(
   firecracker: FirecrackerConfig,
   arch: FirecrackerArch | undefined,
 ): Promise<void> {
-  if (await fileExists(firecracker.kernelImage)) {
-    log.success(`Kernel image: ${firecracker.kernelImage}`);
+  const kernelImage = resolveFirecrackerImages(firecracker).kernelImage;
+  if (await fileExists(kernelImage)) {
+    log.success(`Kernel image: ${kernelImage}`);
     return;
   }
   if (arch === undefined) {
     log.warn(
-      `The firecracker CI bucket has no prebuilt kernel for ${process.arch}; provide a vmlinux at ${firecracker.kernelImage} yourself.`,
+      `The firecracker CI bucket has no prebuilt kernel for ${process.arch}; provide a vmlinux at ${kernelImage} yourself.`,
     );
     return;
   }
@@ -353,9 +355,9 @@ async function ensureKernel(
   const s = spinner();
   s.start(`Downloading kernel ${KERNEL_NAME} (${arch})`);
   try {
-    await mkdir(dirname(firecracker.kernelImage), { recursive: true });
+    await mkdir(dirname(kernelImage), { recursive: true });
     let lastMib = -1;
-    await downloadToFile(url, firecracker.kernelImage, ARTIFACTS[arch].kernelSha256, (bytes) => {
+    await downloadToFile(url, kernelImage, ARTIFACTS[arch].kernelSha256, (bytes) => {
       const mib = Math.floor(bytes / (1024 * 1024));
       if (mib !== lastMib) {
         lastMib = mib;
@@ -364,10 +366,10 @@ async function ensureKernel(
     });
   } catch (err) {
     s.error(`Could not download the kernel: ${errorMessage(err)}`);
-    log.warn(`Download it manually:\n  curl -fsSL -o ${firecracker.kernelImage} ${url}`);
+    log.warn(`Download it manually:\n  curl -fsSL -o ${kernelImage} ${url}`);
     return;
   }
-  s.stop(`Downloaded kernel to ${firecracker.kernelImage}`);
+  s.stop(`Downloaded kernel to ${kernelImage}`);
 }
 
 async function ensureRootfs(
@@ -377,20 +379,20 @@ async function ensureRootfs(
   // An image that exists but is empty, corrupt, or missing a current build
   // manifest needs a rebuild just like a missing one, or setup would keep
   // reporting it present while the preflight keeps failing it.
-  const rootfsProblems = (await fileExists(firecracker.rootfs))
-    ? await collectRootfsProblems(firecracker.rootfs)
-    : [`rootfs image ${firecracker.rootfs} is missing`];
+  const rootfs = resolveFirecrackerImages(firecracker).rootfs;
+  const rootfsProblems = (await fileExists(rootfs))
+    ? await collectRootfsProblems(rootfs)
+    : [`rootfs image ${rootfs} is missing`];
   if (rootfsProblems.length === 0 && (await fileExists(SSH_KEY_PATH))) {
-    log.success(`Rootfs image and ssh key: ${firecracker.rootfs}`);
+    log.success(`Rootfs image and ssh key: ${rootfs}`);
     return;
   }
-  if ((await fileExists(firecracker.rootfs)) && rootfsProblems.length > 0) {
+  if ((await fileExists(rootfs)) && rootfsProblems.length > 0) {
     log.warn(`The existing rootfs needs a rebuild: ${rootfsProblems.join("; ")}`);
   }
-  const defaultRootfs = join(IMAGES_DIR, "rootfs.ext4");
-  if (firecracker.rootfs !== defaultRootfs) {
+  if (rootfs !== DEFAULT_ROOTFS) {
     log.warn(
-      `build-rootfs.sh only writes the default path ${defaultRootfs}; the configured rootfs ${firecracker.rootfs} must be built manually.`,
+      `build-rootfs.sh only writes the default path ${DEFAULT_ROOTFS}; the configured rootfs ${rootfs} must be built manually.`,
     );
     return;
   }
