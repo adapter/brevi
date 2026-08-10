@@ -1,13 +1,12 @@
 import { z } from "zod";
-import { homedir } from "node:os";
-import { join } from "node:path";
 
-/** Root directory for all brevi state: config, run history, artifacts, VM images. */
-export const BREVI_HOME = join(homedir(), ".brevi");
-export const CONFIG_PATH = join(BREVI_HOME, "config.json");
-export const RUNS_DIR = join(BREVI_HOME, "runs");
-export const IMAGES_DIR = join(BREVI_HOME, "images");
-export const WORKSPACES_DIR = join(BREVI_HOME, "workspaces");
+/**
+ * The zod schema for `~/.brevi/config.json`, and the single source of truth
+ * for validating it. The dashboard imports this module to validate its
+ * settings forms with the exact rules the orchestrator applies, so it must
+ * stay free of node builtins: host paths live in `paths.ts` instead, and any
+ * default that depends on one is left empty here and resolved at use time.
+ */
 
 export const DEFAULT_PORT = 4400;
 export const DEFAULT_HOST = "127.0.0.1";
@@ -51,10 +50,16 @@ export const firecrackerConfigSchema = z.preprocess(
   z.object({
     /** Path to the firecracker binary. */
     binary: z.string().default("firecracker"),
-    /** Uncompressed Linux kernel image (vmlinux). */
-    kernelImage: z.string().default(join(IMAGES_DIR, "vmlinux")),
-    /** Ext4 rootfs with node, git, and the coding agent preinstalled. */
-    rootfs: z.string().default(join(IMAGES_DIR, "rootfs.ext4")),
+    /**
+     * Uncompressed Linux kernel image (vmlinux). Empty means the image brevi
+     * manages, `~/.brevi/images/vmlinux` (see resolveFirecrackerImages).
+     */
+    kernelImage: z.string().default(""),
+    /**
+     * Ext4 rootfs with node, git, and the coding agent preinstalled. Empty
+     * means the image brevi manages, `~/.brevi/images/rootfs.ext4`.
+     */
+    rootfs: z.string().default(""),
     /**
      * VM size preset: small (1 vCPU / 3.75 GB), medium (2 vCPU / 7.5 GB), or
      * large (4 vCPU / 15 GB). Adjustable live from the dashboard's Sandbox
@@ -104,13 +109,23 @@ export const configSchema = z.object({
   r2: z
     .object({
       /** Public R2 bucket demo evidence is uploaded to. Empty = uploads disabled. */
-      bucket: z.string().default(""),
+      bucket: z
+        .string()
+        .default("")
+        .transform((value) => value.trim()),
       /**
        * Public base URL the bucket is served from (its r2.dev development URL
        * or a custom domain), used verbatim to build the asset links embedded
-       * in PR descriptions.
+       * in PR descriptions. Normalized here rather than at each call site: a
+       * trailing slash would show up as "//" in every PR link.
        */
-      publicBaseUrl: z.string().default(""),
+      publicBaseUrl: z
+        .string()
+        .default("")
+        .transform((value) => value.trim().replace(/\/+$/, ""))
+        .refine((value) => value === "" || /^https?:\/\/\S+$/.test(value), {
+          message: "must be an http(s) URL",
+        }),
     })
     .prefault({}),
   /** Map of repo key -> repo config. Ticket labels or project names select the key. */
@@ -119,7 +134,11 @@ export const configSchema = z.object({
   defaultRepo: z.string().optional(),
   agent: z
     .object({
-      /** Coding agent CLI executed inside the sandbox. */
+      /**
+       * Coding agent CLI brevi executes. It has to be available where the run
+       * executes: on the host's PATH under the process provider, baked into
+       * the rootfs image under Firecracker.
+       */
       command: z.string().default("claude"),
       args: z.array(z.string()).default([]),
       /**
@@ -179,7 +198,11 @@ export const configSchema = z.object({
        * default), so keep this in line with what the host can hold.
        */
       concurrency: z.number().int().min(1).max(16).default(1),
-      /** Hard wall-clock limit for a single run. */
+      /**
+       * Hard wall-clock limit applied per agent execution, not per run: the
+       * implementation pass, each Codex reviewer, the synthesis pass, and the
+       * fix pass each get their own budget.
+       */
       timeoutMinutes: z.number().int().min(1).default(60),
       /**
        * How many hours a finished (completed or failed) run's sandbox disk is
@@ -226,7 +249,7 @@ export const configSchema = z.object({
     .prefault({}),
   server: z
     .object({
-      port: z.number().int().default(DEFAULT_PORT),
+      port: z.number().int().min(1).max(65535).default(DEFAULT_PORT),
       /**
        * Bind address. The default keeps the dashboard loopback-only; "0.0.0.0"
        * exposes the unauthenticated dashboard and API to the whole network.

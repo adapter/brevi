@@ -2,7 +2,11 @@ import { existsSync } from "node:fs";
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { resolveFirecrackerResources, type FirecrackerConfig } from "@brevi/shared";
+import {
+  resolveFirecrackerImages,
+  resolveFirecrackerResources,
+  type FirecrackerConfig,
+} from "@brevi/shared";
 import { execa, type ResultPromise } from "execa";
 import { runCommand } from "../exec.js";
 import { resolveFirecrackerBinary } from "../host.js";
@@ -69,7 +73,7 @@ export async function bootMicroVm(options: MicroVmOptions): Promise<MicroVm> {
   if (options.reuseRootfs) {
     if (!existsSync(rootfsPath)) throw new Error(`no retained rootfs at ${rootfsPath}`);
   } else {
-    await copyRootfs(options.config.rootfs, rootfsPath);
+    await copyRootfs(resolveFirecrackerImages(options.config).rootfs, rootfsPath);
   }
 
   const network = allocateNetwork();
@@ -130,7 +134,7 @@ async function configure(
     const { vcpus, memMib } = resolveFirecrackerResources(config);
     await api.put("/machine-config", { vcpu_count: vcpus, mem_size_mib: memMib });
     await api.put("/boot-source", {
-      kernel_image_path: config.kernelImage,
+      kernel_image_path: resolveFirecrackerImages(config).kernelImage,
       boot_args: bootArgs(network),
     });
     await api.put("/drives/rootfs", {

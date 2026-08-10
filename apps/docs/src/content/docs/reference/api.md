@@ -31,11 +31,10 @@ There is no authentication: by default the server is loopback-only and anything 
 | `POST` | `/api/connect/github/poll` | `DevicePollResponse` |
 | `GET` | `/api/connect/r2` | `R2Status` |
 | `POST` | `/api/connect/r2` | `R2ConnectResponse` |
-| `PUT` | `/api/settings/r2` | `R2SettingsUpdateResponse` |
 | `GET` | `/api/connect/linear/callback` | HTML (OAuth redirect target) |
 | `GET` | `/api/github/repos` | `GithubRepo[]` |
-| `PUT` | `/api/settings/repos` | `ReposUpdateResponse` |
-| `PUT` | `/api/settings/sandbox` | `SandboxSettingsUpdateResponse` |
+| `GET` | `/api/linear/projects` | `LinearProject[]` |
+| `PUT` | `/api/settings` | `SettingsUpdateResponse` |
 | `GET` | `/ws` | WebSocket upgrade |
 
 Errors are `{ "error": string }` with status `400` (invalid), `404` (not found), `409` (conflict, e.g. the ticket already has an active run), `410` (gone, e.g. a resumable sandbox's retention window passed), or `500`.
@@ -173,26 +172,7 @@ Only the fields you send are touched. Each is validated against its provider bef
 
 `GET /api/github/repos` lists repos visible to the connected token, most recently pushed first, as `{ fullName, defaultBranch, private, description, pushedAt }`. It returns `400` when GitHub isn't connected.
 
-`PUT /api/settings/repos` replaces `repos` and `defaultRepo` **wholesale**:
-
-```json
-{
-  "repos": { "brevi": { "remote": "adapter/brevi", "defaultBranch": "main" } },
-  "defaultRepo": "brevi"
-}
-```
-
-Each entry is validated against the repo schema; a bad remote or an unknown `defaultRepo` returns `400` and nothing is written. On success, tickets are re-resolved against the new mappings straight away.
-
-### Sandbox settings
-
-`PUT /api/settings/sandbox` updates `sandbox.concurrency` (how many sandboxed runs execute at once) and/or `sandbox.firecracker.size` (the Firecracker VM size preset); at least one of the two fields is required, and both may be sent together:
-
-```json
-{ "concurrency": 2, "size": "large" }
-```
-
-Both values are persisted to `~/.brevi/config.json` and take effect immediately, no restart needed: raising `concurrency` starts queued runs right away, and lowering it lets already-running sandboxes finish out rather than cancelling them. Setting `size` applies to newly booted VMs, including sandboxes rehydrated for `brevi attach`, and clears any explicit `vcpus`/`memMib` overrides from the config file so the preset takes effect; running VMs are untouched. A `concurrency` outside `1` to `16` or non-integer, an unrecognized `size`, or a body with neither field, is rejected with `400` and nothing is written.
+Repo mappings themselves are edited through `PUT /api/settings` (below), like every other config field.
 
 ### R2 connector
 
@@ -219,20 +199,45 @@ interface R2Status {
 
 `"connected"` means `wrangler whoami` was already authenticated, nothing to do. `"login-started"` means brevi spawned `wrangler login` on the host, which opens a browser for interactive OAuth; the dashboard should poll `GET /api/connect/r2` until `loggedIn` flips. `"unavailable"` means wrangler isn't installed; `reason` says so.
 
-`PUT /api/settings/r2` sets the bucket and its public base URL:
+The bucket and its public base URL are config fields like any other; set them with `PUT /api/settings`.
+
+## Settings
+
+`PUT /api/settings` is the only write path for `~/.brevi/config.json`. The body carries a deep-partial patch of the fields one form card owns, so a save never touches anything the caller did not send, including fields another tab or a hand edit changed in the meantime:
 
 ```json
-{ "bucket": "my-evidence-bucket", "publicBaseUrl": "https://pub-xxxx.r2.dev" }
-```
-
-```ts
-interface R2SettingsUpdateResponse {
-  config: BreviConfig;  // redacted
-  r2: R2Status;          // live state after the update
+{
+  "patch": {
+    "agent": { "orchestratorModel": "claude-opus-5", "orchestratorEffort": "medium" },
+    "sandbox": { "firecracker": { "size": "large", "vcpus": null, "memMib": null } }
+  }
 }
 ```
 
-Only provided fields are touched; each is trimmed, and a trailing slash is stripped from `publicBaseUrl`. A non-empty `publicBaseUrl` must parse as an `http(s)` URL, or the request is rejected with `400` and nothing is written.
+Objects merge key by key; arrays and scalars replace. `null` **removes** a key, which is how an optional field is cleared (`{"defaultRepo": null}`) and how a repo mapping is deleted (`{"repos": {"web": null}}`).
+
+```ts
+interface SettingsUpdateResponse {
+  config: BreviConfig;            // redacted, for re-rendering every form
+  applied: "live" | "restart";
+}
+```
+
+The patch is merged onto the config on disk, the **whole** result is validated against the config schema, and only then is the file replaced (written to a temp file and renamed, so a reader never sees a half-written config). A rejection returns `400` with the zod message, prefixed by the field path, and nothing is written:
+
+```json
+{ "error": "agent.orchestratorEffort: Invalid option: expected one of \"low\"|\"medium\"|\"high\"" }
+```
+
+Two rules span fields and are checked after the schema: `defaultRepo` has to name a configured repo key, and a non-empty `r2.publicBaseUrl` has to parse as an `http(s)` URL.
+
+Credential fields are refused here with `400`: `linear.apiKey`, `linear.refreshToken`, `linear.tokenExpiresAt`, `github.token`, and the four `agent.*` keys. Most of them are masked in every read, so accepting them would let a form round-trip the mask over a live secret; `linear.tokenExpiresAt` is not itself masked and is refused because the OAuth flow maintains it. They are written by the Connect flows and `PUT /api/settings/credentials`, which verify each key with its provider. `connect.linearClientSecret` is write-only rather than refused: it can be set, but the literal mask value is rejected.
+
+The check compares credential values on the merged result, not paths in the patch, so deleting a whole section (`{"linear": null}`, which would let the schema defaults refill it with empty strings) is refused the same way as setting the field directly.
+
+`applied` says whether the change is already in effect. Almost everything is read per run or per poll and applies live; `server.port`, `server.host`, and `sandbox.provider` are bound once at startup and answer `"restart"`.
+
+`config.json` stays the source of truth in both directions: the orchestrator watches the file and picks up hand edits without a restart, broadcasting the reloaded config over the WebSocket. An external edit that does not validate is logged and ignored, leaving the running settings alone.
 
 ## WebSocket
 

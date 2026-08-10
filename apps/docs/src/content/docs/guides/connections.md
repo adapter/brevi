@@ -98,7 +98,7 @@ Setup:
 1. Install the `wrangler` CLI on the host running the orchestrator.
 2. Click Connect and approve the browser login. brevi does the rest: the bucket and public URL are created and saved for you.
 
-The provisioned bucket and URL then appear as read-only values on the card, with a small Edit affordance if you want to point at a custom domain or a pre-existing bucket instead; edits are still saved via `PUT /api/settings/r2`.
+The provisioned bucket and URL then appear as read-only values on the card, with a small Edit affordance if you want to point at a custom domain or a pre-existing bucket instead; edits are still saved via `PUT /api/settings`.
 
 Runs triggered while R2 isn't fully configured, logged out, or wrangler is missing behave exactly as before: evidence stays local and a note appears in the run's console instead of a failure.
 

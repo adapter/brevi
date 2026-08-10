@@ -141,6 +141,7 @@ export default function App() {
           ) : (
             <ConfigurationPage
               config={config}
+              runs={runs}
               linearStatus={linearStatus}
               health={health}
               section={page.slice("config:".length) as ConfigSection}

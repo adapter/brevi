@@ -13,8 +13,10 @@ import { Input } from "@/components/ui/input";
 import { api } from "../../lib/api";
 import { linearConnected } from "../../lib/linear";
 import { safeExternalUrl, trustedOriginOf } from "../../lib/url";
+import { useSettingsDraft } from "../../lib/settings";
 import { Plate } from "../Bits";
 import { Check, External, Warn } from "../Icons";
+import { SegmentedField, SettingsCard, TagField, TextField } from "./Fields";
 
 /** How the "Connect" button acquires a credential, shown as a hint. */
 type ConnectHint = string;
@@ -130,12 +132,65 @@ export function ConnectorsSection({
           <R2Row config={config} onConfig={onConfig} />
         </li>
       </ul>
+      <div className="mt-2.5 flex flex-col gap-2.5">
+        <LinearSettingsCard config={config} onConfig={onConfig} />
+        <GithubSettingsCard config={config} onConfig={onConfig} />
+      </div>
+
       <p className="mt-6 border-t border-ink-700 pt-3.5 text-[11.5px] leading-relaxed text-haze-700">
         Credentials are validated with the provider, then stored in{" "}
         <code className="font-mono text-[10.5px] text-haze-400">~/.brevi/config.json</code>.
-        They never leave this machine.
+        They never leave this machine. Keys are never shown back to this page, so they are not
+        editable as form fields: connect or disconnect instead.
       </p>
     </section>
+  );
+}
+
+/** Polling scope for the Linear connector, next to the connection itself. */
+function LinearSettingsCard({
+  config,
+  onConfig,
+}: {
+  config: BreviConfig;
+  onConfig: (config: BreviConfig) => void;
+}) {
+  const draft = useSettingsDraft(config, onConfig);
+  return (
+    <SettingsCard title="Linear polling" draft={draft}>
+      <TagField
+        label="Team keys"
+        path="linear.teamKeys"
+        draft={draft}
+        placeholder="ENG, then press Enter"
+        help="Restrict polling to these team keys. Empty polls every team you can see."
+      />
+    </SettingsCard>
+  );
+}
+
+/** How the agent is told to write the pull request it opens. */
+function GithubSettingsCard({
+  config,
+  onConfig,
+}: {
+  config: BreviConfig;
+  onConfig: (config: BreviConfig) => void;
+}) {
+  const draft = useSettingsDraft(config, onConfig);
+  return (
+    <SettingsCard title="Pull requests" draft={draft}>
+      <SegmentedField
+        label="PR description"
+        path="github.prDescription"
+        draft={draft}
+        options={[
+          { value: "concise", label: "Concise" },
+          { value: "detailed", label: "Detailed" },
+        ]}
+        help="How the agent is told to write the PR description: concise asks for a couple of sentences plus a few bullets, detailed allows a full write-up."
+      />
+    </SettingsCard>
   );
 }
 
@@ -518,10 +573,10 @@ function R2Row({
   const autoProvisioned = useRef(true);
 
   const [editing, setEditing] = useState(false);
-  const [bucket, setBucket] = useState(config.r2.bucket);
-  const [publicBaseUrl, setPublicBaseUrl] = useState(config.r2.publicBaseUrl);
-  const [settingsPending, setSettingsPending] = useState(false);
-  const [settingsResult, setSettingsResult] = useState<CredentialResult | null>(null);
+  // The two bucket fields go through the shared draft, so they validate
+  // against the schema inline and an incoming config broadcast refreshes
+  // whatever is not being typed instead of resetting the whole form.
+  const settings = useSettingsDraft(config, onConfig);
 
   const stopPolling = () => {
     if (pollTimer.current) clearTimeout(pollTimer.current);
@@ -550,10 +605,10 @@ function R2Row({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.r2.bucket, config.r2.publicBaseUrl]);
 
+  // Close the editor once a save lands, but only when nothing is left dirty.
   useEffect(() => {
-    setBucket(config.r2.bucket);
-    setPublicBaseUrl(config.r2.publicBaseUrl);
-  }, [config.r2.bucket, config.r2.publicBaseUrl]);
+    if (settings.applied !== null && !settings.dirty) setEditing(false);
+  }, [settings.applied, settings.dirty]);
 
   // Give up on a wrangler login that never completed: re-enable Connect and
   // say why, rather than leaving the button dead until a page reload.
@@ -590,11 +645,10 @@ function R2Row({
       switch (response.status) {
         case "connected":
           setStatus(response.r2);
-          // Also sync the manual-edit fields from the response: the config
-          // broadcast that would do it can lag or drop, and Edit opening on
-          // stale values could save them over the freshly provisioned ones.
-          setBucket(response.r2.bucket);
-          setPublicBaseUrl(response.r2.publicBaseUrl);
+          // Provisioning wrote the bucket into config server-side, so any
+          // half-typed manual entry is stale now and would otherwise be
+          // saved back over the freshly provisioned values.
+          settings.discard();
           break;
         case "login-started":
           autoProvisioned.current = false;
@@ -632,36 +686,16 @@ function R2Row({
   }, [status?.loggedIn, status?.ready]);
 
   const cancelEdit = () => {
-    // Live status is fresher than the config prop when the WS broadcast lags.
-    setBucket(status?.bucket ?? config.r2.bucket);
-    setPublicBaseUrl(status?.publicBaseUrl ?? config.r2.publicBaseUrl);
-    setSettingsResult(null);
+    settings.discard();
     setEditing(false);
-  };
-
-  const saveSettings = async () => {
-    setSettingsPending(true);
-    setSettingsResult(null);
-    try {
-      const response = await api.updateR2Settings({ bucket, publicBaseUrl });
-      onConfig(response.config);
-      setStatus(response.r2);
-      setSettingsResult({ ok: true, detail: "Saved." });
-      setEditing(false);
-    } catch (err) {
-      setSettingsResult({
-        ok: false,
-        detail: err instanceof Error ? err.message : "The orchestrator did not respond.",
-      });
-    } finally {
-      setSettingsPending(false);
-    }
   };
 
   const ready = status?.ready ?? false;
   const configured = status !== null && status.bucket !== "" && status.publicBaseUrl !== "";
   const showConnect = status !== null && status.installed && !ready;
-  const showManualEntry = status?.loggedIn === true && !configured && !editing;
+  // Not gated on being logged in: pointing at an existing public bucket (or a
+  // custom domain) is a legitimate setup that needs no wrangler session here.
+  const showManualEntry = !configured && !editing;
 
   return (
     <Card size="sm" className="gap-1.5">
@@ -777,50 +811,48 @@ function R2Row({
         )}
 
         {editing && (
-          <div className="mt-3 flex flex-col gap-2">
-            <Input
-              type="text"
-              value={bucket}
-              onChange={(e) => {
-                setBucket(e.target.value);
-                setSettingsResult(null);
-              }}
-              placeholder="Bucket name"
-              autoComplete="off"
-              spellCheck={false}
-              className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+          <div className="mt-3 flex flex-col">
+            <TextField
+              label="Bucket"
+              path="r2.bucket"
+              draft={settings}
+              placeholder="brevi-evidence"
+              wide
+              help="Public R2 bucket demo evidence is uploaded to. Empty disables uploads."
             />
-            <Input
-              type="text"
-              value={publicBaseUrl}
-              onChange={(e) => {
-                setPublicBaseUrl(e.target.value);
-                setSettingsResult(null);
-              }}
+            <TextField
+              label="Public base URL"
+              path="r2.publicBaseUrl"
+              draft={settings}
               placeholder="https://pub-xxxx.r2.dev"
-              autoComplete="off"
-              spellCheck={false}
-              className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+              wide
+              help="Its r2.dev development URL or a custom domain, used verbatim to build the links embedded in PR descriptions."
             />
-            <div className="flex items-center gap-2">
+            <div className="mt-2 flex items-center gap-2">
               <Button
                 size="plate"
-                onClick={() => void saveSettings()}
-                disabled={settingsPending}
+                onClick={settings.save}
+                disabled={settings.saving || settings.invalid || !settings.dirty}
                 className="self-start"
               >
-                {settingsPending ? "Saving" : "Save"}
+                {settings.saving ? "Saving" : "Save"}
               </Button>
               <Button
                 variant="ghost"
                 size="plate"
                 onClick={cancelEdit}
-                disabled={settingsPending}
+                disabled={settings.saving}
                 className="self-start hover:bg-transparent hover:text-haze-300"
               >
                 Cancel
               </Button>
             </div>
+            {settings.error && (
+              <p className="mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed text-rust-400">
+                <Warn className="mt-px size-3 shrink-0" />
+                {settings.error}
+              </p>
+            )}
           </div>
         )}
 
@@ -828,18 +860,10 @@ function R2Row({
           The bucket must be public: enable its r2.dev development URL or attach a custom domain.
         </p>
 
-        {settingsResult && (
-          <p
-            className={`mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed ${
-              settingsResult.ok ? "text-mint-400" : "text-rust-400"
-            }`}
-          >
-            {settingsResult.ok ? (
-              <Check className="mt-px size-3 shrink-0" />
-            ) : (
-              <Warn className="mt-px size-3 shrink-0" />
-            )}
-            {settingsResult.detail}
+        {!editing && settings.applied !== null && (
+          <p className="mt-2 flex items-center gap-1.5 text-[12px] text-mint-400">
+            <Check className="size-3 shrink-0" />
+            Saved.
           </p>
         )}
 

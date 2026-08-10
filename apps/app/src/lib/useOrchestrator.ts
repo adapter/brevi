@@ -74,13 +74,20 @@ function pathForRun(runId: string | null): string {
   return runId ? `/runs/${encodeURIComponent(runId)}` : "/";
 }
 
-export type ConfigSection = "connectors" | "repositories" | "sandbox";
+export type ConfigSection =
+  | "connectors"
+  | "repositories"
+  | "agent"
+  | "sandbox"
+  | "orchestrator"
+  | "server";
 
 export type Page = "home" | `config:${ConfigSection}`;
 
 /** Non-run pages live at fixed paths; anything else is the home/run view. */
 function pageFromPath(pathname: string): Page {
-  const match = /^\/config(?:\/(connectors|repositories|sandbox))?\/?$/.exec(pathname);
+  const match =
+    /^\/config(?:\/(connectors|repositories|agent|sandbox|orchestrator|server))?\/?$/.exec(pathname);
   if (!match) return "home";
   const section = (match[1] ?? "connectors") as ConfigSection;
   return `config:${section}`;

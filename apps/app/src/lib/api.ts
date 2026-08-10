@@ -7,17 +7,13 @@ import type {
   GithubRepo,
   HealthResponse,
   LinearProject,
+  ConfigPatch,
   PrStatusResponse,
   R2ConnectResponse,
-  R2SettingsUpdateRequest,
-  R2SettingsUpdateResponse,
   R2Status,
-  ReposUpdateRequest,
-  ReposUpdateResponse,
   Run,
   RunEvent,
-  SandboxSettingsUpdateRequest,
-  SandboxSettingsUpdateResponse,
+  SettingsUpdateResponse,
   Ticket,
 } from "@brevi/shared";
 
@@ -29,8 +25,20 @@ async function json<T>(input: string, init?: RequestInit): Promise<T> {
     headers: { Accept: "application/json", ...init?.headers },
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(body.trim() || `${res.status} ${res.statusText}`);
+    const body = (await res.text().catch(() => "")).trim();
+    // The API reports failures as {"error": "..."}; surface the sentence, not
+    // the envelope, so a validation message can be shown inline as-is.
+    let detail = body;
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (typeof parsed === "object" && parsed !== null && "error" in parsed) {
+        const { error } = parsed as { error: unknown };
+        if (typeof error === "string" && error.trim()) detail = error.trim();
+      }
+    } catch {
+      // Not JSON (an HTML error page, say); the raw text is the best we have.
+    }
+    throw new Error(detail || `${res.status} ${res.statusText}`);
   }
   return (await res.json()) as T;
 }
@@ -61,25 +69,14 @@ export const api = {
     json<DevicePollResponse>("/api/connect/github/poll", { method: "POST" }),
   githubRepos: () => json<GithubRepo[]>("/api/github/repos"),
   linearProjects: () => json<LinearProject[]>("/api/linear/projects"),
-  updateRepos: (request: ReposUpdateRequest) =>
-    json<ReposUpdateResponse>("/api/settings/repos", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-    }),
-  updateSandboxSettings: (request: SandboxSettingsUpdateRequest) =>
-    json<SandboxSettingsUpdateResponse>("/api/settings/sandbox", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-    }),
   r2Status: () => json<R2Status>("/api/connect/r2"),
   connectR2: () => json<R2ConnectResponse>("/api/connect/r2", { method: "POST" }),
-  updateR2Settings: (request: R2SettingsUpdateRequest) =>
-    json<R2SettingsUpdateResponse>("/api/settings/r2", {
+  /** The one write path for config.json: a deep-partial patch of one card's fields. */
+  updateSettings: (patch: ConfigPatch) =>
+    json<SettingsUpdateResponse>("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
+      body: JSON.stringify({ patch }),
     }),
 };
 

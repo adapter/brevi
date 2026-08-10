@@ -9,6 +9,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
+  isPlainObject,
   redactConfig,
   urlHost,
   type BreviConfig,
@@ -16,12 +17,10 @@ import {
   type CredentialsUpdateRequest,
   type HealthResponse,
   type LinearStatus,
-  type R2SettingsUpdateRequest,
-  type ReposUpdateRequest,
   type Run,
   type RunEvent,
-  type SandboxSettingsUpdateRequest,
   type ServerMessage,
+  type SettingsUpdateRequest,
   type Ticket,
 } from "@brevi/shared";
 import { loadConfig } from "./config.js";
@@ -133,7 +132,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: string): Hono {
+function buildApp(
+  orchestrator: Orchestrator,
+  config: BreviConfig,
+  appDist: string | undefined,
+  /**
+   * The port actually listening, not `config.server.port`: the port is
+   * editable from the dashboard and takes effect on restart, so the live
+   * config can name a port nothing is bound to. OAuth redirect URIs have to
+   * point at the socket that will receive the callback.
+   */
+  boundPort: () => number,
+): Hono {
   const app = new Hono();
 
   app.get("/api/health", (c) => {
@@ -278,7 +288,7 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
       return c.json({ error: "unknown provider" }, 404);
     }
     try {
-      const serverUrl = `http://localhost:${config.server.port}`;
+      const serverUrl = `http://localhost:${boundPort()}`;
       return c.json(
         await orchestrator.connectProvider(provider as "linear" | "github" | "anthropic" | "codex", serverUrl),
       );
@@ -319,68 +329,18 @@ function buildApp(orchestrator: Orchestrator, config: BreviConfig, appDist?: str
     }
   });
 
-  app.put("/api/settings/repos", async (c) => {
-    let body: ReposUpdateRequest;
+  app.put("/api/settings", async (c) => {
+    let body: SettingsUpdateRequest;
     try {
-      body = (await c.req.json()) as ReposUpdateRequest;
+      body = (await c.req.json()) as SettingsUpdateRequest;
     } catch {
       return c.json({ error: "invalid JSON body" }, 400);
     }
-    if (typeof body.repos !== "object" || body.repos === null || Array.isArray(body.repos)) {
-      return c.json({ error: "repos must be an object of key -> repo config" }, 400);
+    if (!isPlainObject(body?.patch)) {
+      return c.json({ error: "patch must be an object of config fields" }, 400);
     }
     try {
-      return c.json(await orchestrator.updateRepos(body));
-    } catch (error) {
-      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
-    }
-  });
-
-  app.put("/api/settings/sandbox", async (c) => {
-    let body: SandboxSettingsUpdateRequest;
-    try {
-      body = (await c.req.json()) as SandboxSettingsUpdateRequest;
-    } catch {
-      return c.json({ error: "invalid JSON body" }, 400);
-    }
-    const request: SandboxSettingsUpdateRequest = {};
-    if (body.concurrency !== undefined) {
-      if (typeof body.concurrency !== "number") {
-        return c.json({ error: "concurrency must be a number" }, 400);
-      }
-      request.concurrency = body.concurrency;
-    }
-    if (body.size !== undefined) {
-      if (typeof body.size !== "string") {
-        return c.json({ error: "size must be a string" }, 400);
-      }
-      request.size = body.size;
-    }
-    if (Object.keys(request).length === 0) {
-      return c.json({ error: "no sandbox settings provided" }, 400);
-    }
-    try {
-      return c.json(await orchestrator.updateSandboxSettings(request));
-    } catch (error) {
-      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
-    }
-  });
-
-  app.put("/api/settings/r2", async (c) => {
-    let body: R2SettingsUpdateRequest;
-    try {
-      body = (await c.req.json()) as R2SettingsUpdateRequest;
-    } catch {
-      return c.json({ error: "invalid JSON body" }, 400);
-    }
-    const request: R2SettingsUpdateRequest = {};
-    if (typeof body.bucket === "string") request.bucket = body.bucket;
-    if (typeof body.publicBaseUrl === "string") request.publicBaseUrl = body.publicBaseUrl;
-    if (Object.keys(request).length === 0) {
-      return c.json({ error: "no r2 settings provided" }, 400);
-    }
-    try {
-      return c.json(await orchestrator.updateR2Settings(request));
+      return c.json(await orchestrator.updateSettings(body.patch));
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }
@@ -522,7 +482,10 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
   const orchestrator = new Orchestrator(config, undefined, options.configPath);
   await orchestrator.start();
 
-  const app = buildApp(orchestrator, config, options.appDist);
+  // Filled in once the listener binds; the OAuth flows read it through the
+  // getter rather than capturing a number that a settings save can outdate.
+  let boundPort = config.server.port;
+  const app = buildApp(orchestrator, config, options.appDist, () => boundPort);
   const server = await new Promise<HttpServer>((resolvePromise, rejectPromise) => {
     const instance = serve(
       { fetch: app.fetch, port: config.server.port, hostname: config.server.host },
@@ -533,6 +496,7 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
 
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : config.server.port;
+  boundPort = port;
   const sockets = attachWebSockets(server, orchestrator, config);
 
   return {

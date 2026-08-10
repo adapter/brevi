@@ -1,6 +1,6 @@
 import { open, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { WORKSPACES_DIR, type FirecrackerConfig } from "@brevi/shared";
+import { resolveFirecrackerImages, WORKSPACES_DIR, type FirecrackerConfig } from "@brevi/shared";
 import { fileExists, isReadWritable, resolveBinary, resolveFirecrackerBinary } from "../host.js";
 import type { CreateSandboxOptions, Sandbox, SandboxProvider } from "../types.js";
 import { ensureGuestWorkspace, FirecrackerSandbox } from "./sandbox.js";
@@ -53,15 +53,16 @@ export async function collectFirecrackerProblems(config: FirecrackerConfig): Pro
       problems.push(`the "${tool}" command was not found on PATH`);
     }
   }
-  if (!(await fileExists(config.kernelImage))) {
-    problems.push(`kernel image ${config.kernelImage} is missing`);
+  const { kernelImage, rootfs } = resolveFirecrackerImages(config);
+  if (!(await fileExists(kernelImage))) {
+    problems.push(`kernel image ${kernelImage} is missing`);
   }
-  if (!(await fileExists(config.rootfs))) {
+  if (!(await fileExists(rootfs))) {
     problems.push(
-      `rootfs image ${config.rootfs} is missing; build it with packages/sandbox/scripts/build-rootfs.sh`,
+      `rootfs image ${rootfs} is missing; build it with packages/sandbox/scripts/build-rootfs.sh`,
     );
   } else {
-    problems.push(...(await collectRootfsProblems(config.rootfs)));
+    problems.push(...(await collectRootfsProblems(rootfs)));
   }
   if (!(await fileExists(SSH_KEY_PATH))) {
     problems.push(

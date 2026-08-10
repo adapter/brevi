@@ -1,11 +1,18 @@
 import { EventEmitter } from "node:events";
-import { readdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { watch, type FSWatcher } from "node:fs";
+import { readdir, readFile, rm } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import {
+  configSchema,
   CONFIG_PATH,
-  FIRECRACKER_SIZES,
+  changedSecretPaths,
+  isPlainObject,
+  SETTINGS_SECRET_PATHS,
+  MASKED_SECRET,
+  mergeConfigPatch,
+  needsRestart,
+  readConfigPath,
   redactConfig,
-  repoConfigSchema,
   WORKSPACES_DIR,
   type BreviConfig,
   type ConnectResponse,
@@ -19,23 +26,18 @@ import {
   type LinearStatus,
   type PrState,
   type PrStatusResponse,
+  type ConfigPatch,
   type R2ConnectResponse,
-  type R2SettingsUpdateRequest,
-  type R2SettingsUpdateResponse,
   type R2Status,
-  type RepoConfig,
-  type ReposUpdateRequest,
-  type ReposUpdateResponse,
   type ResumeRunResponse,
   type Run,
   type RunAttachInfo,
   type RunEvent,
-  type SandboxSettingsUpdateRequest,
-  type SandboxSettingsUpdateResponse,
+  type SettingsUpdateResponse,
   type Ticket,
 } from "@brevi/shared";
 import { createSandboxProvider, type Sandbox, type SandboxProvider } from "@brevi/sandbox";
-import { saveConfig } from "./config.js";
+import { saveConfig, serializeConfig } from "./config.js";
 import {
   discoverAnthropicCredential,
   discoverCodexCredential,
@@ -110,6 +112,46 @@ const PR_POLL_INTERVAL_MS = 120_000;
 const PR_POLL_RECENT_RUNS = 20;
 /** Delay before retrying a failed retained-sandbox reap (the disk holds credential material). */
 const REAP_RETRY_MS = 60_000;
+/** How long config.json has to stay untouched before a hand edit is reloaded. */
+const CONFIG_RELOAD_DEBOUNCE_MS = 250;
+
+/**
+ * Copy `source` onto `target` field by field, recursing into plain objects
+ * and dropping keys `source` no longer has. Unlike replacing the object, the
+ * identity of `target` and of every nested object survives, which the live
+ * config depends on: the sandbox provider is handed `config.sandbox.firecracker`
+ * once at startup and reads the size preset off that same object at every VM
+ * boot.
+ */
+/**
+ * Write a dotted path into a plain-object tree, creating missing levels.
+ * Only used for the fixed credential paths, which contain no dots.
+ */
+function writeConfigPath(target: object, path: string, value: unknown): void {
+  const segments = path.split(".");
+  const leaf = segments.pop();
+  if (leaf === undefined) return;
+  let cursor = target as Record<string, unknown>;
+  for (const segment of segments) {
+    const next = cursor[segment];
+    if (!isPlainObject(next)) cursor[segment] = {};
+    cursor = cursor[segment] as Record<string, unknown>;
+  }
+  cursor[leaf] = value;
+}
+
+function assignInPlace<T extends object>(target: T, source: T): void {
+  const to = target as Record<string, unknown>;
+  const from = source as Record<string, unknown>;
+  for (const key of Object.keys(to)) {
+    if (!Object.hasOwn(from, key)) delete to[key];
+  }
+  for (const [key, value] of Object.entries(from)) {
+    const current = to[key];
+    if (isPlainObject(value) && isPlainObject(current)) assignInPlace(current, value);
+    else to[key] = value;
+  }
+}
 
 /**
  * Result of one attempt to refresh the stored Linear OAuth token. "stale"
@@ -191,6 +233,14 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #pollAgain = false;
   /** Tail of the config write chain; #persistConfig appends so writes never interleave. */
   #configWrite: Promise<unknown> = Promise.resolve();
+  /** Tail of the config transaction chain; see #transact. */
+  #configTx: Promise<unknown> = Promise.resolve();
+  /** Watches config.json for hand edits, so the file stays the source of truth. */
+  #configWatcher?: FSWatcher;
+  /** Debounce for the watcher above; editors save in several syscalls. */
+  #configReloadTimer?: NodeJS.Timeout;
+  /** Exact text of the last config brevi itself wrote, so its own writes don't look like hand edits. */
+  #lastWritten?: string;
   /** Recovery hooks handed to LinearService so every Linear call shares one refresh path. */
   readonly #linearAuth: LinearAuthHooks = {
     recover: () => this.#recoverLinearAuth(),
@@ -255,8 +305,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       if (run.status === "waiting") this.#scheduleResume(run.id);
     }
     void this.poll();
-    this.#pollTimer = setInterval(() => void this.poll(), this.config.pollIntervalSeconds * 1000);
-    this.#pollTimer.unref();
+    this.#armPollTimer();
+    this.#watchConfigFile();
     this.#prTimer = setInterval(() => void this.#pollPrStates(), PR_POLL_INTERVAL_MS);
     this.#prTimer.unref();
   }
@@ -708,101 +758,165 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return this.#linear.listProjects();
   }
 
-  /** Replace the repo mappings from the dashboard and re-resolve tickets. */
-  async updateRepos(request: ReposUpdateRequest): Promise<ReposUpdateResponse> {
-    const repos: Record<string, RepoConfig> = {};
-    for (const [key, value] of Object.entries(request.repos ?? {})) {
-      const trimmed = key.trim();
-      if (!trimmed) throw new OrchestratorError("invalid", "repo keys must be non-empty");
-      const parsed = repoConfigSchema.safeParse(value);
-      if (!parsed.success) {
+  /**
+   * The one write path for config.json: merge a deep-partial patch from a
+   * settings form, validate the whole config, persist it, and apply it to the
+   * live orchestrator. Validation runs against the merged result rather than
+   * the patch, so no field is ever judged in isolation and the file on disk
+   * is never left invalid.
+   */
+  async updateSettings(patch: ConfigPatch): Promise<SettingsUpdateResponse> {
+    // The dashboard only ever sees the mask, so a form that round-tripped one
+    // would silently overwrite a live secret with three asterisks.
+    if (readConfigPath(patch, "connect.linearClientSecret") === MASKED_SECRET) {
+      throw new OrchestratorError("invalid", "connect.linearClientSecret: replace it or leave it alone");
+    }
+
+    return this.#transact(async () => {
+      const before = structuredClone(this.config);
+      const merged = mergeConfigPatch(before as unknown as Record<string, unknown>, patch);
+      const result = configSchema.safeParse(merged);
+      if (!result.success) {
+        const issue = result.error.issues[0];
+        const path = issue?.path.join(".");
         throw new OrchestratorError(
           "invalid",
-          `repo "${trimmed}": ${parsed.error.issues[0]?.message ?? "invalid"}`,
+          path ? `${path}: ${issue?.message}` : (issue?.message ?? "invalid settings"),
         );
       }
-      repos[trimmed] = parsed.data;
-    }
-    let defaultRepo = request.defaultRepo?.trim() || undefined;
-    if (defaultRepo && !repos[defaultRepo]) {
-      throw new OrchestratorError("invalid", `defaultRepo "${defaultRepo}" is not a repo key`);
-    }
-    // Losing the default silently would strand tickets; fall back to any repo.
-    if (!defaultRepo) defaultRepo = Object.keys(repos)[0];
+      const next = result.data;
+      // Compared on the parsed result, not on the patch: naming no secret
+      // path is not the same as changing no secret. Deleting a whole section
+      // ({"linear": null}) lets the schema's defaults refill it with empty
+      // strings, which would disconnect the provider through a form.
+      const secrets = changedSecretPaths(before, next);
+      if (secrets.length > 0) {
+        throw new OrchestratorError(
+          "invalid",
+          `${secrets.join(", ")} cannot be changed here; connect the provider instead`,
+        );
+      }
+      this.#checkSettingsSemantics(next);
 
-    this.config.repos = repos;
-    this.config.defaultRepo = defaultRepo;
-    await this.#persistConfig();
-    this.emit("config", redactConfig(this.config));
-    this.#warnedNoRepo.clear();
-    void this.poll(); // Tickets may now resolve to a repo.
-    return { config: redactConfig(this.config) };
+      const saved = await this.#writeAndApply(next);
+      this.#reactToSettings(before, saved);
+      return {
+        config: redactConfig(this.config),
+        applied: needsRestart(before, saved) ? "restart" : "live",
+      };
+    });
   }
 
-  /** Apply and persist sandbox scheduling settings from the dashboard. */
-  async updateSandboxSettings(
-    request: SandboxSettingsUpdateRequest,
-  ): Promise<SandboxSettingsUpdateResponse> {
-    const { concurrency, size } = request;
-    if (concurrency === undefined && size === undefined) {
-      throw new OrchestratorError("invalid", "no sandbox settings provided");
-    }
-    if (concurrency !== undefined) {
-      if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
-        throw new OrchestratorError(
-          "invalid",
-          "sandbox concurrency must be an integer between 1 and 16",
-        );
+  /**
+   * Serialize whole config transactions: snapshot, merge, validate, write,
+   * apply. Chaining only the write is not enough, because two overlapping
+   * transactions would each snapshot the config before the other applied and
+   * the second would write the first's change straight back out.
+   */
+  #transact<T>(work: () => Promise<T>): Promise<T> {
+    // Both handlers, so one transaction failing doesn't strand the queue.
+    const run = this.#configTx.then(work, work);
+    this.#configTx = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * Write a candidate config and install it, as one step of the write chain.
+   * Doing both here (rather than applying first and rolling back on failure)
+   * means the live config never holds values that didn't reach disk, and
+   * leaves no rollback that could revert a change made in the meantime.
+   */
+  async #writeAndApply(candidate: BreviConfig): Promise<BreviConfig> {
+    const write = this.#configWrite.then(async () => {
+      // Credentials are owned by the connect flows, which mutate the live
+      // config directly and can land while this transaction is in flight.
+      // Settings patches provably never touch them (see changedSecretPaths),
+      // so the live values are always the ones to persist.
+      const merged = structuredClone(candidate);
+      for (const path of SETTINGS_SECRET_PATHS) {
+        writeConfigPath(merged, path, readConfigPath(this.config, path));
       }
-    }
-    // Own-property check: `size in FIRECRACKER_SIZES` would also accept
-    // inherited names like "constructor" and install them in the live config.
-    if (size !== undefined && !Object.hasOwn(FIRECRACKER_SIZES, size)) {
+      const saved = await saveConfig(merged, this.#configPath);
+      // Remember what landed on disk so the config watcher can tell brevi's
+      // own writes apart from a hand edit without any extra bookkeeping.
+      this.#lastWritten = serializeConfig(saved);
+      assignInPlace(this.config, saved);
+      return saved;
+    });
+    // Keep the chain alive after a failed write; only the caller sees the error.
+    this.#configWrite = write.catch(() => undefined);
+    return write;
+  }
+
+  /**
+   * The one rule the schema can't express, because it spans two fields: a
+   * default repo has to name a mapping that exists. Everything else, the R2
+   * URL shape included, lives in the schema so the dashboard validates it
+   * inline with the same message.
+   */
+  #checkSettingsSemantics(next: BreviConfig): void {
+    if (next.defaultRepo !== undefined && !Object.hasOwn(next.repos, next.defaultRepo)) {
       throw new OrchestratorError(
         "invalid",
-        `sandbox size must be one of ${Object.keys(FIRECRACKER_SIZES).join(", ")}`,
+        `defaultRepo: "${next.defaultRepo}" is not a configured repo key`,
       );
     }
-    const firecracker = this.config.sandbox.firecracker;
-    const previous = {
-      concurrency: this.config.sandbox.concurrency,
-      size: firecracker.size,
-      vcpus: firecracker.vcpus,
-      memMib: firecracker.memMib,
-    };
-    if (concurrency !== undefined) this.config.sandbox.concurrency = concurrency;
-    if (size !== undefined) {
-      firecracker.size = size;
-      // saveConfig persists resolved defaults, so nearly every existing
-      // config file already carries explicit vcpus/memMib; clear them here
-      // or the preset would silently never apply. The sandbox provider holds
-      // this same firecracker config object and resolves vcpus/memMib at VM
-      // boot, so the change reaches the next booted VM without a restart.
-      delete firecracker.vcpus;
-      delete firecracker.memMib;
-    }
-    try {
-      await this.#persistConfig();
-    } catch (error) {
-      // The caller gets an error, so the live config (shared by reference
-      // with the sandbox provider) must not keep settings that never reached
-      // disk; in particular the cleared overrides would change the next VM's
-      // resources despite the rejected save.
-      this.config.sandbox.concurrency = previous.concurrency;
-      firecracker.size = previous.size;
-      if (previous.vcpus === undefined) delete firecracker.vcpus;
-      else firecracker.vcpus = previous.vcpus;
-      if (previous.memMib === undefined) delete firecracker.memMib;
-      else firecracker.memMib = previous.memMib;
-      throw error;
-    }
-    this.emit("config", redactConfig(this.config));
-    if (concurrency !== undefined) {
+  }
+
+  /** Pick up whatever the new config changed: timers, queue, and the dashboard. */
+  #reactToSettings(before: BreviConfig, next: BreviConfig): void {
+    const changed = (path: string): boolean =>
+      JSON.stringify(readConfigPath(before, path)) !== JSON.stringify(readConfigPath(next, path));
+
+    if (changed("pollIntervalSeconds")) this.#armPollTimer();
+    if (changed("sandbox.concurrency")) {
       // Raising the limit can start queued runs right away; lowering it only
       // affects new starts, already-running sandboxes finish out.
       this.#kickWorker();
     }
-    return { config: redactConfig(this.config) };
+    if (changed("linear.teamKeys")) this.#tickets = [];
+    this.emit("config", redactConfig(this.config));
+    if (changed("repos") || changed("defaultRepo")) {
+      this.#warnedNoRepo.clear();
+      void this.poll(); // Tickets may now resolve to a repo.
+    } else if (changed("trigger.label") || changed("linear.teamKeys")) {
+      void this.poll(); // A different set of tickets is eligible now.
+    }
+  }
+
+  /** (Re)arm the Linear poll loop on the configured interval. */
+  #armPollTimer(): void {
+    if (this.#pollTimer) clearInterval(this.#pollTimer);
+    if (this.#stopped) return;
+    this.#pollTimer = setInterval(() => void this.poll(), this.config.pollIntervalSeconds * 1000);
+    this.#pollTimer.unref();
+  }
+
+  /**
+   * Watch config.json for hand edits so the file stays the source of truth:
+   * an external change is picked up without a restart and broadcast like any
+   * other config change. The directory is watched rather than the file
+   * because saveConfig renames a temp file into place, which a file-level
+   * watch would not survive.
+   */
+  #watchConfigFile(): void {
+    const file = basename(this.#configPath);
+    try {
+      this.#configWatcher = watch(dirname(this.#configPath), (_event, name) => {
+        if (name !== null && basename(name.toString()) !== file) return;
+        if (this.#configReloadTimer) clearTimeout(this.#configReloadTimer);
+        // Editors save in bursts (truncate, write, chmod); let it settle.
+        this.#configReloadTimer = setTimeout(
+          () => void this.#reloadConfigFile(),
+          CONFIG_RELOAD_DEBOUNCE_MS,
+        );
+        this.#configReloadTimer.unref();
+      });
+      this.#configWatcher.unref();
+    } catch {
+      // Watching is a convenience and not every filesystem supports it; the
+      // dashboard's own writes still work, they just won't see hand edits.
+    }
   }
 
   /** Live state of the Cloudflare R2 evidence connector, probed via wrangler on every call. */
@@ -856,31 +970,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       status: "login-started",
       detail: "Finish logging in to Cloudflare in the opened browser tab; this panel updates by itself.",
     };
-  }
-
-  /** Apply and persist the R2 evidence bucket settings from the dashboard. */
-  async updateR2Settings(request: R2SettingsUpdateRequest): Promise<R2SettingsUpdateResponse> {
-    // Validate every field before touching the live config: a rejected save
-    // must not leave a half-applied state behind for the next run to read.
-    const bucket = typeof request.bucket === "string" ? request.bucket.trim() : undefined;
-    let publicBaseUrl: string | undefined;
-    if (typeof request.publicBaseUrl === "string") {
-      const trimmed = request.publicBaseUrl.trim().replace(/\/+$/, "");
-      if (trimmed) {
-        try {
-          const url = new URL(trimmed);
-          if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("not http(s)");
-        } catch {
-          throw new OrchestratorError("invalid", "publicBaseUrl must be an http(s) URL");
-        }
-      }
-      publicBaseUrl = trimmed;
-    }
-    if (bucket !== undefined) this.config.r2.bucket = bucket;
-    if (publicBaseUrl !== undefined) this.config.r2.publicBaseUrl = publicBaseUrl;
-    await this.#persistConfig();
-    this.emit("config", redactConfig(this.config));
-    return { config: redactConfig(this.config), r2: await this.r2Status() };
   }
 
   /** Cancel a queued, waiting, or active run. Terminal runs are returned unchanged. */
@@ -1215,6 +1304,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     this.#stopped = true;
     if (this.#pollTimer) clearInterval(this.#pollTimer);
     if (this.#prTimer) clearInterval(this.#prTimer);
+    if (this.#configReloadTimer) clearTimeout(this.#configReloadTimer);
+    this.#configWatcher?.close();
     // Waiting runs stay "waiting" on disk; the next boot reschedules them.
     for (const timer of this.#resumeTimers.values()) clearTimeout(timer);
     this.#resumeTimers.clear();
@@ -1290,10 +1381,79 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    * newer one (a disconnect) and revive credentials the user removed.
    */
   #persistConfig(): Promise<void> {
-    const write = this.#configWrite.then(() => saveConfig(this.config, this.#configPath));
+    const write = this.#configWrite.then(async () => {
+      const saved = await saveConfig(this.config, this.#configPath);
+      // Remember what landed on disk so the config watcher can tell brevi's
+      // own writes apart from a hand edit without any extra bookkeeping.
+      this.#lastWritten = serializeConfig(saved);
+      return saved;
+    });
     // Keep the chain alive after a failed write; only the caller sees the error.
     this.#configWrite = write.catch(() => undefined);
     return write.then(() => undefined);
+  }
+
+  /** The config file changed under us; adopt it, or say why it was ignored. */
+  async #reloadConfigFile(): Promise<void> {
+    await this.#transact(async () => {
+      if (this.#stopped) return;
+      let raw: string;
+      try {
+        raw = await readFile(this.#configPath, "utf8");
+      } catch {
+        return; // Mid-rename or deleted; the next event settles it.
+      }
+      // stop() can land while the read is in flight; applying after shutdown
+      // would emit to closed clients and re-arm the poll timer.
+      if (this.#stopped) return;
+      // Our own writes come back through the watcher too. Comparing the
+      // serialized form skips them with no bookkeeping to fall out of sync.
+      if (raw === this.#lastWritten) return;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return; // A half-written file from a non-atomic editor; wait for the rest.
+      }
+      const result = configSchema.safeParse(parsed);
+      if (!result.success) {
+        console.error(
+          `[brevi] ${this.#configPath} was edited into an invalid state (${result.error.issues[0]?.message ?? "invalid"}); keeping the settings already loaded.`,
+        );
+        return;
+      }
+      const before = structuredClone(this.config);
+      const next = result.data;
+      if (serializeConfig(before) === serializeConfig(next)) return;
+      try {
+        // The same cross-field rules the API enforces: a hand edit must not
+        // reach a state the dashboard would have refused.
+        this.#checkSettingsSemantics(next);
+      } catch (error) {
+        console.error(
+          `[brevi] ${this.#configPath} was edited into an invalid state (${error instanceof Error ? error.message : "invalid"}); keeping the settings already loaded.`,
+        );
+        return;
+      }
+      console.log(`[brevi] Reloaded ${this.#configPath} after an external edit.`);
+      // Secrets live in this same file, so a hand edit legitimately carries
+      // them; they are applied like any other field.
+      assignInPlace(this.config, next);
+      if (
+        before.linear.apiKey !== next.linear.apiKey ||
+        before.linear.refreshToken !== next.linear.refreshToken
+      ) {
+        this.#resetLinearConnection();
+        // A key that was edited away leaves tickets nobody can act on; the
+        // next poll returns early, so they would sit there until a restart.
+        if (!this.config.linear.apiKey) {
+          this.#tickets = [];
+          this.emit("tickets", this.#tickets);
+        }
+        this.emit("linear-status", this.linearStatus);
+      }
+      this.#reactToSettings(before, next);
+    });
   }
 
   /** Pause polling on a dead Linear credential and tell the dashboard. Idempotent: repeat calls while already in the state say nothing. */

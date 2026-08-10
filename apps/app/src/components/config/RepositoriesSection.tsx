@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import type { BreviConfig, GithubRepo, LinearProject, LinearStatus, RepoConfig } from "@brevi/shared";
+import type { BreviConfig, GithubRepo, LinearProject, LinearStatus, Run } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -8,21 +13,39 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { joinConfigPath } from "@brevi/shared/settings";
+import { useSettingsDraft } from "../../lib/settings";
 import { api } from "../../lib/api";
 import { linearConnected as isLinearConnected } from "../../lib/linear";
 import { Plate, RepoChip } from "../Bits";
 import { ChevronRight, Close, Plus, Warn } from "../Icons";
+import {
+  FieldRow,
+  OptionalTextField,
+  RadioField,
+  SectionIntro,
+  SelectField,
+  SettingsCard,
+  TextField,
+} from "./Fields";
+
+/** Every non-terminal run status: these still have somewhere to go, so removing their repo hurts. */
+const UNFINISHED = new Set(["queued", "preparing", "running", "finalizing", "waiting"]);
 
 /**
  * Repo mappings, sourced from the connected GitHub account. Tickets resolve to
  * a repo via a "repo:<key>" label, a project name, or the default mapping.
+ * Each mapping is its own card, saved on its own; adding and removing a repo
+ * writes through the same settings endpoint.
  */
 export function RepositoriesSection({
   config,
+  runs,
   linearStatus,
   onConfig,
 }: {
   config: BreviConfig;
+  runs: Run[];
   linearStatus: LinearStatus | null;
   onConfig: (config: BreviConfig) => void;
 }) {
@@ -30,6 +53,7 @@ export function RepositoriesSection({
   const linearConnected = isLinearConnected(config, linearStatus);
   const mapped = Object.entries(config.repos);
 
+  const fallback = useSettingsDraft(config, onConfig);
   const [available, setAvailable] = useState<GithubRepo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -37,6 +61,7 @@ export function RepositoriesSection({
   const [pending, setPending] = useState(false);
   const [mutateError, setMutateError] = useState<string | null>(null);
   const [linearProjects, setLinearProjects] = useState<LinearProject[] | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
   useEffect(() => {
     if (!linearConnected) {
@@ -88,11 +113,12 @@ export function RepositoriesSection({
       .slice(0, 8);
   }, [available, mappedRemotes, search]);
 
-  const mutate = async (repos: Record<string, RepoConfig>, defaultRepo?: string) => {
+  /** Add and remove write straight through, without a card to save. */
+  const mutate = async (patch: Record<string, unknown>) => {
     setPending(true);
     setMutateError(null);
     try {
-      const response = await api.updateRepos({ repos, defaultRepo });
+      const response = await api.updateSettings(patch);
       onConfig(response.config);
     } catch (err) {
       setMutateError(err instanceof Error ? err.message : "The orchestrator did not respond.");
@@ -103,88 +129,101 @@ export function RepositoriesSection({
 
   const add = (repo: GithubRepo) => {
     const name = repo.fullName.split("/")[1] ?? repo.fullName;
-    const key = config.repos[name] ? repo.fullName.replace("/", "-") : name;
-    void mutate(
-      {
-        ...config.repos,
+    // Both the bare name and the owner-qualified fallback can already be
+    // taken; suffixing until the key is free beats silently replacing an
+    // existing mapping (and the run history that routes through it).
+    let key = name;
+    if (config.repos[key]) key = repo.fullName.replace("/", "-");
+    for (let n = 2; config.repos[key]; n += 1) key = `${repo.fullName.replace("/", "-")}-${n}`;
+    void mutate({
+      repos: {
         [key]: { remote: repo.fullName, defaultBranch: repo.defaultBranch, projects: [], demo: "auto" },
       },
-      config.defaultRepo ?? key,
-    );
+      // The first repo added becomes the fallback, so tickets that match
+      // nothing still have somewhere to run.
+      ...(config.defaultRepo ? {} : { defaultRepo: key }),
+    });
     setSearch("");
     setAdding(false);
   };
 
-  const setProjects = (key: string, projects: string[]) => {
-    const repo = config.repos[key];
-    if (!repo) return;
-    void mutate({ ...config.repos, [key]: { ...repo, projects } }, config.defaultRepo);
+  const remove = (key: string) => {
+    setConfirmRemove(null);
+    void mutate({
+      repos: { [key]: null },
+      // defaultRepo has to stop pointing at a mapping that no longer exists,
+      // or the whole config fails validation.
+      ...(config.defaultRepo === key ? { defaultRepo: null } : {}),
+    });
   };
 
-  const remove = (key: string) => {
-    const next = { ...config.repos };
-    delete next[key];
-    const defaultRepo = config.defaultRepo === key ? undefined : config.defaultRepo;
-    void mutate(next, defaultRepo);
-  };
+  const repoKeys = mapped.map(([key]) => key);
+  // An unsaved default pointing at a repo that has since been removed can
+  // never be saved (the orchestrator rejects a dangling defaultRepo), so drop
+  // the edit rather than leave a Save button that always fails.
+  const pendingDefault = fallback.value("defaultRepo");
+  if (typeof pendingDefault === "string" && !repoKeys.includes(pendingDefault)) {
+    fallback.revert("defaultRepo");
+  }
+  // Removing a mapping strands whatever is still in flight against it, so the
+  // confirmation says how much that is.
+  const unfinished = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const run of runs) {
+      const key = run.ticket.repo;
+      if (!key || !UNFINISHED.has(run.status)) continue;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [runs]);
 
   return (
-    <section className="mt-6">
-      <div className="flex items-center gap-2">
-        <Plate className="text-haze-400">Repositories</Plate>
-        <span className="font-mono text-[11px] leading-none text-haze-700">{mapped.length}</span>
-      </div>
-      <p className="mt-1.5 text-[12px] leading-relaxed text-haze-400">
+    <>
+      <SectionIntro title="Repositories">
         Tickets run against these checkouts. A <code className="font-mono text-[11px]">repo:&lt;key&gt;</code>{" "}
         label, a mapped Linear project, or a matching project name picks one; everything else uses
         the default.
-      </p>
+      </SectionIntro>
 
-      {!githubConnected ? (
-        <p className="mt-3 text-[12.5px] leading-relaxed text-haze-700">
-          Connect GitHub on the Connectors page to pick repositories from your account.
-        </p>
-      ) : (
-        <>
-          {mapped.length > 0 && (
-            <ul className="mt-3 flex flex-col gap-2">
-              {mapped.map(([key, repo]) => (
-                <li key={key} className="strip flex flex-col gap-2 px-2.5 py-2">
-                  <div className="flex items-center gap-2">
-                    <RepoChip repo={key} />
-                    <span className="min-w-0 truncate font-mono text-[11px] text-haze-400">
-                      {repo.remote}
-                    </span>
-                    <span className="font-mono text-[10px] text-haze-700">
-                      {repo.defaultBranch}
-                    </span>
-                    <span className="ml-auto flex items-center gap-1.5">
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => remove(key)}
-                        disabled={pending}
-                        aria-label={`Remove ${key}`}
-                        className="hover:text-rust-400"
-                      >
-                        <Close className="size-3" />
-                      </Button>
-                    </span>
-                  </div>
-                  <ProjectsField
-                    // A running orchestrator from before this field may serve
-                    // configs without it; never let that take the app down.
-                    projects={repo.projects ?? []}
-                    options={linearProjects}
-                    pending={pending}
-                    onCommit={(projects) => setProjects(key, projects)}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
+      <div className="mt-3 flex flex-col gap-2.5">
+        {repoKeys.length > 0 && (
+          <SettingsCard title="Routing" draft={fallback}>
+            <SelectField
+              label="Default repository"
+              path="defaultRepo"
+              draft={fallback}
+              options={repoKeys.map((key) => ({ value: key, label: key }))}
+              clearable
+              help="Repo key to use when a ticket doesn't match any mapping."
+            />
+          </SettingsCard>
+        )}
 
-          <div className="mt-3">
+        {mapped.map(([key]) => (
+          <RepoCard
+            key={key}
+            repoKey={key}
+            config={config}
+            onConfig={onConfig}
+            linearProjects={linearProjects}
+            unfinished={unfinished.get(key) ?? 0}
+            removing={pending && confirmRemove === key}
+            confirming={confirmRemove === key}
+            onAskRemove={() => setConfirmRemove(key)}
+            onCancelRemove={() => setConfirmRemove(null)}
+            onRemove={() => remove(key)}
+          />
+        ))}
+
+        {/* Only the picker needs GitHub: existing mappings and routing stay
+            editable while it is disconnected, so a token that lapses does not
+            hide the repos already configured. */}
+        {!githubConnected ? (
+          <p className="text-[12.5px] leading-relaxed text-haze-700">
+            Connect GitHub on the Connectors page to add repositories from your account.
+          </p>
+        ) : (
+          <div>
             {!adding ? (
               <Button
                 variant="outline"
@@ -197,73 +236,225 @@ export function RepositoriesSection({
               </Button>
             ) : (
               <>
-            <div className="flex items-center gap-1.5">
-              <Input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={available ? "Search your account" : "Loading repositories…"}
-                disabled={!available}
-                spellCheck={false}
-                autoFocus
-                className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
-              />
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={() => {
-                  setAdding(false);
-                  setSearch("");
-                }}
-                aria-label="Stop adding"
-              >
-                <Close className="size-3" />
-              </Button>
-            </div>
-            {loadError && (
-              <p className="mt-2 flex items-start gap-1.5 text-[12px] text-rust-400">
-                <Warn className="mt-px size-3 shrink-0" />
-                {loadError}
-              </p>
-            )}
-            {available && candidates.length > 0 && (
-              <ul className="mt-2 overflow-hidden rounded-[5px] border border-ink-600">
-                {candidates.map((repo) => (
-                  <li key={repo.fullName} className="border-b border-ink-700 last:border-b-0">
-                    <button
-                      type="button"
-                      onClick={() => add(repo)}
-                      disabled={pending}
-                      className="flex w-full items-center gap-2 bg-ink-900 px-2.5 py-2 text-left hover:bg-ink-750 pointer-coarse:min-h-11"
-                    >
-                      <span className="min-w-0 truncate font-mono text-[12px] text-haze-100">
-                        {repo.fullName}
-                      </span>
-                      {repo.private && <Plate className="text-haze-700">private</Plate>}
-                      <span className="ml-auto font-mono text-[10px] text-haze-700">
-                        {repo.defaultBranch}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {available && search.trim() !== "" && candidates.length === 0 && (
-              <p className="mt-2 text-[12px] text-haze-700">No unmapped repos match.</p>
-            )}
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder={available ? "Search your account" : "Loading repositories…"}
+                    disabled={!available}
+                    spellCheck={false}
+                    autoFocus
+                    className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => {
+                      setAdding(false);
+                      setSearch("");
+                    }}
+                    aria-label="Stop adding"
+                  >
+                    <Close className="size-3" />
+                  </Button>
+                </div>
+                {loadError && (
+                  <p className="mt-2 flex items-start gap-1.5 text-[12px] text-rust-400">
+                    <Warn className="mt-px size-3 shrink-0" />
+                    {loadError}
+                  </p>
+                )}
+                {available && candidates.length > 0 && (
+                  <ul className="mt-2 overflow-hidden rounded-[5px] border border-ink-600">
+                    {candidates.map((repo) => (
+                      <li key={repo.fullName} className="border-b border-ink-700 last:border-b-0">
+                        <button
+                          type="button"
+                          onClick={() => add(repo)}
+                          disabled={pending}
+                          className="flex w-full items-center gap-2 bg-ink-900 px-2.5 py-2 text-left hover:bg-ink-750 pointer-coarse:min-h-11"
+                        >
+                          <span className="min-w-0 truncate font-mono text-[12px] text-haze-100">
+                            {repo.fullName}
+                          </span>
+                          {repo.private && <Plate className="text-haze-700">private</Plate>}
+                          <span className="ml-auto font-mono text-[10px] text-haze-700">
+                            {repo.defaultBranch}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {available && search.trim() !== "" && candidates.length === 0 && (
+                  <p className="mt-2 text-[12px] text-haze-700">No unmapped repos match.</p>
+                )}
               </>
             )}
           </div>
+        )}
 
-          {mutateError && (
-            <p className="mt-2 flex items-start gap-1.5 text-[12px] text-rust-400">
-              <Warn className="mt-px size-3 shrink-0" />
-              {mutateError}
-            </p>
-          )}
-        </>
-      )}
-    </section>
+        {mutateError && (
+          <p className="flex items-start gap-1.5 text-[12px] text-rust-400">
+            <Warn className="mt-px size-3 shrink-0" />
+            {mutateError}
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+
+/** One repo mapping: identity on the header row, the rest behind Details. */
+function RepoCard({
+  repoKey,
+  config,
+  onConfig,
+  linearProjects,
+  unfinished,
+  removing,
+  confirming,
+  onAskRemove,
+  onCancelRemove,
+  onRemove,
+}: {
+  repoKey: string;
+  config: BreviConfig;
+  onConfig: (config: BreviConfig) => void;
+  linearProjects: LinearProject[] | null;
+  /** Queued, waiting, or running runs still pointing at this repo. */
+  unfinished: number;
+  removing: boolean;
+  confirming: boolean;
+  onAskRemove: () => void;
+  onCancelRemove: () => void;
+  onRemove: () => void;
+}) {
+  const draft = useSettingsDraft(config, onConfig);
+  const repo = config.repos[repoKey];
+  if (!repo) return null;
+  // Built segment by segment, not interpolated: a repo key is a GitHub
+  // repository name and may contain dots (next.js, socket.io), which a raw
+  // dotted path would split into extra levels.
+  const at = (field: string) => joinConfigPath(["repos", repoKey, field]);
+
+  return (
+    <SettingsCard
+      title={repoKey}
+      draft={draft}
+      description={
+        <span className="flex flex-wrap items-center gap-2">
+          <RepoChip repo={repoKey} />
+          <span className="font-mono text-[11px] text-haze-400">{repo.remote}</span>
+          <span className="ml-auto flex items-center gap-1.5">
+            {confirming ? (
+              <>
+                <span className="text-[11.5px] text-haze-400">
+                  {unfinished > 0
+                    ? `Remove this mapping? ${unfinished} unfinished ${unfinished === 1 ? "run" : "runs"} still point at it.`
+                    : "Remove this mapping?"}
+                </span>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="plate"
+                  onClick={onRemove}
+                  disabled={removing}
+                >
+                  {removing ? "Removing" : "Remove"}
+                </Button>
+                <Button type="button" variant="ghost" size="plate" onClick={onCancelRemove}>
+                  Keep
+                </Button>
+              </>
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                onClick={onAskRemove}
+                aria-label={`Remove ${repoKey}`}
+                className="hover:text-rust-400"
+              >
+                <Close className="size-3" />
+              </Button>
+            )}
+          </span>
+        </span>
+      }
+    >
+      <ProjectsRow
+        repoKey={repoKey}
+        projects={draft.value(at("projects"))}
+        options={linearProjects}
+        onChange={(projects) => draft.set(at("projects"), projects)}
+      />
+      <Collapsible>
+        <CollapsibleTrigger className="group/details flex cursor-pointer items-center gap-1.5 border-t border-ink-700 py-2.5 font-plate text-[10px] font-medium tracking-[0.12em] text-haze-700 uppercase hover:text-haze-300">
+          <ChevronRight className="size-3 transition-transform group-data-[panel-open]/details:rotate-90" />
+          Details
+        </CollapsibleTrigger>
+        <CollapsibleContent className="flex flex-col pb-1">
+          <TextField
+            label="Remote"
+            path={at("remote")}
+            draft={draft}
+            placeholder="owner/name"
+            help="Git remote in owner/name form."
+          />
+          <TextField
+            label="Default branch"
+            path={at("defaultBranch")}
+            draft={draft}
+            placeholder="main"
+            help="Branch every run is cut from and every PR targets."
+          />
+          <OptionalTextField
+            label="Local checkout path"
+            path={at("path")}
+            draft={draft}
+            wide
+            placeholder="/Users/you/code/web"
+            help="Optional local checkout to clone from instead of the network."
+          />
+          <OptionalTextField
+            label="Dev command"
+            path={at("devCommand")}
+            draft={draft}
+            wide
+            placeholder="bun run dev"
+            help="Command that produces a runnable dev server, used for demo capture."
+          />
+          <OptionalTextField
+            label="Dev URL"
+            path={at("devUrl")}
+            draft={draft}
+            placeholder="http://localhost:3000"
+            help="URL the dev server listens on once up, used for demo capture."
+          />
+          <RadioField
+            label="Demo evidence"
+            path={at("demo")}
+            draft={draft}
+            options={[
+              {
+                value: "always",
+                label: "Always",
+                detail: "The full dev-server and screenshot flow on every run.",
+              },
+              {
+                value: "auto",
+                label: "Auto",
+                detail:
+                  "The agent may downgrade to cheap evidence (test output, a CLI transcript) for docs-only or test-only changes.",
+              },
+              { value: "never", label: "Never", detail: "Skip the demo requirement entirely." },
+            ]}
+          />
+        </CollapsibleContent>
+      </Collapsible>
+    </SettingsCard>
   );
 }
 
@@ -272,40 +463,43 @@ export function RepositoriesSection({
  * from the orchestrator's project list; names already configured but no longer
  * returned by Linear stay selectable so they can be unmapped.
  */
-function ProjectsField({
-  projects,
+function ProjectsRow({
+  repoKey,
+  projects: raw,
   options,
-  pending,
-  onCommit,
+  onChange,
 }: {
-  projects: string[];
+  repoKey: string;
+  projects: unknown;
   options: LinearProject[] | null;
-  pending: boolean;
-  onCommit: (projects: string[]) => void;
+  onChange: (projects: string[]) => void;
 }) {
+  // A running orchestrator from before this field may serve configs without
+  // it; never let that take the app down.
+  const projects = Array.isArray(raw) ? (raw as string[]) : [];
   const names = useMemo(() => {
     const set = new Set<string>(options?.map((project) => project.name) ?? []);
     for (const name of projects) set.add(name);
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [options, projects]);
-
-  const toggle = (name: string, checked: boolean) => {
-    onCommit(checked ? [...projects, name] : projects.filter((p) => p !== name));
-  };
-
   const empty = names.length === 0;
 
   return (
-    <div className="flex min-w-0 items-center gap-2">
-      <Plate className="shrink-0 text-haze-700">Projects</Plate>
+    <FieldRow
+      label="Linear projects"
+      help="Tickets in these projects run against this repo, matched case-insensitively."
+      wide
+    >
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
             <Button
+              type="button"
               variant="outline"
               size="plate"
-              disabled={pending || empty}
-              className="min-w-0 flex-1 justify-start font-mono text-[11px] tracking-normal normal-case"
+              disabled={empty}
+              className="w-full justify-start font-mono text-[11px] tracking-normal normal-case"
+              aria-label={`Linear projects mapped to ${repoKey}`}
             />
           }
         >
@@ -325,7 +519,11 @@ function ProjectsField({
             <DropdownMenuCheckboxItem
               key={name}
               checked={projects.includes(name)}
-              onCheckedChange={(checked) => toggle(name, checked === true)}
+              onCheckedChange={(checked) =>
+                onChange(
+                  checked === true ? [...projects, name] : projects.filter((p) => p !== name),
+                )
+              }
               closeOnClick={false}
             >
               {name}
@@ -333,6 +531,6 @@ function ProjectsField({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
-    </div>
+    </FieldRow>
   );
 }
