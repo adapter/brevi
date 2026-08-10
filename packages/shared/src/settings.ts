@@ -57,9 +57,16 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Assigning these through a bracket expression would mutate the prototype
-// rather than add a key, so they are dropped before any merge sees them.
-const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+/**
+ * Keys that must never be written through a bracket expression: the assignment
+ * would mutate the target's prototype instead of adding a property. Config
+ * data arrives from a hand-editable file and from HTTP patches, so every write
+ * into a plain-object tree filters them, including the ones that only reach a
+ * tree the schema has already parsed.
+ */
+export function isUnsafeConfigKey(key: string): boolean {
+  return key === "__proto__" || key === "constructor" || key === "prototype";
+}
 
 /**
  * Field paths are dotted, but a path segment can itself contain a dot: repo
@@ -100,7 +107,7 @@ export function mergeConfigPatch(
 ): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(patch)) {
-    if (FORBIDDEN_KEYS.has(key)) continue;
+    if (isUnsafeConfigKey(key)) continue;
     if (value === null) {
       delete merged[key];
       continue;
@@ -121,7 +128,7 @@ export function mergeConfigPatch(
 export function configPatchPaths(patch: ConfigPatch, prefix: string[] = []): string[] {
   const paths: string[] = [];
   for (const [key, value] of Object.entries(patch)) {
-    if (FORBIDDEN_KEYS.has(key)) continue;
+    if (isUnsafeConfigKey(key)) continue;
     const segments = [...prefix, key];
     if (isPlainObject(value) && Object.keys(value).length > 0) {
       paths.push(...configPatchPaths(value, segments));
@@ -150,7 +157,7 @@ export function expandConfigPatch(entries: Record<string, unknown>): ConfigPatch
   const patch: ConfigPatch = {};
   for (const [path, value] of Object.entries(entries)) {
     const segments = splitConfigPath(path);
-    if (segments.some((segment) => FORBIDDEN_KEYS.has(segment))) continue;
+    if (segments.some(isUnsafeConfigKey)) continue;
     const leaf = segments.pop();
     if (leaf === undefined) continue;
     let cursor = patch;

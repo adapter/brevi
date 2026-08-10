@@ -7,6 +7,7 @@ import {
   CONFIG_PATH,
   changedSecretPaths,
   isPlainObject,
+  isUnsafeConfigKey,
   SETTINGS_SECRET_PATHS,
   MASKED_SECRET,
   mergeConfigPatch,
@@ -130,7 +131,7 @@ const CONFIG_RELOAD_DEBOUNCE_MS = 250;
 function writeConfigPath(target: object, path: string, value: unknown): void {
   const segments = path.split(".");
   const leaf = segments.pop();
-  if (leaf === undefined) return;
+  if (leaf === undefined || segments.some(isUnsafeConfigKey) || isUnsafeConfigKey(leaf)) return;
   let cursor = target as Record<string, unknown>;
   for (const segment of segments) {
     const next = cursor[segment];
@@ -147,6 +148,11 @@ function assignInPlace<T extends object>(target: T, source: T): void {
     if (!Object.hasOwn(from, key)) delete to[key];
   }
   for (const [key, value] of Object.entries(from)) {
+    // `to[key] = value` on "__proto__" reassigns the prototype instead of
+    // adding a property. Every source reaching this today is schema output,
+    // which drops such keys, but the guard belongs on the write itself rather
+    // than on an assumption about every present and future caller.
+    if (isUnsafeConfigKey(key)) continue;
     const current = to[key];
     if (isPlainObject(value) && isPlainObject(current)) assignInPlace(current, value);
     else to[key] = value;
@@ -627,7 +633,11 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         if (await hostedApiReachable(this.config.connect.apiBase)) {
           const { session, url } = startLinearOauth({
             apiBase: this.config.connect.apiBase,
-            port: this.config.server.port,
+            // From the URL the caller bound, not config.server.port: the port
+            // is editable from the dashboard and only takes effect on restart,
+            // so the config can name a port nothing is listening on. The
+            // hosted backend redirects the callback to whatever it is told.
+            port: Number(new URL(serverUrl).port) || this.config.server.port,
           });
           this.#linearOauth = session;
           return { status: "redirect", provider, url };
@@ -798,7 +808,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       }
       this.#checkSettingsSemantics(next);
 
-      const saved = await this.#writeAndApply(next);
+      const saved = await this.#writeAndApply(next, patch);
       this.#reactToSettings(before, saved);
       return {
         config: redactConfig(this.config),
@@ -826,7 +836,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    * means the live config never holds values that didn't reach disk, and
    * leaves no rollback that could revert a change made in the meantime.
    */
-  async #writeAndApply(candidate: BreviConfig): Promise<BreviConfig> {
+  async #writeAndApply(candidate: BreviConfig, patch: ConfigPatch): Promise<BreviConfig> {
     const write = this.#configWrite.then(async () => {
       // Credentials are owned by the connect flows, which mutate the live
       // config directly and can land while this transaction is in flight.
@@ -836,12 +846,25 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       for (const path of SETTINGS_SECRET_PATHS) {
         writeConfigPath(merged, path, readConfigPath(this.config, path));
       }
-      const saved = await saveConfig(merged, this.#configPath);
-      // Remember what landed on disk so the config watcher can tell brevi's
-      // own writes apart from a hand edit without any extra bookkeeping.
-      this.#lastWritten = serializeConfig(saved);
-      assignInPlace(this.config, saved);
-      return saved;
+      const written = await saveConfig(merged, this.#configPath);
+      // The write awaited above, and a connect flow (a token refresh, an R2
+      // provision) may have moved the live config meanwhile. Installing the
+      // candidate wholesale would revert it, and that flow's own queued
+      // persist would then write the reverted state out. Re-applying just this
+      // transaction's patch onto the config as it now stands keeps both.
+      const applied = configSchema.parse(
+        mergeConfigPatch(structuredClone(this.config) as unknown as Record<string, unknown>, patch),
+      );
+      if (serializeConfig(applied) !== serializeConfig(written)) {
+        // Reconcile the file in this same step rather than relying on the
+        // other flow's persist to arrive: until the two agree, the config
+        // watcher would read the file back as a hand edit and undo the
+        // change that landed here.
+        await saveConfig(applied, this.#configPath);
+      }
+      this.#lastWritten = serializeConfig(applied);
+      assignInPlace(this.config, applied);
+      return applied;
     });
     // Keep the chain alive after a failed write; only the caller sees the error.
     this.#configWrite = write.catch(() => undefined);
