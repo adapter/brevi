@@ -384,6 +384,19 @@ describe("collectRootfsProblems version handshake", () => {
   });
 });
 
+describe("cachedRootfsPath version validation", () => {
+  it("keeps every cache path inside the cache directory", () => {
+    const cacheDir = "/tmp/brevi-cache";
+    expect(cachedRootfsPath("1.2.3", cacheDir)).toBe(join(cacheDir, "1.2.3", "rootfs.ext4"));
+
+    // `..` matches the allowed character class on its own, so it needs its own rejection;
+    // without it a version segment could resolve a level above the cache directory.
+    for (const bad of ["..", ".", "../evil", "a/b", "/etc/passwd", ""]) {
+      expect(() => cachedRootfsPath(bad, cacheDir)).toThrow(/invalid @brevi\/cli version/);
+    }
+  });
+});
+
 describe("locateRootfs source preference", () => {
   it("prefers a valid image at the default path over the cache", async () => {
     const cacheDir = await tempDir("brevi-rootfs-pref-cache-");

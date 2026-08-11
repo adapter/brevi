@@ -57,8 +57,24 @@ export function rootfsArch(): "x86_64" | "aarch64" | undefined {
   return undefined;
 }
 
+/**
+ * A version string is used as a single path segment under the cache directory and as a
+ * path segment in the download URL, so it must not be able to traverse out of either.
+ * The version brevi passes is its own package.json version, never anything a ticket, a
+ * repository, or a remote manifest can influence, so this is defense in depth rather
+ * than a boundary; it lives here, at the one chokepoint every cache path goes through,
+ * so no caller can skip it. Note `..` matches the character class on its own, hence the
+ * separate relative-segment check.
+ */
+function assertCacheableVersion(cliVersion: string): void {
+  if (!/^[\w.+-]+$/.test(cliVersion) || cliVersion === "." || cliVersion === "..") {
+    throw new Error(`invalid @brevi/cli version for a rootfs cache path: ${JSON.stringify(cliVersion)}`);
+  }
+}
+
 /** Local cache path for the image belonging to a given @brevi/cli release version. */
 export function cachedRootfsPath(cliVersion: string, cacheDir: string = ROOTFS_CACHE_DIR): string {
+  assertCacheableVersion(cliVersion);
   return join(cacheDir, cliVersion, "rootfs.ext4");
 }
 
@@ -588,9 +604,9 @@ export async function installRootfs(options: {
   const cacheDir = options.cacheDir ?? ROOTFS_CACHE_DIR;
   const baseUrl = options.baseUrl ?? DEFAULT_ROOTFS_BASE_URL;
 
-  if (!/^[\w.+-]+$/.test(cliVersion)) {
-    throw new Error(`invalid @brevi/cli version for a rootfs install: ${JSON.stringify(cliVersion)}`);
-  }
+  // Also enforced inside cachedRootfsPath; done here too so the lock file and the download
+  // URL, which are built before the first cache-path call, are covered by the same rule.
+  assertCacheableVersion(cliVersion);
   const arch = rootfsArch();
   if (arch === undefined) {
     throw new Error(`no prebuilt rootfs image for this host's architecture (${process.arch})`);
