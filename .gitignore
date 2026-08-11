@@ -34,6 +34,7 @@ apps/docs/src/content/docs/reference/changelog.md
 out/
 build
 dist
+release
 
 
 # Debug

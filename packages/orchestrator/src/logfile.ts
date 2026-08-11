@@ -1,10 +1,8 @@
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
-import { join } from "node:path";
 import { formatWithOptions } from "node:util";
-import { BREVI_HOME } from "@brevi/shared";
+import { LOGS_DIR, ORCHESTRATOR_LOG_PATH } from "@brevi/shared";
 
-/** Persistent orchestrator log, tailed by `brevi doctor` as diagnosis evidence. */
-export const ORCHESTRATOR_LOG_PATH = join(BREVI_HOME, "logs", "orchestrator.log");
+export { ORCHESTRATOR_LOG_PATH };
 
 const MAX_LOG_BYTES = 1024 * 1024;
 // eslint-disable-next-line no-control-regex -- stripping ANSI color codes is the point
@@ -36,7 +34,7 @@ export function attachOrchestratorLogFile(): void {
   if (attached) return;
   attached = true;
   try {
-    mkdirSync(join(BREVI_HOME, "logs"), { recursive: true });
+    mkdirSync(LOGS_DIR, { recursive: true });
     if (existsSync(ORCHESTRATOR_LOG_PATH) && statSync(ORCHESTRATOR_LOG_PATH).size > MAX_LOG_BYTES) {
       renameSync(ORCHESTRATOR_LOG_PATH, `${ORCHESTRATOR_LOG_PATH}.1`);
     }

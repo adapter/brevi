@@ -11,6 +11,7 @@ import {
   validateLinearApiKey,
 } from "@brevi/orchestrator";
 import { PROCESS_PLAYWRIGHT_CACHE_DIR } from "@brevi/worker";
+import { inspectPidFile, pidListeningOnPort, type PidFileState } from "@brevi/orchestrator/pid";
 import {
   collectFirecrackerPreflightProblems,
   fileExists,
@@ -30,7 +31,6 @@ import { confirm, isCancel } from "@clack/prompts";
 import type { Command } from "commander";
 import pc from "picocolors";
 import { buildEvidenceBundle } from "../lib/evidence.js";
-import { inspectPidFile, pidListeningOnPort, type PidFileState } from "../lib/pid.js";
 import { errorMessage, formatZodIssues, isZodLikeError } from "../lib/util.js";
 import { readPackageVersion } from "../lib/version.js";
 
@@ -394,6 +394,7 @@ async function checkServerSection(config: BreviConfig): Promise<Section> {
  */
 async function reconcilePidFile(pidState: PidFileState, port: number): Promise<CheckResult> {
   if (pidState.state === "alive") {
+    const ownerSuffix = pidState.owner === "desktop" ? " (supervised by the desktop app)" : "";
     const listeningPid = await pidListeningOnPort(port);
     if (listeningPid !== null && listeningPid !== pidState.pid) {
       return {
@@ -403,7 +404,11 @@ async function reconcilePidFile(pidState: PidFileState, port: number): Promise<C
         hint: "Two brevi instances, or a copy started by hand? `brevi stop` would signal the recorded pid, not the server that answered.",
       };
     }
-    return { name: "pid file", status: "pass", detail: `pid ${pidState.pid} matches the running server` };
+    return {
+      name: "pid file",
+      status: "pass",
+      detail: `pid ${pidState.pid} matches the running server${ownerSuffix}`,
+    };
   }
   const description =
     pidState.state === "absent"

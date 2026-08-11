@@ -1,0 +1,36 @@
+{
+  "name": "@brevi/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Mission Control as a desktop app: an Electron shell that owns and supervises the brevi orchestrator.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adapter/brevi.git",
+    "directory": "apps/desktop"
+  },
+  "homepage": "https://brevi.dev",
+  "bugs": "https://github.com/adapter/brevi/issues",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "bun build src/main/index.ts --outfile dist/main.js --target=node --format=esm --external electron && cp src/renderer/status.html dist/status.html",
+    "dev": "tsc --noEmit --watch",
+    "start": "bun run build && electron .",
+    "package": "bun run build && bun run scripts/stage-cli.ts && electron-builder --publish never",
+    "lint": "oxlint --max-warnings 0",
+    "check-types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@brevi/orchestrator": "*",
+    "@brevi/shared": "*",
+    "@repo/typescript-config": "*",
+    "@types/node": "^26.1.2",
+    "@types/ws": "^8.18.1",
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
+    "oxlint": "^1.77.0",
+    "typescript": "^7.0.2",
+    "ws": "^8.21.2"
+  }
+}

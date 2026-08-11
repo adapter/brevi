@@ -1,7 +1,13 @@
 import { loadConfig } from "@brevi/orchestrator";
+import {
+  desktopSupervisorPid,
+  pidListeningOnPort,
+  readServerRecord,
+  removePidFile,
+  type ServerOwner,
+} from "@brevi/orchestrator/pid";
 import { isHealthResponse } from "@brevi/shared";
 import pc from "picocolors";
-import { pidListeningOnPort, readPidFile, removePidFile } from "./pid.js";
 import { errorMessage } from "./util.js";
 
 const HEALTH_TIMEOUT_MS = 2000;
@@ -9,12 +15,26 @@ const GRACEFUL_TIMEOUT_MS = 10_000;
 const FORCE_TIMEOUT_MS = 2000;
 const POLL_INTERVAL_MS = 200;
 
+/** The running server, plus enough ownership info for callers to tell a desktop-supervised instance apart from a standalone one. */
+export interface RunningServer {
+  pid: number;
+  owner: ServerOwner;
+  /** Pid of the live desktop app supervising this server, or null when there isn't one (owner is "cli", or the desktop app has already quit). */
+  desktopSupervisorPid: number | null;
+}
+
 /**
- * Pid of the running server, or null when none is: the pid file first, then
- * the configured-port fallback for servers started before pid files existed.
+ * The running server, or null when none is: the pid file first, then the
+ * configured-port fallback for servers started before pid files existed
+ * (which carries no ownership info, so it always reads as "cli").
  */
-export async function findRunningServer(): Promise<number | null> {
-  return readPidFile() ?? (await pidFromConfiguredPort());
+export async function findRunningServer(): Promise<RunningServer | null> {
+  const record = readServerRecord();
+  if (record) {
+    return { pid: record.pid, owner: record.owner, desktopSupervisorPid: desktopSupervisorPid(record) };
+  }
+  const pid = await pidFromConfiguredPort();
+  return pid === null ? null : { pid, owner: "cli", desktopSupervisorPid: null };
 }
 
 /**

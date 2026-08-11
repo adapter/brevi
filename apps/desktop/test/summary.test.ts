@@ -1,0 +1,131 @@
+import { describe, expect, test } from "bun:test";
+import type { Run, RunStatus, Ticket } from "@brevi/shared";
+import { countRuns, fleetLine, menuRuns, runLabel, workerLine } from "../src/main/summary.js";
+import type { SupervisorState } from "../src/main/supervisor.js";
+
+function ticket(identifier: string): Ticket {
+  return {
+    id: identifier,
+    identifier,
+    title: `Fix the ${identifier} thing`,
+    description: "",
+    url: `https://linear.app/team/issue/${identifier}`,
+    labels: ["brevi"],
+    state: "Todo",
+    updatedAt: "2026-08-11T00:00:00.000Z",
+  };
+}
+
+function run(id: string, status: RunStatus, opts: Partial<Run> = {}): Run {
+  return {
+    id,
+    ticket: ticket(id),
+    status,
+    sandbox: { provider: "process" },
+    createdAt: "2026-08-11T00:00:00.000Z",
+    attempts: [],
+    costs: [],
+    ...opts,
+  };
+}
+
+describe("countRuns", () => {
+  test("buckets active, queued, waiting and failed runs", () => {
+    const runs = [
+      run("a", "running"),
+      run("b", "queued"),
+      run("c", "queued"),
+      run("d", "waiting"),
+      run("e", "failed"),
+      run("f", "completed"),
+      run("g", "cancelled"),
+    ];
+    expect(countRuns(runs)).toEqual({
+      // active covers queued + waiting + running (see ACTIVE_STATUSES)
+      active: 4,
+      queued: 2,
+      waiting: 1,
+      failed: 1,
+      total: 7,
+    });
+  });
+
+  test("is all zero for an empty fleet", () => {
+    expect(countRuns([])).toEqual({ active: 0, queued: 0, waiting: 0, failed: 0, total: 0 });
+  });
+});
+
+describe("fleetLine", () => {
+  test("reports idle with no work anywhere in the pipeline", () => {
+    expect(fleetLine(countRuns([]))).toBe("Idle");
+  });
+
+  test("splits active back into running, queued and waiting", () => {
+    const runs = [run("a", "running"), run("b", "queued"), run("c", "queued"), run("d", "queued")];
+    expect(fleetLine(countRuns(runs))).toBe("1 running, 3 queued");
+  });
+
+  test("mentions waiting runs separately from queued ones", () => {
+    const runs = [run("a", "waiting"), run("b", "queued")];
+    expect(fleetLine(countRuns(runs))).toBe("1 queued, 1 waiting");
+  });
+});
+
+describe("workerLine", () => {
+  test("running: names the pid the supervisor owns", () => {
+    const state: SupervisorState = { kind: "running", pid: 4021 };
+    expect(workerLine(state)).toBe("Orchestrator: running (pid 4021)");
+  });
+
+  test("attached: names the pid of a CLI instance we didn't start", () => {
+    const state: SupervisorState = { kind: "attached", pid: 918 };
+    expect(workerLine(state)).toBe("Orchestrator: attached to CLI (pid 918)");
+  });
+
+  test("attached: tolerates an unknown pid", () => {
+    const state: SupervisorState = { kind: "attached", pid: null };
+    expect(workerLine(state)).toBe("Orchestrator: attached to CLI");
+  });
+
+  test("restarting: rounds the delay up to whole seconds", () => {
+    const state: SupervisorState = { kind: "restarting", attempt: 2, delayMs: 3_400, reason: "crashed" };
+    expect(workerLine(state)).toBe("Orchestrator: restarting in 4s (attempt 2)");
+  });
+
+  test("failed: surfaces the reason", () => {
+    const state: SupervisorState = { kind: "failed", reason: "port 4400 already in use" };
+    expect(workerLine(state)).toBe("Orchestrator: failed (port 4400 already in use)");
+  });
+});
+
+describe("menuRuns", () => {
+  test("leads with the runs furthest along, then recent finished ones", () => {
+    const runs = [
+      run("old-done", "completed", { createdAt: "2026-08-01T00:00:00.000Z", finishedAt: "2026-08-01T00:10:00.000Z" }),
+      run("new-queued", "queued", { createdAt: "2026-08-10T00:00:00.000Z" }),
+      run("recent-done", "failed", { createdAt: "2026-08-09T00:00:00.000Z", finishedAt: "2026-08-09T00:10:00.000Z" }),
+      run("old-running", "running", { createdAt: "2026-08-05T00:00:00.000Z" }),
+    ];
+    const ordered = menuRuns(runs, 10).map((r) => r.id);
+    expect(ordered).toEqual(["old-running", "new-queued", "recent-done", "old-done"]);
+  });
+
+  test("orders runs at the same stage newest first", () => {
+    const runs = [
+      run("older", "running", { createdAt: "2026-08-05T00:00:00.000Z" }),
+      run("newer", "running", { createdAt: "2026-08-06T00:00:00.000Z" }),
+    ];
+    expect(menuRuns(runs, 10).map((r) => r.id)).toEqual(["newer", "older"]);
+  });
+
+  test("caps the result at limit", () => {
+    const runs = [run("a", "running"), run("b", "queued"), run("c", "waiting")];
+    expect(menuRuns(runs, 2)).toHaveLength(2);
+  });
+});
+
+describe("runLabel", () => {
+  test("pairs the ticket identifier with the status label", () => {
+    expect(runLabel(run("x", "running"))).toBe("x  Running");
+  });
+});

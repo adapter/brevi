@@ -8,6 +8,7 @@ import { AppSidebar } from "./components/AppSidebar";
 import { ConfigurationPage } from "./components/Configuration";
 import { Overview } from "./components/Overview";
 import { RunDetail } from "./components/RunDetail";
+import { Setup } from "./components/Setup";
 import { SiteHeader } from "./components/SiteHeader";
 import { Close, Warn } from "./components/Icons";
 import { repoDisplay } from "./lib/repo";
@@ -140,6 +141,14 @@ export default function App() {
                 missingRun={selectedRunId !== null && loaded}
               />
             )
+          ) : page === "setup" ? (
+            <Setup
+              config={config}
+              linearStatus={linearStatus}
+              health={health}
+              onConfig={applyConfig}
+              onDone={() => openRun(null)}
+            />
           ) : (
             <ConfigurationPage
               config={config}

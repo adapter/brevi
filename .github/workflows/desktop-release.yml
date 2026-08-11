@@ -1,0 +1,178 @@
+# Builds and publishes the desktop app (Mission Control) to GitHub Releases:
+# dmg + zip for macOS (arm64 and Intel), AppImage + deb for Linux (x64).
+# Each artifact is staged and packaged on a runner matching its own target
+# OS/arch, not cross-built: the staged CLI (apps/desktop/build/cli, see
+# apps/desktop/scripts/stage-cli.ts) embeds whichever platform/arch build of
+# the native @lydell/node-pty addon the *staging host* has installed via
+# optionalDependencies, so packaging a different arch's artifact on this
+# host would silently ship the wrong native binary.
+#
+# Triggers on pushed tags matching `desktop-v*`, whose version has to match
+# apps/desktop/package.json (so desktop-v0.2.0 needs version 0.2.0). A manual
+# dispatch runs the same build as a dry run and publishes nothing.
+#
+# Artifacts are attached to the tag's GitHub release with `gh release upload`
+# rather than by electron-builder's own publisher, which derives its release
+# tag from the app version (`v<version>`) and would miss the `desktop-v*` tag.
+#
+# Required repository secrets:
+#   GITHUB_TOKEN: provided automatically; needs `contents: write` (granted
+#     below) to create the release and upload assets to it.
+#   CSC_LINK, CSC_KEY_PASSWORD: base64-encoded Developer ID Application
+#     .p12 certificate and its password, for macOS code signing.
+#   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID: an Apple ID
+#     enrolled in the Developer Program, an app-specific password for it
+#     (appleid.apple.com > Sign-In and Security), and the team ID, for
+#     notarization.
+#   All five are optional as a set: if unset, the macOS build steps still
+#   produce a artifact, just unsigned and not notarized (see "Detect macOS
+#   signing secrets" below); it will be Gatekeeper-quarantined until the
+#   user right-clicks > Open, or a future signed run replaces it.
+name: Desktop release
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+
+# Default to no permissions; each job declares exactly what it needs.
+permissions: {}
+
+concurrency: desktop-release-${{ github.ref }}
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    permissions:
+      contents: write # electron-builder creates/updates the GitHub release and uploads assets
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-latest
+            arch_flag: --arm64
+          - name: macOS x64
+            os: macos-13 # last Intel-based GitHub-hosted macOS image
+            arch_flag: --x64
+          - name: Linux x64
+            os: ubuntu-latest
+            arch_flag: --x64
+            # Not blacksmith-4vcpu-ubuntu-2404 (used elsewhere in this repo):
+            # electron-builder's Linux packaging needs system libraries
+            # (fakeroot, dpkg, etc.) and GitHub's ubuntu-latest image has
+            # them preinstalled; we haven't verified the Blacksmith image
+            # does, so this stays on a GitHub-hosted runner until that's
+            # confirmed.
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: Cache bun, turbo, and electron
+        uses: useblacksmith/cache@c5fe29eb0efdf1cf4186b9f7fcbbcbc0cf025662 # v5.1.0
+        with:
+          path: |
+            ~/.bun/install/cache
+            .turbo
+            ~/.cache/electron
+          key: bun-turbo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: |
+            bun-turbo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-
+            bun-turbo-${{ runner.os }}-${{ runner.arch }}-
+
+      - run: bun install --frozen-lockfile
+
+      # The whole dependency graph: packages/cli/dist must exist before
+      # apps/desktop/scripts/stage-cli.ts can stage it, and packages/cli's
+      # own build needs apps/app/dist (the dashboard) to already exist too.
+      - run: bun run build
+
+      # Plain shell, not a marketplace action: signing/notarization needs
+      # five secrets (see the header comment). When they're not configured
+      # the build must still produce a downloadable artifact, just unsigned,
+      # rather than failing the whole release.
+      - name: Detect macOS signing secrets
+        if: runner.os == 'macOS'
+        id: signing
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+        run: |
+          if [ -z "$CSC_LINK" ] || [ -z "$APPLE_ID" ]; then
+            echo "::warning::No macOS signing secrets configured (CSC_LINK/APPLE_ID unset). Building an UNSIGNED, NOT NOTARIZED artifact: macOS Gatekeeper will quarantine it, and the user will need to right-click > Open (or clear the quarantine attribute) to run it. Configure CSC_LINK, CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID to ship a signed, notarized build."
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+            echo "extra_args=-c.mac.notarize=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Signing secrets present; building a signed, notarized artifact."
+            echo "extra_args=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The tag names the release; the app version names every artifact
+      # (artifactName in electron-builder.yml). If they disagree, the release
+      # page and the files on it tell different stories, so fail early rather
+      # than publish that.
+      - name: Check the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          if [ "$TAG" != "desktop-v$version" ]; then
+            echo "Tag $TAG does not match apps/desktop/package.json version $version (expected desktop-v$version). Bump the version and retag." >&2
+            exit 1
+          fi
+          echo "Tag $TAG matches version $version"
+
+      - name: Stage the CLI and package
+        working-directory: apps/desktop
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bun run package -- ${{ matrix.arch_flag }} ${{ steps.signing.outputs.extra_args }}
+
+      # A manual dispatch has no tag to publish against, so it is a packaging
+      # dry run: it proves the whole pipeline still builds on every target
+      # without cutting a release.
+      - name: List what was produced
+        run: ls -lh apps/desktop/release
+
+      # Uploaded here rather than by electron-builder's own GitHub publisher,
+      # which derives the release tag from the app version (`v<version>`) and
+      # so would not find the `desktop-v*` tag this run was cut from. The
+      # three matrix legs race to create the release, hence create-or-ignore
+      # then upload with --clobber.
+      - name: Attach the artifacts to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # No `set -u`: the macOS runners still ship bash 3.2, where
+          # referencing an empty array under `set -u` is an "unbound
+          # variable" error rather than an empty expansion.
+          set -eo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 ||
+            gh release create "$TAG" --title "brevi desktop $TAG" --generate-notes ||
+            gh release view "$TAG" >/dev/null
+          shopt -s nullglob
+          assets=(apps/desktop/release/*.dmg apps/desktop/release/*.zip apps/desktop/release/*.AppImage apps/desktop/release/*.deb)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "electron-builder produced no installable artifacts." >&2
+            exit 1
+          fi
+          printf 'uploading %s\n' "${assets[@]}"
+          gh release upload "$TAG" "${assets[@]}" --clobber

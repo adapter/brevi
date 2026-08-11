@@ -19,9 +19,11 @@ The host is a pure scheduler: it owns the run store, the ticket poll, the memory
 - `config.ts`: load/save `~/.brevi/config.json` (schema lives in `@brevi/shared`)
 - `internal.ts`: the node-side helpers `@brevi/worker` reuses (GitHub, Linear, R2, limits, memory, path safety), so the execution stack does not need a second copy of them
 - `logfile.ts`: tees console output to `~/.brevi/logs/orchestrator.log` for diagnostics
+- `pid.ts`: read/write `~/.brevi/server.pid`, written by whichever process runs the server and read by both the CLI and the desktop app
 
 ## Gotchas
 
+- `pid.ts` and `config.ts` are also exposed as the `./pid` and `./config` subpath exports, for consumers (like the desktop app) that need them without pulling in the whole server and its dependencies (Linear SDK, Octokit, node-pty).
 - The orchestrator reads no environment variables for persistent configuration; everything comes from `~/.brevi/config.json`. The exception is `connect.ts` credential discovery, which checks `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Anthropic) and `OPENAI_API_KEY` (Codex) before falling back to stored CLI logins. Credentials travel to a worker with the dispatch that needs them.
 - This package must never import `@brevi/sandbox` or `@brevi/worker`; the dependency runs one way only, and CI fails the build on a sandbox import here.
 - Everything a worker says is untrusted until it is bound to a lease: `workers.ts` resolves the lease first and uses `lease.runId`, never the run id on the frame, and it writes `sandbox.workerId` itself rather than accepting one. Anything new on the wire follows the same rule.

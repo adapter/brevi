@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
+import { waitForPidFile } from "@brevi/orchestrator/pid";
 import type { Command } from "commander";
 import pc from "picocolors";
-import { waitForPidFile } from "../lib/pid.js";
 import { findRunningServer, stopServer } from "../lib/stop.js";
 import {
   CHANGELOG_URL,
@@ -92,13 +92,28 @@ async function runUpdate(checkOnly: boolean): Promise<void> {
  * `brevi start` from our own bin path. The install replaced its contents in
  * place, so the new process runs the new version. No-op when nothing is
  * running.
+ *
+ * A desktop-supervised server is left alone entirely: stopping it would just
+ * have the desktop app's supervisor race our detached replacement (it treats
+ * the exit as a crash and restarts its own bundled build), and updating the
+ * npm CLI never touches that bundled copy anyway.
  */
 async function restartIfRunning(latest: string): Promise<void> {
-  const pid = await findRunningServer();
-  if (pid === null) return;
+  const server = await findRunningServer();
+  if (server === null) return;
 
-  console.log(`\nbrevi is running (pid ${pid}); restarting it on ${pc.bold(latest)}...`);
-  if (!(await stopServer(pid))) {
+  if (server.desktopSupervisorPid !== null) {
+    console.log(`\nbrevi is running (pid ${server.pid}) under the brevi desktop app; it was left running as is.`);
+    console.log(
+      pc.dim(
+        "  Updating the npm CLI does not update the desktop app's bundled copy; quit and reopen the desktop app (or update the app itself) to pick up this change.",
+      ),
+    );
+    return;
+  }
+
+  console.log(`\nbrevi is running (pid ${server.pid}); restarting it on ${pc.bold(latest)}...`);
+  if (!(await stopServer(server.pid))) {
     console.error(pc.red("✖ Could not stop the running instance; restart it manually with `brevi start`."));
     process.exit(1);
   }

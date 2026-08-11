@@ -8,7 +8,7 @@ import {
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { duration } from "../../lib/format";
-import { useSettingsDraft } from "../../lib/settings";
+import { useSettingsDraft, type SettingsDraft } from "../../lib/settings";
 import { Command } from "../Bits";
 import { Warn } from "../Icons";
 import {
@@ -32,6 +32,52 @@ const SIZES = (["small", "medium", "large"] as const).map((size) => ({
   value: size,
   label: `${size[0]?.toUpperCase()}${size.slice(1)} (${FIRECRACKER_SIZES[size].vcpus} vCPU / ${formatGb(FIRECRACKER_SIZES[size].memMib)} GB)`,
 }));
+
+/**
+ * The provider radio and its KVM-missing warning: one implementation shared
+ * between this page's Execution card and the first-run Setup page, so the
+ * sandbox.provider control and its write path exist exactly once.
+ */
+export function SandboxProviderField({
+  draft,
+  health,
+}: {
+  draft: SettingsDraft;
+  health: HealthResponse | null;
+}) {
+  const provider = draft.value("sandbox.provider");
+  const kvmMissing = provider === "firecracker" && health?.sandboxProvider === "process";
+
+  return (
+    <>
+      <RadioField
+        label="Provider"
+        path="sandbox.provider"
+        draft={draft}
+        options={[
+          {
+            value: "auto",
+            label: "Auto",
+            detail: "Firecracker on Linux with KVM, the process provider otherwise.",
+          },
+          { value: "firecracker", label: "Firecracker", detail: "Always boot a microVM." },
+          {
+            value: "process",
+            label: "Process",
+            detail: "No isolation: commands run on this host as you.",
+          },
+        ]}
+      />
+      {kvmMissing && (
+        <p className="-mt-1 flex items-start gap-1.5 pb-3 text-[11.5px] leading-relaxed text-ember-300">
+          <Warn className="mt-px size-3 shrink-0" />
+          This host resolved to the process provider, so it has no usable KVM. Firecracker
+          runs will fail to start until KVM is available.
+        </p>
+      )}
+    </>
+  );
+}
 
 /**
  * Where runs execute: the provider, how many run at once, how long they may
@@ -59,7 +105,6 @@ export function SandboxSection({
   // asking for, so it wins for describing the VM card.
   const resolved = provider === "auto" ? health?.sandboxProvider : provider;
   const firecracker = resolved === "firecracker";
-  const kvmMissing = provider === "firecracker" && health?.sandboxProvider === "process";
 
   // Read through the draft, not the committed config: clearing the overrides
   // with "Use a preset" has to change the numbers on screen before the save,
@@ -118,31 +163,7 @@ export function SandboxSection({
 
       <div className="mt-3 flex flex-col gap-2.5">
         <SettingsCard title="Execution" draft={sandbox}>
-          <RadioField
-            label="Provider"
-            path="sandbox.provider"
-            draft={sandbox}
-            options={[
-              {
-                value: "auto",
-                label: "Auto",
-                detail: "Firecracker on Linux with KVM, the process provider otherwise.",
-              },
-              { value: "firecracker", label: "Firecracker", detail: "Always boot a microVM." },
-              {
-                value: "process",
-                label: "Process",
-                detail: "No isolation: commands run on this host as you.",
-              },
-            ]}
-          />
-          {kvmMissing && (
-            <p className="-mt-1 flex items-start gap-1.5 pb-3 text-[11.5px] leading-relaxed text-ember-300">
-              <Warn className="mt-px size-3 shrink-0" />
-              This host resolved to the process provider, so it has no usable KVM. Firecracker
-              runs will fail to start until KVM is available.
-            </p>
-          )}
+          <SandboxProviderField draft={sandbox} health={health} />
           <NumberField
             label="Parallel runs"
             path="sandbox.concurrency"

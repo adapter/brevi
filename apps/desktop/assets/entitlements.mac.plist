@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the hardened runtime (see electron-builder.yml's
+  `mac.hardenedRuntime` / `mac.notarize`). Electron apps need these four to
+  keep working under the hardened runtime; this app also needs outgoing and
+  incoming network access since it runs a local HTTP server (the
+  orchestrator's dashboard) and talks to it as a client.
+-->
+<plist version="1.0">
+<dict>
+  <!-- Electron's JS engine (V8) needs to JIT-compile. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <!-- Electron and its child processes (the supervised orchestrator) write
+       to and execute from memory pages that aren't backed by a signed file
+       on disk; the hardened runtime blocks that by default. -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- Electron reads DYLD_* / similar env vars to locate its own
+       framework at startup; the hardened runtime strips them unless this
+       is set. -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <!-- The app connects to the orchestrator's local dashboard/WebSocket. -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <!-- The supervised orchestrator process binds a local HTTP server
+       (the dashboard) that this app's window loads. -->
+  <key>com.apple.security.network.server</key>
+  <true/>
+</dict>
+</plist>
