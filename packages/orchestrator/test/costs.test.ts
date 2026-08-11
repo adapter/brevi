@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { summarizeCosts } from "@brevi/shared";
-import { ccusageCostEntry } from "../src/ccusage.js";
+import { ccusageCostEntry, parseCcusageSessions } from "../src/ccusage.js";
 import { usageCollector } from "../src/costs.js";
 
 // Run with `bun test packages/orchestrator` from the repo root (after
@@ -143,6 +143,51 @@ describe("ccusageCostEntry", () => {
     expect(entry.costUsd).toBe(2.25);
     expect(entry.estimated).toBeUndefined();
     expect(entry.breakdown).toHaveLength(2);
+  });
+
+  it("prices a model ccusage could not, without disturbing the ones it could", () => {
+    // ccusage runs --offline, so a model newer than its bundled pricing data
+    // comes back with no usable cost while its peers price normally. The
+    // unpriced row has to be filled from the table or the execution reports
+    // only part of what it spent.
+    const entry = ccusageCostEntry({
+      label: "implementation",
+      subscription: false,
+      rows: [
+        { model: "claude-sonnet-5", inputTokens: 332, outputTokens: 112_908, costUsd: 4.161716 },
+        { model: "claude-opus-5", inputTokens: 265, outputTokens: 103_217, cacheReadTokens: 21_677_885 },
+      ],
+    });
+    const opus = entry.breakdown?.find((row) => row.model === "claude-opus-5");
+    expect(opus?.costUsd).toBeGreaterThan(0);
+    // Reported figures survive untouched; only the gap is estimated.
+    expect(entry.breakdown?.find((row) => row.model === "claude-sonnet-5")?.costUsd).toBe(4.161716);
+    expect(entry.costUsd).toBeCloseTo(4.161716 + (opus?.costUsd ?? 0), 6);
+    // Part reported, part modeled: the total is an estimate either way.
+    expect(entry.estimated).toBe(true);
+    // The roll-up the dashboard reads carries the filled figure too.
+    const totals = summarizeCosts([entry]);
+    expect(totals.byModel?.find((row) => row.model === "claude-opus-5")?.costUsd).toBe(opus?.costUsd);
+  });
+
+  it("treats a ccusage cost of zero as unknown rather than free", () => {
+    const [session] = parseCcusageSessions(
+      JSON.stringify({
+        sessions: [
+          {
+            sessionId: "s1",
+            modelBreakdowns: [
+              { modelName: "claude-sonnet-5", inputTokens: 10, outputTokens: 20, cost: 1.5 },
+              // What ccusage reports for a model absent from its pricing data.
+              { modelName: "claude-opus-5", inputTokens: 30, outputTokens: 40, cost: 0 },
+            ],
+          },
+        ],
+      }),
+    );
+    const rows = session?.rows ?? [];
+    expect(rows.find((row) => row.model === "claude-sonnet-5")?.costUsd).toBe(1.5);
+    expect(rows.find((row) => row.model === "claude-opus-5")?.costUsd).toBeUndefined();
   });
 
   it("treats the Codex session-level cost as the execution total", () => {
