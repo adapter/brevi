@@ -2,6 +2,7 @@ import type { BreviConfig, HealthResponse, LinearStatus, Run } from "@brevi/shar
 import type { ConfigSection } from "../lib/useOrchestrator";
 import { AgentSection } from "./config/AgentSection";
 import { ConnectorsSection } from "./config/ConnectorsSection";
+import { MemorySection } from "./config/MemorySection";
 import { OrchestratorSection } from "./config/OrchestratorSection";
 import { RepositoriesSection } from "./config/RepositoriesSection";
 import { SandboxSection } from "./config/SandboxSection";
@@ -12,6 +13,7 @@ const SECTIONS: { id: ConfigSection; label: string }[] = [
   { id: "repositories", label: "Repositories" },
   { id: "agent", label: "Agent" },
   { id: "sandbox", label: "Sandbox" },
+  { id: "memory", label: "Memory" },
   { id: "orchestrator", label: "Orchestrator" },
   { id: "server", label: "Server" },
 ];
@@ -102,6 +104,9 @@ export function ConfigurationPage({
           </div>
           <div hidden={section !== "sandbox"}>
             <SandboxSection config={config} health={health} onConfig={onConfig} />
+          </div>
+          <div hidden={section !== "memory"}>
+            <MemorySection config={config} onConfig={onConfig} />
           </div>
           <div hidden={section !== "orchestrator"}>
             <OrchestratorSection config={config} onConfig={onConfig} />

@@ -364,3 +364,23 @@ export type RunEvent =
   | { runId: string; ts: string; type: "cost"; entry: CostEntry }
   /** Marks the start of an agent execution; events that follow belong to it. */
   | { runId: string; ts: string; type: "attempt"; number: number };
+
+/**
+ * One durable fact a run learned about a repository, kept on the host and
+ * injected into later runs' prompts. Memories outlive the sandbox they were
+ * recorded in: a fresh microVM starts with what the last run figured out
+ * instead of re-exploring the repo from zero.
+ */
+export interface RepoMemory {
+  /** Stable id, used to delete a single memory from the dashboard. */
+  id: string;
+  /** The fact itself, one line as the agent wrote it. */
+  text: string;
+  createdAt: string;
+  /** Last time a run recorded this same fact; drives eviction order. */
+  updatedAt: string;
+  /** How many runs have recorded it. A repeatedly rediscovered fact is a load-bearing one. */
+  hits: number;
+  /** Ticket that last recorded it, for provenance in the dashboard. */
+  ident?: string;
+}

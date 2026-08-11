@@ -4,7 +4,9 @@ import type {
   CredentialsUpdateRequest,
   CredentialsUpdateResponse,
   DevicePollResponse,
+  ForgetMemoryRequest,
   GithubRepo,
+  MemoriesResponse,
   HealthResponse,
   LinearProject,
   ConfigPatch,
@@ -71,6 +73,16 @@ export const api = {
   linearProjects: () => json<LinearProject[]>("/api/linear/projects"),
   r2Status: () => json<R2Status>("/api/connect/r2"),
   connectR2: () => json<R2ConnectResponse>("/api/connect/r2", { method: "POST" }),
+  memories: () => json<MemoriesResponse>("/api/memories"),
+  /** Drop one memory, so it stops being handed to every future run in that repo. */
+  forgetMemory: (repoKey: string, id: string) =>
+    json<MemoriesResponse>(`/api/memories/${encodeURIComponent(repoKey)}/forget`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id } satisfies ForgetMemoryRequest),
+    }),
+  clearMemories: (repoKey: string) =>
+    json<MemoriesResponse>(`/api/memories/${encodeURIComponent(repoKey)}/clear`, { method: "POST" }),
   /** The one write path for config.json: a deep-partial patch of one card's fields. */
   updateSettings: (patch: ConfigPatch) =>
     json<SettingsUpdateResponse>("/api/settings", {

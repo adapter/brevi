@@ -185,6 +185,30 @@ export const configSchema = z.object({
       reviewEffort: z.enum(["minimal", "low", "medium", "high"]).default("high"),
     })
     .prefault({}),
+  /**
+   * Repository memories: durable facts a run learns about a repo (where a
+   * concern lives, the command that actually builds it, a convention that is
+   * easy to get wrong). They are kept on the host under ~/.brevi/memories,
+   * outside any sandbox, and injected into the next run's prompt so a fresh
+   * microVM does not re-pay the exploration cost of the last one.
+   */
+  memory: z
+    .object({
+      /** Inject stored memories into run prompts and harvest new ones afterwards. */
+      enabled: z.boolean().default(true),
+      /**
+       * How many memories are kept per repo. Once full, the least recently
+       * recorded ones are dropped.
+       */
+      maxEntries: z.number().int().min(1).max(500).default(60),
+      /**
+       * Character budget for the memories block injected into a prompt. The
+       * prompt travels as a single argv element, and the block only pays for
+       * itself while it stays smaller than the exploration it replaces.
+       */
+      maxChars: z.number().int().min(200).max(50_000).default(8000),
+    })
+    .prefault({}),
   sandbox: z
     .object({
       /** "auto" picks firecracker on Linux with KVM, process otherwise. */

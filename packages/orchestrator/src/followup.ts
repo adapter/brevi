@@ -17,6 +17,7 @@ import {
   type PrFeedback,
 } from "./github.js";
 import { AgentLimitError, agentProvider } from "./limits.js";
+import { memoryKeyFor, readRunMemories, selectMemories } from "./memory.js";
 import { buildFollowUpPrompt } from "./prompts.js";
 import { provisionCredentials } from "./provision.js";
 import { isContainedRegularFile } from "./safepath.js";
@@ -53,7 +54,7 @@ type RebaseResult = { status: "clean" } | { status: "conflicted"; detail: string
 export async function executeFollowUp(ctx: RunContext): Promise<void> {
   // Follow-ups leave the ticket's Linear state alone and run even while
   // Linear is disconnected; `linear` from the context is unused here.
-  const { config, store, provider, signal } = ctx;
+  const { config, store, memories, provider, signal } = ctx;
   const run = store.get(ctx.runId);
   if (!run) throw new Error(`unknown run ${ctx.runId}`);
   const ticket = run.ticket;
@@ -86,6 +87,10 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
   // push target derive from the PR itself, never from the mutable repo
   // mapping, which can be removed or repointed after the original run.
   const prRepo = `${prParts.owner}/${prParts.name}`;
+  // Memories are keyed by the repository the PR belongs to, the same identity
+  // the checkout and push target derive from, so a follow-up still recalls the
+  // right facts after the run's repo mapping was repointed or removed.
+  const memoryKey = memoryKeyFor(prRepo);
   // Cutoff for "comments since the last push". pushedAt is recorded on every
   // brevi push; runs persisted before it existed fall back to the completion
   // time, which lands seconds after the original push.
@@ -271,6 +276,10 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
     if (needAgent) {
       await store.setStatus(run.id, "running");
       const { mainModel, mainEffort, delegate } = agentModelPlan(config);
+      const recalled = config.memory.enabled
+        ? selectMemories(memories.list(memoryKey), config.memory.maxChars)
+        : [];
+      if (recalled.length > 0) log("system", `recalled ${recalled.length} memories for ${memoryKey}`);
       await session.runAgent(
         buildFollowUpPrompt({
           ticket,
@@ -282,6 +291,8 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
           feedback: formatPrFeedback(feedback),
           rebase,
           delegate,
+          memories: recalled,
+          recordMemories: config.memory.enabled,
         }),
         mainModel,
         mainEffort,
@@ -309,6 +320,19 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
           .then((text) => text.trim())
           .catch(() => "")
       : "";
+    // Read alongside the reply, before .brevi is scrubbed: a follow-up
+    // explores the repo too, and what it learned outlives this sandbox. Only
+    // when an agent actually ran, so a memories.md that was already in the
+    // checkout is never mistaken for something this session learned.
+    if (needAgent && config.memory.enabled) {
+      const { added, reaffirmed } = await memories.record(memoryKey, await readRunMemories(pulledDir), {
+        maxEntries: config.memory.maxEntries,
+        ident: ticket.identifier,
+      });
+      if (added || reaffirmed) {
+        log("system", `remembered ${added} new and reaffirmed ${reaffirmed} facts about ${memoryKey}`);
+      }
+    }
     await rm(join(pulledDir, ".brevi"), { recursive: true, force: true });
     await git(["add", "-A"], pulledDir, token);
     const status = await git(["status", "--porcelain"], pulledDir, token);

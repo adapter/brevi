@@ -11,6 +11,7 @@ The brevi engine, consumed by `@brevi/cli`. Polls Linear for `brevi`-labeled iss
 - `linear.ts` / `github.ts`: API clients
 - `server.ts`: HTTP + WS API and dashboard static serving
 - `state.ts`: run persistence under `~/.brevi/` (events.jsonl per run)
+- `memory.ts`: per-repo memories under `~/.brevi/memories/`, injected into run prompts and harvested from `.brevi/memories.md`
 - `connect.ts` / `credentials.ts`: Connections panel flows and live credential verification
 - `r2.ts`: Cloudflare R2 evidence uploads via the wrangler CLI, GIF previews via ffmpeg
 - `config.ts`: load/save `~/.brevi/config.json` (schema lives in `@brevi/shared`)
@@ -20,4 +21,5 @@ The brevi engine, consumed by `@brevi/cli`. Polls Linear for `brevi`-labeled iss
 
 - The orchestrator reads no environment variables for persistent configuration; everything comes from `~/.brevi/config.json`. The exception is `connect.ts` credential discovery, which checks `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Anthropic) and `OPENAI_API_KEY` (Codex) before falling back to stored CLI logins. Agent credentials are passed into the sandbox env explicitly.
 - Agent output is parsed as stream-json events; limit detection only inspects error-typed events to avoid false positives.
+- Memories outlive sandboxes on purpose: they are the only run state that crosses runs, so they are read before the agent starts and harvested before `finalizeImplementation` deletes `.brevi/`.
 - Protocol and config types are ground truth in `@brevi/shared`; update `apps/docs` reference pages when they change.

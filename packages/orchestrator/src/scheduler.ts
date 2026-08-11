@@ -25,6 +25,7 @@ import {
   type GithubRepo,
   type LinearProject,
   type LinearStatus,
+  type MemoriesResponse,
   type PrState,
   type PrStatusResponse,
   type ConfigPatch,
@@ -68,6 +69,7 @@ import { fetchPrStatus, fetchPullRequestState, listRepos } from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
 import { isLinearAuthError, LinearService, type LinearAuthHooks } from "./linear.js";
 import { executeFollowUp } from "./followup.js";
+import { MemoryStore } from "./memory.js";
 import { provisionCredentials } from "./provision.js";
 import { checkWrangler, DEFAULT_EVIDENCE_BUCKET, provisionBucket, startWranglerLogin } from "./r2.js";
 import { buildResumeScript } from "./resume.js";
@@ -178,6 +180,8 @@ type LinearRefreshOutcome =
 export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   readonly store: RunStore;
   readonly config: BreviConfig;
+  /** What brevi has learned about each repo, carried across sandboxes. */
+  readonly memories: MemoryStore;
 
   #configPath: string;
   #linear?: LinearService;
@@ -253,10 +257,16 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     rejected: (detail) => this.#enterLinearAuthError(detail),
   };
 
-  constructor(config: BreviConfig, store: RunStore = new RunStore(), configPath?: string) {
+  constructor(
+    config: BreviConfig,
+    store: RunStore = new RunStore(),
+    configPath?: string,
+    memories: MemoryStore = new MemoryStore(),
+  ) {
     super();
     this.config = config;
     this.store = store;
+    this.memories = memories;
     this.#configPath = configPath ?? CONFIG_PATH;
     if (config.linear.apiKey) this.#linear = new LinearService(config, this.#linearAuth);
   }
@@ -281,9 +291,35 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return this.store.readEvents(id);
   }
 
+  /** Everything brevi remembers, keyed by repository ("owner/name"). */
+  listMemories(): MemoriesResponse {
+    return { repos: this.memories.all() };
+  }
+
+  /**
+   * Drop one memory. A wrong memory is worse than no memory, because every
+   * later run in the repo is handed it, so forgetting one is a first-class
+   * command rather than a config edit.
+   */
+  async forgetMemory(repo: string, id: string): Promise<MemoriesResponse> {
+    if (!(await this.memories.forget(repo, id))) {
+      throw new OrchestratorError("not-found", `no memory ${id} for ${repo}`);
+    }
+    return this.listMemories();
+  }
+
+  /** Forget everything about one repo; the next run there starts cold again. */
+  async clearMemories(repo: string): Promise<MemoriesResponse> {
+    if (!(await this.memories.clear(repo))) {
+      throw new OrchestratorError("not-found", `nothing remembered for ${repo}`);
+    }
+    return this.listMemories();
+  }
+
   /** Load state, boot the sandbox provider, and begin the poll loop. */
   async start(): Promise<void> {
     await this.store.init();
+    await this.memories.init();
     this.#provider = await createSandboxProvider({
       requested: this.config.sandbox.provider,
       firecracker: this.config.sandbox.firecracker,
@@ -1924,6 +1960,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         runId,
         config: this.config,
         store: this.store,
+        memories: this.memories,
         provider,
         linear,
         signal: abort.signal,

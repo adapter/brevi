@@ -15,6 +15,7 @@ import {
   type BreviConfig,
   type ClientMessage,
   type CredentialsUpdateRequest,
+  type ForgetMemoryRequest,
   type HealthResponse,
   type LinearStatus,
   type Run,
@@ -341,6 +342,33 @@ function buildApp(
     }
     try {
       return c.json(await orchestrator.updateSettings(body.patch));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.get("/api/memories", (c) => c.json(orchestrator.listMemories()));
+
+  app.post("/api/memories/:repo/forget", async (c) => {
+    let body: ForgetMemoryRequest;
+    try {
+      body = (await c.req.json()) as ForgetMemoryRequest;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    if (typeof body?.id !== "string" || body.id === "") {
+      return c.json({ error: "id must be a memory id" }, 400);
+    }
+    try {
+      return c.json(await orchestrator.forgetMemory(c.req.param("repo"), body.id));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/memories/:repo/clear", async (c) => {
+    try {
+      return c.json(await orchestrator.clearMemories(c.req.param("repo")));
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }
