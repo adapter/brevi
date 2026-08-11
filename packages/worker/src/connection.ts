@@ -3,11 +3,17 @@ import {
   parseHostMessage,
   WORKER_HEARTBEAT_MS,
   WORKER_PROTOCOL_VERSION,
+  WORKER_REPLAY_BUFFER_LIMIT,
   WORKER_WS_PATH,
   type HostMessage,
   type RegisteredMessage,
   type RegisterMessage,
+  type RunArtifactMessage,
+  type RunCompleteMessage,
+  type RunEventMessage,
   type RunLease,
+  type RunMemoriesMessage,
+  type RunPatchMessage,
   type WorkerAuth,
   type WorkerCapabilities,
   type WorkerDenyReason,
@@ -21,6 +27,64 @@ const WORKER_BACKOFF_INITIAL_MS = 1_000;
 const WORKER_BACKOFF_MAX_MS = 30_000;
 /** Outbound frames buffered while disconnected; oldest run-event frames drop first once full. */
 const OUTBOUND_QUEUE_LIMIT = 10_000;
+/**
+ * How long a lease may sit `awaitingAck` after `registered` before this gives
+ * up waiting for the host's `lease-ack`/`run-complete-ack` and resends
+ * everything the buffer holds anyway. An older host that predates lease-acks,
+ * or a single lost frame on a host that does send them, must degrade to
+ * "resend everything" rather than to a lease that never reports again.
+ */
+const REPLAY_UNBLOCK_MS = 10_000;
+
+/** How often this worker checks whether a lease it holds has passed its deadline; see the fencing note on `onLeaseLost`. */
+const LEASE_DEADLINE_SWEEP_MS = 5_000;
+
+/** The five lease-scoped reporting frame types; every other WorkerMessage travels through the generic queue instead. */
+type ReportingMessage = RunPatchMessage | RunEventMessage | RunArtifactMessage | RunMemoriesMessage | RunCompleteMessage;
+
+function isReportingMessage(message: WorkerMessage): message is ReportingMessage {
+  return (
+    message.type === "run-patch" ||
+    message.type === "run-event" ||
+    message.type === "run-artifact" ||
+    message.type === "run-memories" ||
+    message.type === "run-complete"
+  );
+}
+
+/** Frame types the buffer cap may drop, tried in this order: run-event first (cheapest to lose, same policy as the generic queue), then run-artifact. A run-patch, run-memories, or run-complete is never dropped: any of those missing would leave the host's own copy of the run wrong, not just its console short a line. */
+const DROPPABLE_TYPES: ReadonlyArray<ReportingMessage["type"]> = ["run-event", "run-artifact"];
+
+/**
+ * Per-lease replay state: every lease-scoped reporting frame lives here from
+ * the moment it's sent until the host acknowledges it, so a dead socket never
+ * loses one, only delays it.
+ */
+interface LeaseBuffer {
+  /** Last sequence number assigned for this lease; frames are numbered from 1. */
+  seq: number;
+  /** Frames the host has not acknowledged yet, oldest first. */
+  frames: ReportingMessage[];
+  /** True while this lease is waiting to be told where the host got to, so nothing new is sent past a gap. */
+  awaitingAck: boolean;
+  /**
+   * The watermark the host reported on its previous `lease-ack` for this
+   * lease, so a second one carrying the same number is recognisable as a
+   * whole heartbeat interval of no progress. -1 until the first ack arrives,
+   * which is therefore never mistaken for a repeat.
+   */
+  lastAckedSeq: number;
+  /**
+   * Highest sequence number this buffer has already told the host it no
+   * longer holds anything at or below (see `lease-gap`). 0 when nothing has
+   * been given up on, which is the normal case.
+   */
+  gapThrough: number;
+  /** Frames dropped by the cap since the last `lease-gap` went out, for that frame's count. */
+  droppedSinceGap: number;
+  /** The lease's deadline as the host last stated it, epoch ms; 0 until a dispatch or a lease-ack says. */
+  expiresAt: number;
+}
 
 export interface WorkerConnectionOptions {
   /** The host's base url (http(s)://...); ws(s):// and WORKER_WS_PATH are derived from it. */
@@ -38,15 +102,6 @@ export interface WorkerConnectionOptions {
   /** Evaluated fresh on every register and heartbeat: the leases this worker still believes it owns. */
   activeLeases: () => RunLease[];
   /**
-   * Evaluated fresh on every successful registration: frames the host has not
-   * acknowledged yet, requeued so a reconnect replays them. Handing a frame to
-   * the socket is not delivery, and a completion lost that way would otherwise
-   * strand its run forever, since the lease stays claimed and nothing resends.
-   * Replays are safe to duplicate: the host drops frames for a lease it has
-   * already settled, and acks a lease it no longer knows about.
-   */
-  unacknowledged?: () => WorkerMessage[];
-  /**
    * A durable credential just arrived, meaning enrollment succeeded: persist
    * it. Awaited before this connection does anything else with the frame that
    * carried it, because it is the only copy that will ever exist (the host
@@ -57,14 +112,27 @@ export interface WorkerConnectionOptions {
   onState?: (state: WorkerState) => void;
   /** This enrollment was killed on the host. The credential is dead, so there is nothing to reconnect with and the daemon stops for good. */
   onRevoked?: (reason: string) => void;
+  /**
+   * A lease this worker holds is no longer this worker's: abort whatever is
+   * running for it and report nothing, because the host has already given the
+   * run to somebody else.
+   *
+   * This is the fence around a re-dispatched run, and it fires for both ways
+   * a lease can be lost. The host says so explicitly when a worker reconnects
+   * still claiming a lease it no longer holds; and a worker that never
+   * reconnects reaches the lease's own `expiresAt` and stops itself, which is
+   * the half no frame from the host could ever cover. Two workers pushing the
+   * same deterministic branch is exactly what this prevents.
+   */
+  onLeaseLost?: (leaseId: string, runId: string, reason: string) => void;
 }
 
 export interface WorkerConnection {
   send(message: WorkerMessage): void;
   onHostMessage(handler: (message: HostMessage) => void): void;
-  /** Outbound frames not yet handed to the socket; shutdown polls this instead of closing blind. */
+  /** Outbound frames not yet acknowledged: the generic queue plus every lease's buffered reporting frames. */
   pendingCount(): number;
-  /** Waits (polling) up to timeoutMs for the outbound queue to fully drain, e.g. across a reconnect; resolves false if the deadline passes first instead of throwing, so a caller can log and proceed rather than hang. */
+  /** Waits (polling) up to timeoutMs for both the generic queue and every lease's replay buffer to fully drain, e.g. across a reconnect and its replay; resolves false if the deadline passes first instead of throwing, so a caller can log and proceed rather than hang. */
   drain(timeoutMs: number): Promise<boolean>;
   close(): void;
 }
@@ -95,23 +163,43 @@ function withJitter(baseMs: number): number {
  * handler, so a malformed or unrecognized frame is silently ignored rather
  * than crashing the daemon.
  *
- * Messages sent while disconnected (or before the host has confirmed
- * `registered`) are queued in order and flushed on the next successful
- * registration; this is what lets a reconnect resume in-flight run
- * reporting instead of losing whatever happened during the drop. The queue
- * is bounded: once full, the oldest `run-event` frame is dropped first
- * (cheapest to lose; a status/patch/complete frame still gets through), and
- * that is noted on the console once, not on every drop.
- *
  * Every connection also carries an auth envelope, and this is where a
  * machine's enrollment happens: a supplied pairing token is redeemed once for
  * a durable credential (delivered on the `registered` frame that answers it),
  * and every connection after that presents the credential instead. Which of
  * the two is used is decided per attempt, so a token the host refuses can
  * fall back to a stored credential on the next one.
+ *
+ * The outbound path is split in two, because the two halves need different
+ * survival guarantees:
+ *
+ * - A generic queue carries everything that is not lease-scoped reporting
+ *   (register, heartbeat, worker-log, dispatch-accepted, dispatch-rejected,
+ *   attach-*). It only ever holds frames not yet handed to a socket, is
+ *   bounded (oldest run-event drops first once full, though none of this
+ *   queue's frame types are actually run-events in practice), and flushes
+ *   in order on the next successful registration.
+ * - A per-lease replay buffer carries the five lease-scoped reporting frames
+ *   (run-patch, run-event, run-artifact, run-memories, run-complete). A
+ *   reporting frame is never put in the generic queue: `send` stamps it with
+ *   a per-lease, strictly increasing `seq` and routes it straight into its
+ *   lease's buffer, where it stays until the host's `lease-ack` or
+ *   `run-complete-ack` says otherwise. Handing a frame to the socket is not
+ *   delivery, and losing one that way would otherwise put a permanent hole in
+ *   the host's console for that run (or, for run-complete, strand the lease
+ *   forever, since claimedLeases in daemon.ts only releases it on ack). A
+ *   lease whose buffer is `awaitingAck` (set on every socket close, cleared
+ *   by the matching `lease-ack`, or by the REPLAY_UNBLOCK_MS backstop) holds
+ *   everything new instead of sending past the gap the host hasn't
+ *   reconciled yet; see the module's `send` and `flushLease`.
+ *
+ * Because reporting frames never reach the generic queue, that queue can
+ * never itself contain one to drop on close; nothing here needs to filter it
+ * for that case; the invariant is enforced structurally by `send` routing
+ * reporting frames only into `sendReporting`.
  */
 export function connectToHost(options: WorkerConnectionOptions): WorkerConnection {
-  const { hostUrl, name, capabilities, activeLeases, unacknowledged } = options;
+  const { hostUrl, name, capabilities, activeLeases } = options;
   const wsUrl = toWsUrl(hostUrl);
 
   // A supplied token wins over a stored credential on the first attempt, even
@@ -140,11 +228,13 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
   let backoffMs = WORKER_BACKOFF_INITIAL_MS;
   let heartbeatTimer: NodeJS.Timeout | undefined;
   let reconnectTimer: NodeJS.Timeout | undefined;
+  let replayBackstopTimer: NodeJS.Timeout | undefined;
   // Each flips back once the corresponding condition resolves, so the next
   // occurrence logs again instead of staying silent forever.
   let loggedDisconnect = false;
   let loggedDrop = false;
   let loggedUnregistered = false;
+  let loggedBufferFull = false;
   // Tracks whether the socket currently in flight ever actually opened, so a
   // close can tell "opened but the host never registered it" (a bad token, a
   // protocol mismatch that didn't get a `rejected` frame, a host that's
@@ -152,14 +242,111 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
   // failure (unreachable host, refused port), which gets no special log.
   let opened = false;
   let handler: (message: HostMessage) => void = () => {};
+  /** Run id per lease, so an expiring lease can name the run it fences. */
+  const leaseRuns = new Map<string, string>();
 
   const queue: WorkerMessage[] = [];
+  const leaseBuffers = new Map<string, LeaseBuffer>();
+  // Frames already handed to the current socket, so a steady-state lease-ack
+  // (or an already-unblocked buffer) doesn't resend what's already in
+  // flight. Scoped to the current socket: rebuilt fresh on every connect(),
+  // since a frame handed to a socket that's since died was never actually
+  // delivered and must be eligible for the next session's replay.
+  let delivered = new WeakSet<ReportingMessage>();
+
+  const getOrCreateLeaseBuffer = (leaseId: string): LeaseBuffer => {
+    let buffer = leaseBuffers.get(leaseId);
+    if (!buffer) {
+      buffer = { seq: 0, frames: [], awaitingAck: false, lastAckedSeq: -1, gapThrough: 0, droppedSinceGap: 0, expiresAt: 0 };
+      leaseBuffers.set(leaseId, buffer);
+    }
+    return buffer;
+  };
+
+  /**
+   * Tell the host about everything this lease has given up on, so its
+   * watermark can step over the hole. Sent through the generic queue rather
+   * than the lease's own buffer: the buffer is exactly what is stuck behind
+   * the hole, so a frame announcing it cannot live there. Re-sent on every
+   * registration, since a host that restarted before its debounced watermark
+   * write landed would otherwise wait for frames nobody has.
+   */
+  const reportLeaseGap = (leaseId: string, runId: string, buffer: LeaseBuffer): void => {
+    if (buffer.gapThrough <= 0) return;
+    send({ type: "lease-gap", leaseId, runId, throughSeq: buffer.gapThrough, dropped: buffer.droppedSinceGap });
+  };
+
+  /**
+   * Hold a lease's buffer to WORKER_REPLAY_BUFFER_LIMIT, dropping the
+   * cheapest frames first. Dropping punches a hole in the lease's sequence
+   * numbers, and the host's watermark will not cross one on its own, so every
+   * drop is accounted for: `gapThrough` moves up to just below the oldest
+   * frame still held, which is by definition the point below which everything
+   * has been either acknowledged or dropped, and the host is told (see
+   * reportLeaseGap). Without that the buffer would grow forever behind a
+   * watermark that could never advance.
+   */
+  const capLeaseBuffer = (leaseId: string, runId: string, buffer: LeaseBuffer): void => {
+    let dropped = 0;
+    while (buffer.frames.length > WORKER_REPLAY_BUFFER_LIMIT) {
+      let index = -1;
+      for (const type of DROPPABLE_TYPES) {
+        index = buffer.frames.findIndex((frame) => frame.type === type);
+        if (index >= 0) break;
+      }
+      // Nothing left that's safe to drop (only run-patch/run-memories/
+      // run-complete remain): let the buffer exceed the cap rather than
+      // corrupt the host's eventual copy of the run.
+      if (index < 0) break;
+      const [gone] = buffer.frames.splice(index, 1);
+      if (gone) delivered.delete(gone);
+      dropped += 1;
+      if (!loggedBufferFull) {
+        loggedBufferFull = true;
+        console.error(`[brevi] worker replay buffer for lease ${leaseId} is full; dropping frames until the host catches up`);
+      }
+    }
+    if (dropped === 0) return;
+    buffer.droppedSinceGap += dropped;
+    // Everything below the oldest frame still held is gone for good: either
+    // the host acknowledged it, or this cap dropped it.
+    const oldest = buffer.frames[0]?.seq ?? buffer.seq + 1;
+    buffer.gapThrough = Math.max(buffer.gapThrough, oldest - 1);
+    reportLeaseGap(leaseId, runId, buffer);
+  };
+
+  const flushLease = (buffer: LeaseBuffer): void => {
+    if (!registered || !socket || socket.readyState !== WebSocket.OPEN || buffer.awaitingAck) return;
+    for (const frame of buffer.frames) {
+      if (delivered.has(frame)) continue;
+      delivered.add(frame);
+      socket.send(JSON.stringify(frame));
+    }
+  };
+
+  const sendReporting = (message: ReportingMessage): void => {
+    const buffer = getOrCreateLeaseBuffer(message.leaseId);
+    // Every reporting frame names its run, which is what a lease-gap needs to
+    // be addressed to; a lease this connection never saw dispatched (it
+    // reconnected mid-run) learns its run id here.
+    leaseRuns.set(message.leaseId, message.runId);
+    const stamped = { ...message, seq: ++buffer.seq } as ReportingMessage;
+    buffer.frames.push(stamped);
+    capLeaseBuffer(message.leaseId, message.runId, buffer);
+    flushLease(buffer);
+  };
 
   const enqueue = (message: WorkerMessage): void => {
     if (queue.length >= OUTBOUND_QUEUE_LIMIT) {
-      const dropIndex = queue.findIndex((m) => m.type === "run-event");
+      // Cheapest first, and never a `lease-gap`: that frame is what unsticks
+      // the host's watermark, so dropping it would strand every lease behind
+      // the hole it was announcing.
+      const dropIndex = queue.findIndex((m) => m.type === "run-event" || m.type === "worker-log");
       if (dropIndex >= 0) queue.splice(dropIndex, 1);
-      else queue.shift();
+      else {
+        const keepIndex = queue.findIndex((m) => m.type !== "lease-gap");
+        if (keepIndex >= 0) queue.splice(keepIndex, 1);
+      }
       if (!loggedDrop) {
         loggedDrop = true;
         console.error("[brevi] worker outbound queue is full; dropping messages until the connection recovers");
@@ -177,9 +364,41 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
   };
 
   const send = (message: WorkerMessage): void => {
+    if (isReportingMessage(message)) {
+      sendReporting(message);
+      return;
+    }
     enqueue(message);
     flush();
   };
+
+  /** Forget a lease entirely: no buffer, no deadline, nothing left to replay or renew. */
+  const forgetLease = (leaseId: string): void => {
+    leaseBuffers.delete(leaseId);
+    leaseRuns.delete(leaseId);
+  };
+
+  /**
+   * The worker half of the fence. A lease carries a deadline the host renews
+   * on every heartbeat, so passing it means this worker has been out of touch
+   * for longer than the host was ever going to wait: the host has written the
+   * lease off and may already have given the run to another worker. Stopping
+   * here is what keeps two workers off the same branch, and it is the only
+   * thing that can, since a worker in this state is by definition not
+   * receiving anything the host sends.
+   */
+  const sweepLeaseDeadlines = (): void => {
+    const now = Date.now();
+    for (const [leaseId, buffer] of Array.from(leaseBuffers)) {
+      if (buffer.expiresAt === 0 || buffer.expiresAt > now) continue;
+      const runId = leaseRuns.get(leaseId) ?? "";
+      console.error(`[brevi] lease ${leaseId} for run ${runId} passed its deadline with no word from the host; abandoning the run`);
+      forgetLease(leaseId);
+      options.onLeaseLost?.(leaseId, runId, "the lease expired while this worker could not reach the host");
+    }
+  };
+  const leaseSweepTimer = setInterval(sweepLeaseDeadlines, LEASE_DEADLINE_SWEEP_MS);
+  leaseSweepTimer.unref?.();
 
   const stopHeartbeat = (): void => {
     if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -262,20 +481,37 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
     loggedDisconnect = false;
     loggedDrop = false;
     loggedUnregistered = false;
+    loggedBufferFull = false;
     backoffMs = WORKER_BACKOFF_INITIAL_MS;
     console.log(
       `[brevi] registered with ${hostUrl} as worker "${message.name}" (${workerId}, host ${message.hostVersion})`,
     );
     startHeartbeat();
-    // Requeued behind anything already waiting, so a replayed completion
-    // still trails the frames that were reported before it. A frame still
-    // sitting in the queue was never handed to a socket and needs no
-    // replay: enqueueing it again would flush both copies before either
-    // could be acknowledged, and the host would complete the lease twice.
-    for (const pending of unacknowledged?.() ?? []) {
-      if (!queue.includes(pending)) enqueue(pending);
+    // Restate every hole this worker has given up on before anything else
+    // goes out. A host that restarted before its debounced watermark write
+    // landed is back to waiting for frames nobody has any more, and only this
+    // frame can tell it to stop; re-sending one it already applied is a
+    // no-op.
+    for (const [leaseId, buffer] of leaseBuffers) {
+      const runId = leaseRuns.get(leaseId);
+      if (runId) reportLeaseGap(leaseId, runId, buffer);
     }
     flush();
+    // Backstop against a host that never answers with a lease-ack or
+    // run-complete-ack for a lease this worker re-claimed: an older host
+    // (predates the lease-ack frame) or a single lost ack must not leave
+    // that lease's buffer stuck awaiting one forever. Rescheduled on
+    // every registration, so a lease-ack that arrives first (the normal
+    // path) always wins and this simply never fires for it.
+    stopReplayBackstop();
+    replayBackstopTimer = setTimeout(() => {
+      for (const buffer of leaseBuffers.values()) {
+        if (!buffer.awaitingAck) continue;
+        buffer.awaitingAck = false;
+        flushLease(buffer);
+      }
+    }, REPLAY_UNBLOCK_MS);
+    replayBackstopTimer.unref?.();
     options.onState?.(message.state);
   };
 
@@ -323,11 +559,17 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
     fatal(`the host rejected this worker: ${reason}`);
   };
 
+  const stopReplayBackstop = (): void => {
+    if (replayBackstopTimer) clearTimeout(replayBackstopTimer);
+    replayBackstopTimer = undefined;
+  };
+
   const connect = (): void => {
     if (closed) return;
     const ws = new WebSocket(wsUrl);
     socket = ws;
     opened = false;
+    delivered = new WeakSet<ReportingMessage>();
 
     ws.on("open", () => {
       opened = true;
@@ -380,6 +622,7 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
         revoked = true;
         closed = true;
         stopHeartbeat();
+        stopReplayBackstop();
         if (reconnectTimer) clearTimeout(reconnectTimer);
         options.onRevoked?.(message.reason);
         return;
@@ -388,6 +631,60 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
       // still reaches a worker that missed the push, the push so it takes
       // effect at once rather than at the next heartbeat.
       if (message.type === "heartbeat-ack" || message.type === "worker-state") options.onState?.(message.state);
+      if (message.type === "dispatch") {
+        // Note the lease's deadline before the daemon starts executing: it is
+        // what this worker fences itself with if the host goes silent.
+        const buffer = getOrCreateLeaseBuffer(message.lease.id);
+        leaseRuns.set(message.lease.id, message.lease.runId);
+        if (message.lease.expiresAt) buffer.expiresAt = Date.parse(message.lease.expiresAt);
+        handler(message);
+        return;
+      }
+      if (message.type === "lease-lost") {
+        // The host has moved on: whatever is running for this lease has to
+        // stop, and nothing about it is worth sending any more.
+        console.error(`[brevi] the host took back lease ${message.leaseId} for run ${message.runId}: ${message.reason}`);
+        forgetLease(message.leaseId);
+        options.onLeaseLost?.(message.leaseId, message.runId, message.reason);
+        return;
+      }
+      if (message.type === "lease-ack") {
+        // Handled entirely here, like registered/rejected: it's connection
+        // bookkeeping, not something daemon.ts's dispatch/cancel/discard
+        // handler needs to see.
+        const buffer = leaseBuffers.get(message.leaseId);
+        if (buffer) {
+          // Every ack is also a renewal: the host restates the deadline it
+          // is holding, and this worker stops the run itself if it lapses.
+          buffer.expiresAt = Date.parse(message.expiresAt);
+          leaseRuns.set(message.leaseId, message.runId);
+          buffer.frames = buffer.frames.filter((frame) => (frame.seq ?? 0) > message.seq);
+          // The host has reported the same watermark twice while frames it
+          // has still not acknowledged are outstanding. On a live connection
+          // that means a whole heartbeat interval passed with no progress, so
+          // whatever went out past that point did not land (a write that
+          // failed host-side), and it will never be resent on its own:
+          // `delivered` remembers handing it to this socket, and only a
+          // disconnect clears that. Making those frames eligible again is
+          // what retries them, and it is the only thing that recovers a
+          // run-complete whose write failed while the socket stayed healthy.
+          // Duplicates cost nothing: the host drops a frame it has already
+          // applied by seq.
+          if (message.seq === buffer.lastAckedSeq) {
+            for (const frame of buffer.frames) delivered.delete(frame);
+          }
+          buffer.lastAckedSeq = message.seq;
+          buffer.awaitingAck = false;
+          flushLease(buffer); // the replay: whatever the host hasn't applied yet, in order
+        }
+        return;
+      }
+      if (message.type === "run-complete-ack") {
+        // The host is done with this lease: nothing left to replay for it,
+        // and nothing left to fence. Still forwarded below so daemon.ts can
+        // release its own claim.
+        forgetLease(message.leaseId);
+      }
       handler(message);
     });
 
@@ -396,6 +693,11 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
       const wasOpened = opened;
       registered = false;
       stopHeartbeat();
+      stopReplayBackstop();
+      // Every lease still holding unacknowledged frames now has to wait for
+      // the reconnect to tell it where the host got to, so nothing sends
+      // past the gap this drop just created.
+      for (const buffer of leaseBuffers.values()) buffer.awaitingAck = true;
       if (!closed) {
         if (wasRegistered) {
           if (!loggedDisconnect) {
@@ -422,6 +724,12 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
     ws.on("error", () => {});
   };
 
+  const pendingCount = (): number => {
+    let count = queue.length;
+    for (const buffer of leaseBuffers.values()) count += buffer.frames.length;
+    return count;
+  };
+
   connect();
 
   return {
@@ -429,28 +737,29 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
     onHostMessage(next: (message: HostMessage) => void): void {
       handler = next;
     },
-    pendingCount(): number {
-      return queue.length;
-    },
+    pendingCount,
     async drain(timeoutMs: number): Promise<boolean> {
-      // Polls rather than hooking into flush(): a drain only ever happens
-      // once, during shutdown, so the simplicity of polling outweighs the
-      // cost of an interval tick. The queue can still be non-empty at the
-      // deadline if the socket is disconnected and reconnecting (flush()
-      // only sends once registered); the caller decides what to do with a
-      // `false` return rather than this waiting forever.
+      // Polls rather than hooking into flush()/flushLease(): a drain only
+      // ever happens once, during shutdown, so the simplicity of polling
+      // outweighs the cost of an interval tick. pendingCount() can still be
+      // non-zero at the deadline if the socket is disconnected and
+      // reconnecting, or a lease is still awaitingAck its lease-ack; the
+      // caller decides what to do with a `false` return rather than this
+      // waiting forever.
       const deadline = Date.now() + Math.max(0, timeoutMs);
       // A revoked worker has nothing left to flush to: the host closed the
       // socket and would refuse anything this worker still sends, so waiting
       // the deadline out would only delay the shutdown by the full timeout.
-      while (queue.length > 0 && !revoked && Date.now() < deadline) {
+      while (pendingCount() > 0 && !revoked && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      return queue.length === 0;
+      return pendingCount() === 0;
     },
     close(): void {
       closed = true;
       stopHeartbeat();
+      stopReplayBackstop();
+      clearInterval(leaseSweepTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       socket?.close();
     },

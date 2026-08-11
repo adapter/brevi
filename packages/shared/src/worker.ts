@@ -80,6 +80,13 @@ export const WORKER_MAX_ARTIFACT_BYTES = 25 * 1024 * 1024;
  * the host silently drops.
  */
 export const WORKER_MAX_CONCURRENCY = 64;
+/**
+ * Most lease-scoped reporting frames a worker retains per lease so a host
+ * that missed them (a restart, a network blip) can have them replayed. Once
+ * over the limit the oldest droppable frame goes first; a `run-complete` is
+ * never dropped.
+ */
+export const WORKER_REPLAY_BUFFER_LIMIT = 2_000;
 
 /**
  * Compile-time assertion that a wire schema and the domain interface it
@@ -231,6 +238,8 @@ export const runSchema = z.object({
   agentSessionId: z.string().optional(),
   createdAt: z.string(),
   queuedAt: z.string().optional(),
+  /** Why a queued run has not been dispatched yet; mirrors Run.queueReason. */
+  queueReason: z.string().optional(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
   result: runResultSchema.optional(),
@@ -316,7 +325,11 @@ export const runLeaseSchema = z.object({
   id: z.string().min(1),
   runId: z.string().min(1),
   issuedAt: z.string(),
-  /** When the host stops expecting this lease's worker to report; absent = no deadline yet (Fleet 3 owns expiry policy). */
+  /**
+   * When the host stops expecting this lease's worker to report. Renewed on
+   * every heartbeat; once it passes with no contact the host expires the
+   * lease, marks the run interrupted and requeues it.
+   */
   expiresAt: z.string().optional(),
 });
 export type RunLease = z.infer<typeof runLeaseSchema>;
@@ -423,6 +436,15 @@ export const runPatchMessageSchema = z.object({
   leaseId: z.string(),
   runId: z.string(),
   patch: runPatchSchema,
+  /**
+   * Position of this frame in its lease's reporting stream, assigned by the
+   * worker's connection and strictly increasing per lease. The host applies a
+   * frame only when its seq is above the highest it has already applied for
+   * that lease, which is what makes a replay after a reconnect idempotent
+   * rather than a duplicated console. Absent from a worker that predates
+   * buffered replay; such a frame is always applied.
+   */
+  seq: z.number().int().nonnegative().optional(),
 });
 export type RunPatchMessage = z.infer<typeof runPatchMessageSchema>;
 
@@ -431,6 +453,15 @@ export const runEventMessageSchema = z.object({
   leaseId: z.string(),
   runId: z.string(),
   event: runEventSchema,
+  /**
+   * Position of this frame in its lease's reporting stream, assigned by the
+   * worker's connection and strictly increasing per lease. The host applies a
+   * frame only when its seq is above the highest it has already applied for
+   * that lease, which is what makes a replay after a reconnect idempotent
+   * rather than a duplicated console. Absent from a worker that predates
+   * buffered replay; such a frame is always applied.
+   */
+  seq: z.number().int().nonnegative().optional(),
 });
 export type RunEventMessage = z.infer<typeof runEventMessageSchema>;
 
@@ -441,6 +472,15 @@ export const runArtifactMessageSchema = z.object({
   artifact: artifactRefSchema,
   /** Base64-encoded artifact bytes; the host writes it into the run's artifact directory. The worker must not send more than WORKER_MAX_ARTIFACT_BYTES of decoded data. */
   data: z.string(),
+  /**
+   * Position of this frame in its lease's reporting stream, assigned by the
+   * worker's connection and strictly increasing per lease. The host applies a
+   * frame only when its seq is above the highest it has already applied for
+   * that lease, which is what makes a replay after a reconnect idempotent
+   * rather than a duplicated console. Absent from a worker that predates
+   * buffered replay; such a frame is always applied.
+   */
+  seq: z.number().int().nonnegative().optional(),
 });
 export type RunArtifactMessage = z.infer<typeof runArtifactMessageSchema>;
 
@@ -453,6 +493,15 @@ export const runMemoriesMessageSchema = z.object({
   ident: z.string().optional(),
   /** Facts the run wrote to .brevi/memories.md; the host owns the memory store, so it records them and logs the outcome. */
   learned: z.array(z.string()),
+  /**
+   * Position of this frame in its lease's reporting stream, assigned by the
+   * worker's connection and strictly increasing per lease. The host applies a
+   * frame only when its seq is above the highest it has already applied for
+   * that lease, which is what makes a replay after a reconnect idempotent
+   * rather than a duplicated console. Absent from a worker that predates
+   * buffered replay; such a frame is always applied.
+   */
+  seq: z.number().int().nonnegative().optional(),
 });
 export type RunMemoriesMessage = z.infer<typeof runMemoriesMessageSchema>;
 
@@ -499,6 +548,15 @@ export const runCompleteMessageSchema = z.object({
       retainedUntil: z.string().optional(),
     })
     .optional(),
+  /**
+   * Position of this frame in its lease's reporting stream, assigned by the
+   * worker's connection and strictly increasing per lease. The host applies a
+   * frame only when its seq is above the highest it has already applied for
+   * that lease, which is what makes a replay after a reconnect idempotent
+   * rather than a duplicated console. Absent from a worker that predates
+   * buffered replay; such a frame is always applied.
+   */
+  seq: z.number().int().nonnegative().optional(),
 });
 export type RunCompleteMessage = z.infer<typeof runCompleteMessageSchema>;
 
@@ -509,6 +567,32 @@ export const workerLogMessageSchema = z.object({
   message: z.string(),
 });
 export type WorkerLogMessage = z.infer<typeof workerLogMessageSchema>;
+
+/**
+ * Frames the worker will never be able to deliver, so the host stops waiting
+ * for them. The escape hatch for the one thing that would otherwise wedge the
+ * protocol: the host's watermark is the contiguous applied prefix and will not
+ * step over a missing sequence number, while the worker's replay buffer is
+ * bounded (WORKER_REPLAY_BUFFER_LIMIT) and drops frames when a host stays
+ * unreachable for long enough. Without this the two would deadlock, the
+ * watermark stuck below the hole forever and the buffer growing without
+ * bound behind it.
+ *
+ * `throughSeq` is the highest sequence number the worker no longer holds
+ * anything at or below, so it is only ever sent once every frame under it has
+ * been either acknowledged or dropped. The host treats the whole range as
+ * accounted for, advances past it, and logs the loss against the run: a few
+ * missing console lines are visible and survivable, a stalled run is not.
+ */
+export const leaseGapMessageSchema = z.object({
+  type: z.literal("lease-gap"),
+  leaseId: z.string(),
+  runId: z.string(),
+  throughSeq: z.number().int().nonnegative(),
+  /** How many frames were actually dropped in that range, for the host's log line. */
+  dropped: z.number().int().nonnegative(),
+});
+export type LeaseGapMessage = z.infer<typeof leaseGapMessageSchema>;
 
 // --- Interactive attach ----------------------------------------------------
 //
@@ -552,6 +636,7 @@ export const workerMessageSchema = z.discriminatedUnion("type", [
   runMemoriesMessageSchema,
   runCompleteMessageSchema,
   workerLogMessageSchema,
+  leaseGapMessageSchema,
   attachDataMessageSchema,
   attachExitMessageSchema,
   attachErrorMessageSchema,
@@ -635,6 +720,13 @@ export const dispatchMessageSchema = z.object({
    * worker's provider and Firecracker image paths are local to its machine.
    */
   config: configSchema,
+  /**
+   * Firecracker size preset the host placed this run at (see PD-40). A
+   * Firecracker worker boots the run's VM with it instead of its local
+   * default; every other provider ignores it. Explicit `vcpus`/`memMib`
+   * overrides in the worker's own config still win, as they do for any size.
+   */
+  vmSize: z.enum(["small", "medium", "large"]).optional(),
 });
 export type DispatchMessage = z.infer<typeof dispatchMessageSchema>;
 
@@ -657,6 +749,56 @@ export const runCompleteAckMessageSchema = z.object({
   runId: z.string(),
 });
 export type RunCompleteAckMessage = z.infer<typeof runCompleteAckMessageSchema>;
+
+/**
+ * How far the host has got through one lease's reporting stream. Sent right
+ * after `registered` for every lease a reconnecting worker still claims (so
+ * it knows what to replay before it sends anything newer), and again on every
+ * heartbeat (so a long-running lease's replay buffer keeps getting trimmed).
+ * `seq` is the highest sequence number the host has applied for the lease,
+ * with every sequence below it applied too; 0 means it has applied nothing
+ * yet. It never runs ahead of a gap, so a repeat of the same number is the
+ * worker's cue that something it sent did not land.
+ */
+export const leaseAckMessageSchema = z.object({
+  type: z.literal("lease-ack"),
+  leaseId: z.string(),
+  runId: z.string(),
+  seq: z.number().int().nonnegative(),
+  /**
+   * The lease's deadline as the host currently holds it, which is what makes
+   * this frame a renewal and not just an acknowledgement. The worker keeps
+   * its own copy and stops the run itself once it passes with no further
+   * contact: see `leaseLostMessageSchema` for why a run must never outlive
+   * its lease.
+   */
+  expiresAt: z.string(),
+});
+export type LeaseAckMessage = z.infer<typeof leaseAckMessageSchema>;
+
+/**
+ * The host no longer holds this lease, so whatever the worker is still doing
+ * for it must stop. The fence around a re-dispatched run: once a lease
+ * expires the host is free to hand that run to another worker, and two
+ * workers pushing the same deterministic branch at once is exactly what this
+ * exists to prevent.
+ *
+ * Sent on registration for every lease a reconnecting worker still claims
+ * that the host has no record of, which covers the partitioned worker that
+ * comes back. The worker aborts the run, drops the claim and drops the
+ * lease's replay buffer without reporting anything: the host has moved on,
+ * and nothing it sends for that lease would be accepted anyway. The other
+ * half of the fence is worker-side, since a worker that never reconnects
+ * gets no frame at all: it enforces `expiresAt` locally (see
+ * `leaseAckMessageSchema`).
+ */
+export const leaseLostMessageSchema = z.object({
+  type: z.literal("lease-lost"),
+  leaseId: z.string(),
+  runId: z.string(),
+  reason: z.string(),
+});
+export type LeaseLostMessage = z.infer<typeof leaseLostMessageSchema>;
 
 export const discardMessageSchema = z.object({
   type: z.literal("discard"),
@@ -738,6 +880,8 @@ export const hostMessageSchema = z.discriminatedUnion("type", [
   dispatchMessageSchema,
   cancelMessageSchema,
   runCompleteAckMessageSchema,
+  leaseAckMessageSchema,
+  leaseLostMessageSchema,
   discardMessageSchema,
   heartbeatAckMessageSchema,
   workerStateMessageSchema,
