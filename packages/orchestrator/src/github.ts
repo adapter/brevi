@@ -51,11 +51,14 @@ export interface CreatePullRequestOptions {
   title: string;
   body: string;
   token: string;
+  /** Open as a draft. Ignored when the PR already exists: draft state is only ever cleared by markPullRequestReady. */
+  draft?: boolean;
 }
 
 /**
  * Open a PR and return its html_url. If a PR already exists for the branch
- * (rerun of a ticket), update its title/body and return the existing url.
+ * (rerun of a ticket, or the draft this run checkpointed earlier), update its
+ * title/body and return the existing url.
  */
 export async function createPullRequest(options: CreatePullRequestOptions): Promise<string> {
   const { owner, name } = parseRemote(options.remote);
@@ -68,6 +71,7 @@ export async function createPullRequest(options: CreatePullRequestOptions): Prom
       base: options.base,
       title: options.title,
       body: options.body,
+      draft: options.draft ?? false,
     });
     return created.data.html_url;
   } catch (error) {
@@ -89,6 +93,27 @@ export async function createPullRequest(options: CreatePullRequestOptions): Prom
     });
     return pr.html_url;
   }
+}
+
+/**
+ * Take a draft PR out of draft. Undrafting has no REST equivalent, so this
+ * resolves the node id and uses the GraphQL mutation. A no-op when the PR is
+ * already ready for review.
+ */
+export async function markPullRequestReady(prUrl: string, token: string): Promise<void> {
+  const parsed = parsePrUrl(prUrl);
+  if (!parsed) throw new Error(`not a github pull request url: "${prUrl}"`);
+  const octokit = new Octokit({ auth: token });
+  const pr = await octokit.rest.pulls.get({ owner: parsed.owner, repo: parsed.name, pull_number: parsed.number });
+  if (!pr.data.draft) return;
+  await octokit.graphql(
+    `mutation ($id: ID!) {
+      markPullRequestReadyForReview(input: { pullRequestId: $id }) {
+        clientMutationId
+      }
+    }`,
+    { id: pr.data.node_id },
+  );
 }
 
 /**
