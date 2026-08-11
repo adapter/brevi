@@ -6,7 +6,14 @@ import { BREVI_HOME, WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type Li
 import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
 import { ccusageCostEntry, resolveCcusageCommand, startCcusageSampler, type CcusageSampler } from "./ccusage.js";
 import { usageCollector } from "./costs.js";
-import { authenticatedRemote, createPullRequest, FALLBACK_COMMIT_IDENTITY, plainRemote, resolveCommitIdentity } from "./github.js";
+import {
+  authenticatedRemote,
+  createPullRequest,
+  FALLBACK_COMMIT_IDENTITY,
+  markPullRequestReady,
+  plainRemote,
+  resolveCommitIdentity,
+} from "./github.js";
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
 import { MemoryStore, memoryKeyFor, readRunMemories, selectMemories } from "./memory.js";
@@ -423,11 +430,26 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       delegate ? ["--agents", JSON.stringify(implementerAgent(config.agent.implementModel))] : [],
     );
 
+    // ---- checkpoint ------------------------------------------------------
+    // Everything after this point (review, the fix pass, finalizing) can fail,
+    // time out, or be cancelled without losing the implementation: it is on
+    // the branch and on a draft PR. Finalizing force-pushes the fixes onto the
+    // same branch and marks that PR ready for review.
+    await sandbox.pullDirectory(sandbox.workspacePath, pulledDir);
+    const draftPrUrl = await checkpointImplementation({ ticket, repo, branch, pulledDir, config, linear, log });
+    if (draftPrUrl) {
+      await store.update(run.id, { prUrl: draftPrUrl, prState: "draft" });
+    }
+    // pullDirectory merges into its destination, so a stale copy here would
+    // resurrect files the review fix pass deletes. Finalizing pulls afresh.
+    await rm(pulledDir, { recursive: true, force: true });
+    throwIfAborted(signal);
+
     // Adversarial review is best-effort and grounded only in the ticket plus
     // the actual codebase; confirmed findings feed a fix pass on the main
     // orchestrator model (same runAgent path, so usage limits and cost
     // tracking behave exactly as they do for the implementation pass) before
-    // the PR opens.
+    // the PR leaves draft.
     if (codexReviewEnabled(config)) {
       const findings = await runCodexReview({
         sandbox,
@@ -498,7 +520,18 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       log: (text) => log("system", text),
     });
 
-    const result = await finalizeImplementation({ ticket, repo, branch, pulledDir, artifacts, config, linear, log, evidence });
+    const result = await finalizeImplementation({
+      ticket,
+      repo,
+      branch,
+      pulledDir,
+      artifacts,
+      config,
+      linear,
+      log,
+      evidence,
+      draftPrUrl,
+    });
 
     try {
       if (await linear.moveToReview(ticket.id, signal)) {
@@ -818,40 +851,40 @@ async function collectArtifacts(
   return collected;
 }
 
-interface ImplementationFinalizeOptions {
+/** The agent's PR description, or a stand-in when it never wrote one. */
+async function readSummary(pulledDir: string, ticket: Ticket): Promise<string> {
+  const fallback = `Automated change for ${ticket.identifier}: ${ticket.title}`;
+  const summaryPath = join(pulledDir, ".brevi", "summary.md");
+  // summary.md comes from the sandbox; refuse to read it when it is a symlink
+  // or otherwise resolves outside the pulled workspace.
+  if (!(await isContainedRegularFile(pulledDir, summaryPath))) return fallback;
+  return readFile(summaryPath, "utf8")
+    .then((text) => text.trim() || fallback)
+    .catch(() => fallback);
+}
+
+/**
+ * Commit the pulled workspace onto the run branch and force-push it, returning
+ * the push time (recorded so a later follow-up can fetch "comments since the
+ * last push" against a real push time instead of commit metadata). Null when
+ * the agent changed nothing.
+ *
+ * Agent outputs (summary, demos, review notes) live with the run's artifacts:
+ * nothing under .brevi reaches the branch.
+ */
+async function commitAndPush(options: {
   ticket: Ticket;
   repo: RepoConfig;
   branch: string;
   pulledDir: string;
-  artifacts: ArtifactRef[];
-  config: BreviConfig;
-  linear: LinearService;
+  token: string;
   log: (stream: "stdout" | "stderr" | "system", text: string) => void;
-  evidence: UploadedEvidence[];
-}
-
-async function finalizeImplementation(options: ImplementationFinalizeOptions): Promise<RunResult> {
-  const { ticket, repo, branch, pulledDir, artifacts, config, linear, log, evidence } = options;
-  const token = config.github.token;
-
-  const fallbackSummary = `Automated change for ${ticket.identifier}: ${ticket.title}`;
-  const summaryPath = join(pulledDir, ".brevi", "summary.md");
-  // summary.md comes from the sandbox; refuse to read it when it is a symlink
-  // or otherwise resolves outside the pulled workspace.
-  const summary = (await isContainedRegularFile(pulledDir, summaryPath))
-    ? await readFile(summaryPath, "utf8")
-        .then((text) => text.trim())
-        .catch(() => fallbackSummary)
-    : fallbackSummary;
-
-  // Agent outputs (summary, demos) live with the run's artifacts: nothing
-  // under .brevi reaches the branch.
+}): Promise<string | null> {
+  const { ticket, repo, branch, pulledDir, token, log } = options;
   await rm(join(pulledDir, ".brevi"), { recursive: true, force: true });
   await git(["add", "-A"], pulledDir, token);
   const status = await git(["status", "--porcelain"], pulledDir, token);
-  if (!String(status.stdout).trim()) {
-    throw new Error("agent made no changes");
-  }
+  if (!String(status.stdout).trim()) return null;
   await git(
     ["commit", "-m", `${ticket.identifier}: ${ticket.title}`, "-m", `Automated by brevi for ${ticket.url}`],
     pulledDir,
@@ -863,13 +896,91 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
     pulledDir,
     token,
   );
-  // Recorded so a later follow-up can fetch "comments since the last push"
-  // against a real push time instead of commit metadata.
-  const pushedAt = new Date().toISOString();
+  return new Date().toISOString();
+}
+
+/**
+ * Push the first implementation and open it as a draft PR, before the review
+ * phase gets a chance to fail. Returns the draft's url, or null when there was
+ * nothing to push (finalizing raises "agent made no changes" for that) or when
+ * the checkpoint itself failed.
+ *
+ * Best-effort by design: finalizing pushes and opens the PR regardless, so a
+ * checkpoint failure costs the safety net, not the run. The body carries no
+ * demo section yet, since evidence is uploaded during finalizing; finalizing
+ * rewrites the body with it.
+ */
+async function checkpointImplementation(options: {
+  ticket: Ticket;
+  repo: RepoConfig;
+  branch: string;
+  pulledDir: string;
+  config: BreviConfig;
+  linear: LinearService;
+  log: (stream: "stdout" | "stderr" | "system", text: string) => void;
+}): Promise<string | null> {
+  const { ticket, repo, branch, pulledDir, config, linear, log } = options;
+  const token = config.github.token;
+  try {
+    const summary = await readSummary(pulledDir, ticket);
+    const pushedAt = await commitAndPush({ ticket, repo, branch, pulledDir, token, log });
+    if (!pushedAt) {
+      log("system", "nothing to checkpoint: the implementation left no changes");
+      return null;
+    }
+    log("system", "opening draft pull request");
+    const prUrl = await createPullRequest({
+      remote: repo.remote,
+      head: branch,
+      base: repo.defaultBranch,
+      title: `${ticket.identifier}: ${ticket.title}`,
+      body: buildPrBody({ summary, ticket, evidence: [] }),
+      token,
+      draft: true,
+    });
+    log("system", `draft pull request open: ${prUrl}`);
+    try {
+      await linear.postComment(
+        ticket.id,
+        `Opened a draft pull request for this ticket: ${prUrl}\n\nIt is marked ready for review once the run finishes.\n\n---\n${BREVI_FOOTER}`,
+      );
+    } catch (error) {
+      log("system", `failed to post Linear comment: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return prUrl;
+  } catch (error) {
+    log("system", `failed to checkpoint the implementation: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+interface ImplementationFinalizeOptions {
+  ticket: Ticket;
+  repo: RepoConfig;
+  branch: string;
+  pulledDir: string;
+  artifacts: ArtifactRef[];
+  config: BreviConfig;
+  linear: LinearService;
+  log: (stream: "stdout" | "stderr" | "system", text: string) => void;
+  evidence: UploadedEvidence[];
+  /** Set when the run already checkpointed a draft PR; this pass updates it instead of announcing a new one. */
+  draftPrUrl: string | null;
+}
+
+async function finalizeImplementation(options: ImplementationFinalizeOptions): Promise<RunResult> {
+  const { ticket, repo, branch, pulledDir, artifacts, config, linear, log, evidence, draftPrUrl } = options;
+  const token = config.github.token;
+
+  const summary = await readSummary(pulledDir, ticket);
+  const pushedAt = await commitAndPush({ ticket, repo, branch, pulledDir, token, log });
+  if (!pushedAt) throw new Error("agent made no changes");
 
   const title = `${ticket.identifier}: ${ticket.title}`;
   const body = buildPrBody({ summary, ticket, evidence });
-  log("system", "opening pull request");
+  log("system", draftPrUrl ? "updating pull request" : "opening pull request");
+  // Idempotent: with a checkpointed draft on the branch this updates that PR
+  // rather than opening a second one.
   const prUrl = await createPullRequest({
     remote: repo.remote,
     head: branch,
@@ -879,13 +990,24 @@ async function finalizeImplementation(options: ImplementationFinalizeOptions): P
     token,
   });
 
+  // Leaving a PR in draft after a completed run would stall it silently, but
+  // the work is pushed and the PR is correct either way, so a failure here is
+  // logged rather than fatal; the dashboard's PR poller reports the real state.
   try {
-    await linear.postComment(
-      ticket.id,
-      `Opened a pull request for this ticket: ${prUrl}\n\n---\n${BREVI_FOOTER}`,
-    );
+    await markPullRequestReady(prUrl, token);
   } catch (error) {
-    log("system", `failed to post Linear comment: ${error instanceof Error ? error.message : String(error)}`);
+    log("system", `failed to mark the pull request ready for review: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (prUrl !== draftPrUrl) {
+    try {
+      await linear.postComment(
+        ticket.id,
+        `Opened a pull request for this ticket: ${prUrl}\n\n---\n${BREVI_FOOTER}`,
+      );
+    } catch (error) {
+      log("system", `failed to post Linear comment: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   return {
