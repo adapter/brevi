@@ -2,11 +2,14 @@ import { describe, expect, it } from "bun:test";
 import { configSchema, repoConfigSchema } from "../src/config.js";
 import type { Run, RunEvent, Ticket } from "../src/types.js";
 import {
+  MACOS_VM_OS,
   parseHostMessage,
   parseWorkerMessage,
+  resolveWorkerOs,
   runEventSchema,
   runPatchSchema,
   WORKER_MAX_CONCURRENCY,
+  WORKER_OS_ENV,
   WORKER_PROTOCOL_VERSION,
   type HostMessage,
   type WorkerMessage,
@@ -411,5 +414,25 @@ describe("the rest of the contract", () => {
     expect(parseWorkerMessage({ type: "definitely-not-a-message" })).toBeUndefined();
     expect(parseHostMessage({ type: "dispatch" })).toBeUndefined();
     expect(parseWorkerMessage(undefined)).toBeUndefined();
+  });
+});
+
+describe("resolveWorkerOs", () => {
+  it("passes process.platform through when the env var is unset", () => {
+    expect(resolveWorkerOs("linux", {})).toBe("linux");
+    expect(resolveWorkerOs("darwin", { SOMETHING_ELSE: "1" })).toBe("darwin");
+  });
+
+  it("reports macos-vm when the managed guest VM's worker sets the override, whitespace and case included", () => {
+    expect(resolveWorkerOs("linux", { [WORKER_OS_ENV]: "macos-vm" })).toBe(MACOS_VM_OS);
+    expect(resolveWorkerOs("linux", { [WORKER_OS_ENV]: "  macos-vm  " })).toBe(MACOS_VM_OS);
+    expect(resolveWorkerOs("linux", { [WORKER_OS_ENV]: "MACOS-VM" })).toBe(MACOS_VM_OS);
+    expect(resolveWorkerOs("linux", { [WORKER_OS_ENV]: " Macos-Vm " })).toBe(MACOS_VM_OS);
+  });
+
+  it("is a whitelist, not a passthrough: any other value is ignored", () => {
+    expect(resolveWorkerOs("linux", { [WORKER_OS_ENV]: "darwin" })).toBe("linux");
+    expect(resolveWorkerOs("linux", { [WORKER_OS_ENV]: "windows" })).toBe("linux");
+    expect(resolveWorkerOs("linux", { [WORKER_OS_ENV]: "" })).toBe("linux");
   });
 });

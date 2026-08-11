@@ -4,6 +4,7 @@ import { registerAttachCommand } from "./commands/attach.js";
 import { registerDefaultCommand } from "./commands/default.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerInitCommand } from "./commands/init.js";
+import { registerMacCommand } from "./commands/mac.js";
 import { registerSetupCommand } from "./commands/setup.js";
 import { registerStartCommand } from "./commands/start.js";
 import { registerStatusCommand } from "./commands/status.js";
@@ -32,6 +33,7 @@ registerAttachCommand(program);
 registerStatusCommand(program);
 registerDoctorCommand(program);
 registerWorkerCommand(program);
+registerMacCommand(program);
 registerUpdateCommand(program);
 
 await program.parseAsync(process.argv);

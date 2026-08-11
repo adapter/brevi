@@ -101,10 +101,11 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const entry of hosts) entry.registry.stop();
-  // A dispatch queues a run-store write that isn't awaited by the caller;
-  // draining it before the directory goes away keeps a late write from
-  // failing against a path that no longer exists.
-  await store.flush();
+  // Registration, heartbeats and dispatch all queue writes that no caller
+  // awaits; draining them before the directory goes away keeps a late write
+  // from failing against a path that no longer exists. `drain` covers the
+  // run store too, so it subsumes the `store.flush()` this used to do.
+  for (const entry of hosts) await entry.registry.drain();
   await rm(dir, { recursive: true, force: true });
 });
 

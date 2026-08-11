@@ -29,10 +29,10 @@ import type {
  * question and is answered in fleet.ts: the `register` frame carries either a
  * single-use pairing token or the durable credential redeeming one bought.
  *
- * This module is node-agnostic, like config.ts, but unlike config.ts it is
- * not imported by the browser dashboard bundle, so it may freely import the
+ * This module is node-agnostic, like config.ts, so it may freely import the
  * domain types (types.ts) and the config schema (config.ts) it mirrors and
- * embeds.
+ * embeds. The dashboard bundle reaches it only for the odd plain constant
+ * (MACOS_VM_OS), never for the schemas.
  */
 
 /**
@@ -43,6 +43,30 @@ import type {
 export const WORKER_PROTOCOL_VERSION = 2;
 /** WebSocket path workers dial on the host. */
 export const WORKER_WS_PATH = "/ws/worker";
+/**
+ * HTTP path a worker's supervisor polls for demand (see FleetDemandResponse),
+ * served on the same two listeners the worker channel is: the fleet listener
+ * and the dashboard's own. It carries the same durable per-worker credential
+ * the channel authenticates with, in an `Authorization: Bearer` header, and
+ * names its worker with `?workerId=`.
+ */
+export const WORKER_DEMAND_PATH = "/api/worker/demand";
+/**
+ * HTTP path a worker's supervisor posts to in order to set its own worker's
+ * state (`?state=draining` or `?state=active`), authenticated with the same
+ * credential as WORKER_DEMAND_PATH and answered with the same
+ * FleetDemandResponse.
+ *
+ * It exists so powering a machine down can be made atomic with dispatch.
+ * Demand is only ever a snapshot: between reading it and cutting the power, a
+ * run can be queued and dispatched to a worker that is still online, and it
+ * would die with the machine. Draining first closes that window, because the
+ * scheduler stops placing runs on this worker before the answer comes back;
+ * whatever the answer then reports as in flight is the complete set of work
+ * that could be lost, and the supervisor can abandon the shutdown if it is
+ * not empty.
+ */
+export const WORKER_SELF_STATE_PATH = "/api/worker/state";
 /** How often a connected worker sends a heartbeat. */
 export const WORKER_HEARTBEAT_MS = 15_000;
 /** A worker missing this many consecutive heartbeats is treated as gone. */
@@ -253,8 +277,25 @@ export type RunEventInSync = InSync<z.infer<typeof runEventSchema>, RunEvent>;
 
 // --- Capabilities and lease ---------------------------------------------
 
+/** Env var a managed guest VM sets so its worker reports the machine it really runs on. */
+export const WORKER_OS_ENV = "BREVI_WORKER_OS";
+/** The one non-platform os label: a Linux worker inside brevi's managed macOS VM. */
+export const MACOS_VM_OS = "macos-vm";
+
+/**
+ * The os capability a worker reports: `platform` (`process.platform`) as-is,
+ * except when `env[WORKER_OS_ENV]` trimmed and lowercased equals
+ * `MACOS_VM_OS`, in which case it reports `MACOS_VM_OS` instead. A
+ * whitelist, not a passthrough: any other value of the env var is ignored,
+ * so a worker cannot use it to claim an arbitrary os label.
+ */
+export function resolveWorkerOs(platform: string, env: Record<string, string | undefined>): string {
+  const override = env[WORKER_OS_ENV];
+  return override !== undefined && override.trim().toLowerCase() === MACOS_VM_OS ? MACOS_VM_OS : platform;
+}
+
 export const workerCapabilitiesSchema = z.object({
-  /** process.platform of the worker host, e.g. "linux". */
+  /** process.platform of the worker host, e.g. "linux"; the managed macOS VM's worker reports MACOS_VM_OS ("macos-vm") instead (see resolveWorkerOs). */
   os: z.string(),
   arch: z.string(),
   /** Sandbox provider the worker resolved locally. */

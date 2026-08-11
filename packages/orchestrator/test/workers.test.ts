@@ -88,6 +88,13 @@ describe("WorkerRegistry", () => {
 
   afterEach(async () => {
     registry.stop();
+    // A dispatch queues a run-store write that isn't awaited by the caller
+    // (see `void this.#store.update` in dispatch), and so do the lease-write
+    // chains behind a run's frames. Draining them before the directory goes
+    // away keeps a late write from failing against a path that no longer
+    // exists: that surfaces as an unhandled ENOENT attributed to whichever
+    // test happens to be running next. Mirrors enrollment.test.ts.
+    await registry.drain();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -165,6 +172,58 @@ describe("WorkerRegistry", () => {
     // The host, not the worker, records who owns the run.
     await flush();
     expect(store.get(run.id)?.sandbox.workerId).toBe(workerId);
+  });
+
+  it("reports a worker's demand: connected with its lease count after a dispatch, unknown otherwise", async () => {
+    await connect();
+    const run = await queueRun();
+    expect(dispatch(run)).toBe(true);
+
+    expect(registry.workerDemand(workerId)).toEqual({
+      id: workerId,
+      connected: true,
+      state: "active",
+      activeRuns: 1,
+      attachSessions: 0,
+    });
+    expect(registry.spareCapacity()).toBe(1);
+
+    // An id the host has no record of reads as draining: whatever it is, the
+    // scheduler will not dispatch to it, so a supervisor asking on its behalf
+    // must not be told to boot a machine.
+    expect(registry.workerDemand("no-such-worker")).toEqual({
+      id: "no-such-worker",
+      connected: false,
+      state: "draining",
+      activeRuns: 0,
+      attachSessions: 0,
+    });
+  });
+
+  it("reports a drained worker's state in its demand, and drops it from spare capacity", async () => {
+    await connect();
+    expect(registry.spareCapacity()).toBe(2);
+
+    expect(await registry.setState(workerId, "draining")).toBe(true);
+
+    const demand = registry.workerDemand(workerId);
+    expect(demand.state).toBe("draining");
+    // Still connected, and still reported: draining is "accept nothing new",
+    // not "gone". What changes is that its idle slots stop counting as room
+    // the scheduler may plan against.
+    expect(demand.connected).toBe(true);
+    expect(registry.spareCapacity()).toBe(0);
+
+    expect(await registry.setState(workerId, "active")).toBe(true);
+    expect(registry.workerDemand(workerId).state).toBe("active");
+    expect(registry.spareCapacity()).toBe(2);
+  });
+
+  it("authenticates a worker's durable credential, and nothing else", async () => {
+    await connect();
+    expect(registry.authenticate(workerId, credential)).toBe(true);
+    expect(registry.authenticate(workerId, "not-the-credential")).toBe(false);
+    expect(registry.authenticate("no-such-worker", credential)).toBe(false);
   });
 
   it("refuses a worker whose pairing token is wrong", async () => {

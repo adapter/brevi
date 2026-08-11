@@ -73,6 +73,8 @@ The process provider provides **no isolation whatsoever**. The coding agent runs
 
 Firecracker requires KVM, which is a Linux kernel feature. There is no macOS port, and Apple's Hypervisor.framework is not a substitute, so on macOS `auto` always selects the process provider. For real isolation, run brevi on a Linux host, or in a Linux VM with nested virtualisation enabled.
 
+On Apple silicon M3 or newer, running macOS 15 or newer, that Linux VM with nested virtualization is exactly what `brevi mac install` sets up for you: it manages a Linux guest where Firecracker runs unchanged, so the Mac becomes a fully isolated worker instead of falling back to the process provider. See [macOS workers](/guides/macos-worker/). Older Apple silicon and Intel Macs don't expose nested virtualization and keep using the process provider described above.
+
 ## Timeouts and cleanup
 
 `sandbox.timeoutMinutes` (240, four hours, by default) is a hard wall-clock limit applied per agent execution: the implementation pass, each parallel Codex reviewer, the synthesis pass, and the fix pass each get their own budget, rather than one limit for the whole run. Hitting it kills that command. What that costs depends on which execution it was: an implementation or fix pass that times out fails the run, while a reviewer or the synthesis pass timing out only skips part or all of the best-effort [Codex review](/reference/configuration/#codex-review), and the run carries on to finalizing. A cancelled run's sandbox is destroyed immediately, and its scratch directory under `~/.brevi/workspaces/` is removed. A completed or failed run's sandbox is kept instead, for interactive resume, see below. Artifacts have already been copied into `~/.brevi/runs/` by then either way, so they survive.

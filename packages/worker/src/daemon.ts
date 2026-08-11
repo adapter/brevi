@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   CONFIG_DEFAULTS,
   FIRECRACKER_SIZES,
+  resolveWorkerOs,
   WORKSPACES_DIR,
   type BreviConfig,
   type CancelMessage,
@@ -172,7 +173,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   await provider.ensureAvailable();
 
   const capabilities: WorkerCapabilities = {
-    os: process.platform,
+    os: resolveWorkerOs(process.platform, process.env),
     arch: process.arch,
     provider: provider.name,
     kvm: await isReadWritable("/dev/kvm"),
@@ -181,7 +182,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     version: VERSION,
   };
   console.log(
-    `[brevi] provider ${provider.name} (kvm ${capabilities.kvm ? "yes" : "no"}, ${process.platform}/${process.arch}), concurrency ${concurrency}`,
+    `[brevi] provider ${provider.name} (kvm ${capabilities.kvm ? "yes" : "no"}, ${capabilities.os}/${process.arch}), concurrency ${concurrency}`,
   );
 
   /** Runs this process has executed since it started; the only source attach.ts has for a run's agentSessionId and retained-disk bookkeeping. */

@@ -15,6 +15,7 @@ import {
   type AttachExitMessage,
   type BreviConfig,
   type DispatchPrompts,
+  type FleetWorkerDemand,
   type HostMessage,
   type RegisterMessage,
   type RepoConfig,
@@ -257,6 +258,13 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
    */
   #leaseWrites = new Map<string, Promise<void>>();
   /**
+   * Every other piece of async work started with `void` rather than awaited:
+   * registration, disconnect handling, heartbeat writes, stranded leases,
+   * completions. Tracked only so `drain` can wait for them; each entry
+   * removes itself when it settles, so this stays empty in the steady state.
+   */
+  #inFlightWork = new Set<Promise<unknown>>();
+  /**
    * Leases whose completion is being applied. Settling is async, so two
    * run-complete frames for one lease can both pass the lease lookup before
    * either settles, and a duplicate is expected by design: a worker replays a
@@ -325,7 +333,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
         // disk, bad permissions). Left unhandled that becomes an unhandled
         // rejection and can take the host process down over one worker's
         // registration, so it is caught here and the socket refused instead.
-        void this.#handleRegister(socket, result.data, address).then(
+        const registration = this.#handleRegister(socket, result.data, address).then(
           (registered) => {
             registering = false;
             if (!registered) {
@@ -345,6 +353,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
             socket.close();
           },
         );
+        this.#track(registration);
         return;
       }
       const message = parseWorkerMessage(parsed);
@@ -419,6 +428,16 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     return this.#fleet.mintPairingToken();
   }
 
+  /**
+   * Whether a durable credential belongs to this worker, for a caller that
+   * arrives over HTTP rather than on the worker channel (see
+   * WORKER_DEMAND_PATH). The same constant-time comparison the channel's own
+   * register uses; nothing about the worker is returned, only the verdict.
+   */
+  authenticate(workerId: string, credential: string): boolean {
+    return this.#fleet.authenticate(workerId, credential) !== null;
+  }
+
   /** Rename an enrolled worker. `name` is trusted to already be sanitized and non-empty. */
   async rename(id: string, name: string): Promise<boolean> {
     if (!(await this.#fleet.rename(id, name))) return false;
@@ -475,6 +494,41 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   }
 
   /**
+   * Sum of every connected worker's free capacity (maxConcurrency minus its
+   * current lease count, floored at 0), draining workers excluded for the
+   * same reason `capacity` excludes them: a drained machine's idle slots are
+   * not room the scheduler may plan against.
+   */
+  spareCapacity(): number {
+    let total = 0;
+    for (const worker of this.#workers.values()) {
+      if (this.#isDraining(worker.id)) continue;
+      total += Math.max(0, worker.capabilities.maxConcurrency - this.#leasesForWorker(worker.id).length);
+    }
+    return total;
+  }
+
+  /** Live state of one worker, for a supervisor deciding whether its machine may sleep. */
+  workerDemand(workerId: string): FleetWorkerDemand {
+    let attachSessions = 0;
+    for (const session of this.#attachSessions.values()) {
+      if (session.workerId === workerId) attachSessions++;
+    }
+    return {
+      id: workerId,
+      connected: this.#workers.has(workerId),
+      // An id this host has no record of reads as draining rather than
+      // active: whatever it is, the scheduler will never dispatch to it, and
+      // that is exactly what a supervisor asking "should I be awake" needs to
+      // hear. The demand route authenticates first, so in practice only a
+      // worker revoked mid-poll takes this branch.
+      state: this.#fleet.get(workerId)?.state ?? "draining",
+      activeRuns: this.#leasesForWorker(workerId).length,
+      attachSessions,
+    };
+  }
+
+  /**
    * Dispatch one run to whichever connected worker has the most free
    * capacity (maxConcurrency minus its current lease count). Returns false
    * with nothing sent when no worker has room; the run simply stays queued.
@@ -489,7 +543,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     this.#leaseByRun.set(payload.run.id, leaseId);
 
     const run: Run = { ...payload.run, sandbox: { ...payload.run.sandbox, workerId: target.id } };
-    void this.#store.update(payload.run.id, { sandbox: run.sandbox });
+    this.#track(this.#store.update(payload.run.id, { sandbox: run.sandbox }));
 
     this.#send(target.socket, {
       type: "dispatch",
@@ -592,6 +646,38 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   }
 
   /** Cancel every outstanding lease and close every socket; called on orchestrator shutdown. */
+  /**
+   * Wait for every write this registry still has in flight to land.
+   *
+   * Most of what it writes is started with `void`, deliberately: a frame
+   * arriving on a socket cannot be awaited by whoever sent it, and a failing
+   * write must not become an unhandled rejection. The cost is that `stop`
+   * returning says nothing about the disk, so a shutdown, or a test tearing
+   * its temp directory down, can race a run's final state on its way out.
+   * This is how a caller that needs those writes to have happened says so.
+   *
+   * Looped rather than awaited once, because these chains feed each other: a
+   * lease write queues a run-store write, and completing a run can strand
+   * another lease. Settling is what matters, not succeeding, so a write that
+   * fails still counts as drained.
+   */
+  async drain(): Promise<void> {
+    // Bounded so a pathological chain that keeps queueing work cannot hang a
+    // shutdown forever; ten rounds is far past anything the protocol produces.
+    for (let round = 0; round < 10; round += 1) {
+      const pending = [...this.#inFlightWork, ...this.#leaseWrites.values()];
+      if (pending.length === 0) break;
+      await Promise.allSettled(pending);
+    }
+    await this.#store.flush();
+  }
+
+  /** Register a `void`-ed promise with `drain`, and forget it once it settles. */
+  #track(work: Promise<unknown>): void {
+    const tracked = work.finally(() => this.#inFlightWork.delete(tracked));
+    this.#inFlightWork.add(tracked);
+  }
+
   stop(): void {
     this.#stopped = true;
     // Every socket below is about to be terminated regardless, so whether
@@ -777,7 +863,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       // its buffered reporting resumes on this connection.
       const claimed = new Set(message.activeLeases.map((lease) => lease.id));
       for (const lease of this.#leasesForWorker(workerId)) {
-        if (!claimed.has(lease.id)) void this.#strandLease(lease.id);
+        if (!claimed.has(lease.id)) this.#track(this.#strandLease(lease.id));
       }
 
       this.#send(socket, {
@@ -900,7 +986,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     );
     const timer2 = setTimeout(() => {
       this.#grace.delete(entry.id);
-      for (const leaseId of leaseIds) void this.#strandLease(leaseId);
+      for (const leaseId of leaseIds) this.#track(this.#strandLease(leaseId));
     }, graceSeconds * 1000);
     timer2.unref();
     this.#grace.set(entry.id, { leaseIds: new Set(leaseIds), timer: timer2 });
@@ -978,12 +1064,13 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
         // The ack and the store write are both async now (the fleet record's
         // lastSeenAt has to land on disk), so a failing write can't be left
         // to become an unhandled rejection that takes the host down.
-        void this.#handleHeartbeat(worker, message.leaseIds).catch((error: unknown) => {
+        const heartbeat = this.#handleHeartbeat(worker, message.leaseIds).catch((error: unknown) => {
           console.error(
             `[brevi] worker ${worker.name} (${worker.id}) heartbeat write failed: ` +
               `${error instanceof Error ? error.message : String(error)}`,
           );
         });
+        this.#track(heartbeat);
         return;
       case "dispatch-accepted":
         return; // acknowledgement only; the lease already exists from dispatch()
@@ -1028,7 +1115,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
         if (!lease) return;
         if (this.#completing.has(lease.id)) return; // a replay of one already being applied
         this.#completing.add(lease.id);
-        void this.#completeRun(workerId, lease, message);
+        this.#track(this.#completeRun(workerId, lease, message));
         return;
       }
       case "worker-log": {

@@ -12,6 +12,8 @@ import {
   isPlainObject,
   redactConfig,
   urlHost,
+  WORKER_DEMAND_PATH,
+  WORKER_SELF_STATE_PATH,
   WORKER_WS_PATH,
   type BreviConfig,
   type ClientMessage,
@@ -136,6 +138,67 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+interface WorkerApiResult {
+  status: 200 | 400 | 403 | 404;
+  body: unknown;
+}
+
+/**
+ * The worker-supervisor API, written once and served from both listeners: the
+ * dashboard's (which covers a supervisor on this same machine, the default
+ * loopback setup) and the fleet listener's (which is what a supervisor on
+ * another machine can reach). Every other route on the dashboard listener is
+ * unauthenticated and relies on that listener's bind address; these two
+ * cannot, since the caller runs wherever its worker does, so they
+ * authenticate with that worker's own durable credential and reveal nothing
+ * without it.
+ *
+ *   GET  WORKER_DEMAND_PATH?workerId=      -> FleetDemandResponse
+ *        Deliberately answered while the worker is offline: deciding to boot
+ *        a stopped machine is the whole reason a supervisor polls.
+ *   POST WORKER_SELF_STATE_PATH?workerId=&state= -> FleetDemandResponse
+ *        Drain or re-activate one's own worker, answered with the demand as
+ *        it stands after the change. One round trip on purpose: a supervisor
+ *        about to power its machine off needs the drain and the "what is
+ *        still in flight" read to be the same operation, or a run dispatched
+ *        between the two would be cut off mid-execution.
+ *
+ * Returns 404 for anything else, so the fleet listener can hand it every
+ * request it receives and 404 whatever this declines.
+ */
+async function workerApi(
+  orchestrator: Orchestrator,
+  method: string,
+  url: URL,
+  authorization: string | undefined,
+): Promise<WorkerApiResult> {
+  const demand = url.pathname === WORKER_DEMAND_PATH && method === "GET";
+  const setState = url.pathname === WORKER_SELF_STATE_PATH && method === "POST";
+  if (!demand && !setState) return { status: 404, body: { error: "not found" } };
+
+  const workerId = url.searchParams.get("workerId") ?? "";
+  const credential = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+  if (!workerId || !credential || !orchestrator.authenticateWorker(workerId, credential)) {
+    return { status: 403, body: { error: "unknown worker, or a missing or wrong credential" } };
+  }
+
+  if (setState) {
+    const state = url.searchParams.get("state");
+    if (state !== "active" && state !== "draining") {
+      return { status: 400, body: { error: 'state must be "active" or "draining"' } };
+    }
+    try {
+      await orchestrator.setWorkerState(workerId, state);
+    } catch {
+      // Authentication just succeeded, so the only way here is a revoke
+      // landing in between, which leaves nothing to set the state of.
+      return { status: 403, body: { error: "this worker's enrollment is gone" } };
+    }
+  }
+
+  return { status: 200, body: orchestrator.fleetDemand(workerId) };
+}
+
 function buildApp(
   orchestrator: Orchestrator,
   config: BreviConfig,
@@ -214,6 +277,21 @@ function buildApp(
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }
+  });
+
+  const serveWorkerApi = async (c: { req: { url: string; method: string; header(name: string): string | undefined } }) => {
+    const result = await workerApi(orchestrator, c.req.method, new URL(c.req.url), c.req.header("Authorization"));
+    return result;
+  };
+
+  app.get(WORKER_DEMAND_PATH, async (c) => {
+    const result = await serveWorkerApi(c);
+    return c.json(result.body, result.status);
+  });
+
+  app.post(WORKER_SELF_STATE_PATH, async (c) => {
+    const result = await serveWorkerApi(c);
+    return c.json(result.body, result.status);
   });
 
   app.get("/api/runs", (c) => c.json(orchestrator.listRuns()));
@@ -591,8 +669,21 @@ async function startFleetListener(
   if (!config.fleet.host) return undefined;
 
   const fleetWss = new WebSocketServer({ noServer: true });
-  const httpServer = createServer((_req, res) => {
-    res.writeHead(404).end();
+  const httpServer = createServer((request, res) => {
+    // The only plain requests answered here are the worker-supervisor ones:
+    // they authenticate with a worker credential, exactly like the channel
+    // this listener exists for, and a supervisor on the worker's machine has
+    // no other listener it can reach. workerApi 404s everything else, so no
+    // part of the management API is reachable through this port.
+    const url = new URL(request.url ?? "/", "http://localhost");
+    void workerApi(orchestrator, request.method ?? "GET", url, request.headers.authorization)
+      .then((result) => {
+        res.writeHead(result.status, { "content-type": "application/json" }).end(JSON.stringify(result.body));
+      })
+      .catch((error: unknown) => {
+        console.error(`[brevi] fleet listener request failed: ${errorMessage(error)}`);
+        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: "internal error" }));
+      });
   });
   httpServer.on("upgrade", (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     const { pathname } = new URL(request.url ?? "/", "http://localhost");
