@@ -27,6 +27,17 @@ extraResources:
   # `bun run build` at the repo root to have produced packages/cli/dist.
   - from: build/cli
     to: cli
+  # Staged in a second mapping on purpose. electron-builder's file matcher
+  # drops a `node_modules` segment from anything it copies, since it normally
+  # collects an app's own dependencies itself, and no filter re-includes it.
+  # This tree is not the app's, it is a staged production install of the CLI,
+  # and without its dependencies the packaged app dies with
+  # ERR_MODULE_NOT_FOUND on the bundle's bare `open` and `@lydell/node-pty`
+  # imports, which is the whole reason scripts/stage-cli.ts builds it. Rooting
+  # `from` at node_modules itself keeps that segment out of the paths being
+  # matched, so its contents copy normally.
+  - from: build/cli/node_modules
+    to: cli/node_modules
 mac:
   category: public.app-category.developer-tools
   icon: assets/icon.png
