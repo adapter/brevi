@@ -169,8 +169,16 @@ describe("WorkerRegistry", () => {
     });
   }
 
-  /** Settle the microtask queue the store's awaited writes run on. */
-  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+  /**
+   * Settle the queue the store's awaited writes run on. A lease's writes are
+   * chained (see #chainLeaseWrite), and a completion waits for the ones ahead
+   * of it, so a frame can take several turns of real filesystem I/O to land.
+   * One turn is not always enough; draining a few keeps that from showing up
+   * as a flaky assertion on whatever the last write settles.
+   */
+  const flush = async (): Promise<void> => {
+    for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
 
   it("registers a worker and dispatches a run to it", async () => {
     const socket = connect();
@@ -474,6 +482,39 @@ describe("WorkerRegistry", () => {
     expect(events.filter((event) => event.type === "artifact")).toHaveLength(1);
     const logs = events.filter((event) => event.type === "log").map((event) => event.text);
     expect(logs.some((text) => text.includes("lost.webm"))).toBe(true);
+  });
+
+  it("applies a completion once when the worker replays it before the ack lands", async () => {
+    const socket = connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    const completion = {
+      type: "run-complete" as const,
+      leaseId: lease.id,
+      runId: run.id,
+      outcome: "completed" as const,
+      finishedAt: "2026-08-11T10:30:00.000Z",
+      artifacts: [],
+      attempts: [],
+      costs: [],
+    };
+    // A worker holds its completion until the host acknowledges it, so it
+    // legitimately replays one whose ack was lost. Both copies can arrive
+    // before the first has finished settling the lease.
+    socket.receive(completion);
+    socket.receive(completion);
+    await flush();
+
+    expect(store.get(run.id)?.status).toBe("completed");
+    expect(socket.ofType("run-complete-ack")).toHaveLength(1);
+    expect(settled).toEqual([run.id]);
+    const statusEvents = (await store.readEvents(run.id)).filter(
+      (event) => event.type === "status" && event.status === "completed",
+    );
+    expect(statusEvents).toHaveLength(1);
   });
 
   it("saves an artifact sent immediately before the completion that lists it", async () => {

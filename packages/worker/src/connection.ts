@@ -191,8 +191,13 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
         console.log(`[brevi] registered with ${hostUrl} as worker "${name}" (host ${message.hostVersion})`);
         startHeartbeat();
         // Requeued behind anything already waiting, so a replayed completion
-        // still trails the frames that were reported before it.
-        for (const message of unacknowledged?.() ?? []) enqueue(message);
+        // still trails the frames that were reported before it. A frame still
+        // sitting in the queue was never handed to a socket and needs no
+        // replay: enqueueing it again would flush both copies before either
+        // could be acknowledged, and the host would complete the lease twice.
+        for (const message of unacknowledged?.() ?? []) {
+          if (!queue.includes(message)) enqueue(message);
+        }
         flush();
         return;
       }

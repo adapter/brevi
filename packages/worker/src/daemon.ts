@@ -191,6 +191,15 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
    * host's run-complete-ack.
    */
   const unacknowledgedCompletions = new Map<string, WorkerMessage>();
+  /**
+   * Discards still tearing down a run's sandbox and workspace, keyed by run.
+   * A retry discards the previous attempt's retained sandbox and redispatches
+   * the same run id immediately, and the host has no acknowledgement to wait
+   * for, so without this the teardown's recursive remove of
+   * WORKSPACES_DIR/<runId> can land in the middle of the retry's checkout into
+   * that same path. A dispatch for a run waits for its own discard first.
+   */
+  const activeDiscards = new Map<string, Promise<void>>();
   // Set once a shutdown signal lands: new dispatches are refused from that
   // point on, so the set of runs this worker is still finishing only ever
   // shrinks during shutdown.
@@ -273,6 +282,16 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     // still running underneath it; see the shutdown ordering comment below.
     const execution = (async () => {
       try {
+        // A retry discards the previous attempt's sandbox and redispatches the
+        // same run id straight away, and the host waits for no acknowledgement
+        // in between. Letting the teardown's recursive remove of this run's
+        // workspace run alongside the checkout that recreates it would delete
+        // the retry's own files, so wait it out first.
+        const discard = activeDiscards.get(run.id);
+        if (discard) {
+          console.log(`[brevi] run ${run.id} waiting for its previous sandbox to be discarded`);
+          await discard;
+        }
         await (kind === "follow-up" ? executeFollowUp : executeRun)(ctx);
       } catch (error) {
         console.error(`[brevi] run ${run.id} crashed: ${errorMessage(error)}`);
@@ -312,10 +331,16 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     active.abort.abort();
   };
 
-  const handleDiscard = async (message: DiscardMessage): Promise<void> => {
+  const handleDiscard = (message: DiscardMessage): Promise<void> => {
     knownRuns.delete(message.runId);
-    await provider.discard(message.runId).catch(() => undefined);
-    await rm(join(WORKSPACES_DIR, message.runId), { recursive: true, force: true }).catch(() => undefined);
+    const teardown = (async () => {
+      await provider.discard(message.runId).catch(() => undefined);
+      await rm(join(WORKSPACES_DIR, message.runId), { recursive: true, force: true }).catch(() => undefined);
+    })().finally(() => {
+      if (activeDiscards.get(message.runId) === teardown) activeDiscards.delete(message.runId);
+    });
+    activeDiscards.set(message.runId, teardown);
+    return teardown;
   };
 
   /** The host applied this run's completion and released the lease; a run this worker no longer claims (already dropped, or from a previous process) is ignored rather than treated as an error. */

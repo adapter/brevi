@@ -223,6 +223,15 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
    * and lets run-complete wait for the ones ahead of it.
    */
   #leaseWrites = new Map<string, Promise<void>>();
+  /**
+   * Leases whose completion is being applied. Settling is async, so two
+   * run-complete frames for one lease can both pass the lease lookup before
+   * either settles, and a duplicate is expected by design: a worker replays a
+   * completion it holds no acknowledgement for, which is exactly what happens
+   * when the ack itself is lost. Completing twice would double the terminal
+   * events, the artifact reconciliation and the scheduler's settled callback.
+   */
+  #completing = new Set<string>();
 
   constructor(options: WorkerRegistryOptions) {
     super();
@@ -631,6 +640,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     this.#cancelIntents.delete(leaseId);
     this.#savedArtifacts.delete(leaseId);
     this.#leaseWrites.delete(leaseId);
+    this.#completing.delete(leaseId);
   }
 
   /** A lease active for exactly this worker, or undefined; a stale or foreign leaseId must never let a message through. */
@@ -671,6 +681,14 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       case "heartbeat":
         this.#armHeartbeatWatchdog(worker);
         this.#send(worker.socket, { type: "heartbeat-ack", ts: new Date().toISOString() });
+        // The host's view of a worker's free capacity can be wrong in the
+        // worker's favour: it rejected a dispatch as full, or it came back
+        // from a host restart still executing runs this host has no leases
+        // for. Nothing else fires when those finish, so a queued run would
+        // wait forever. The heartbeat is the one signal that keeps arriving,
+        // so let it re-drive the queue; the listener only dispatches when
+        // there is something queued and a worker with room.
+        this.emit("workers", this.list());
         return;
       case "dispatch-accepted":
         return; // acknowledgement only; the lease already exists from dispatch()
@@ -713,6 +731,8 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       case "run-complete": {
         const lease = this.#leaseFor(workerId, message.leaseId, message.runId, "run-complete");
         if (!lease) return;
+        if (this.#completing.has(lease.id)) return; // a replay of one already being applied
+        this.#completing.add(lease.id);
         void this.#completeRun(workerId, lease, message);
         return;
       }
