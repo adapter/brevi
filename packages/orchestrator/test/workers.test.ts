@@ -475,4 +475,41 @@ describe("WorkerRegistry", () => {
     const logs = events.filter((event) => event.type === "log").map((event) => event.text);
     expect(logs.some((text) => text.includes("lost.webm"))).toBe(true);
   });
+
+  it("saves an artifact sent immediately before the completion that lists it", async () => {
+    const socket = connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    // Back to back, with nothing awaited in between: a worker finishing a run
+    // sends its last artifact and its completion in the same breath. Both
+    // handlers are async, so without ordering the completion reconciles the
+    // manifest while the bytes are still being written and reports a file
+    // that did in fact arrive as lost.
+    socket.receive({
+      type: "run-artifact",
+      leaseId: lease.id,
+      runId: run.id,
+      artifact: { name: "demo.png", type: "screenshot", size: 3 },
+      data: Buffer.from("png").toString("base64"),
+    });
+    socket.receive({
+      type: "run-complete",
+      leaseId: lease.id,
+      runId: run.id,
+      outcome: "completed",
+      artifacts: [{ name: "demo.png", type: "screenshot", size: 3 }],
+      attempts: [],
+      costs: [],
+    });
+    await flush();
+
+    const events = await store.readEvents(run.id);
+    expect(events.filter((event) => event.type === "artifact")).toHaveLength(1);
+    const logs = events.filter((event) => event.type === "log").map((event) => event.text);
+    expect(logs.some((text) => text.includes("did not reach the host"))).toBe(false);
+    expect(store.get(run.id)?.status).toBe("completed");
+  });
 });

@@ -811,8 +811,11 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   async #completeRun(workerId: string, lease: Lease, message: RunCompleteMessage): Promise<void> {
     // Everything this lease sent ahead of the completion has to have landed
     // before the manifest is reconciled against what was saved, and before
-    // settleLease drops the lease's bookkeeping underneath a late write.
-    await this.#leaseWrites.get(lease.id);
+    // settleLease drops the lease's bookkeeping underneath a late write. The
+    // chain deletes itself once drained, so this only waits when a write is
+    // genuinely still in flight.
+    const pendingWrites = this.#leaseWrites.get(lease.id);
+    if (pendingWrites) await pendingWrites;
     await this.#applyRunComplete(lease, message);
     this.#reconcileArtifacts(lease, message.artifacts);
     const live = this.#workers.get(workerId);
@@ -827,10 +830,16 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
    * it: losing one artifact must not strand the completion that follows.
    */
   #chainLeaseWrite(leaseId: string, write: () => Promise<void>): Promise<void> {
-    const next = (this.#leaseWrites.get(leaseId) ?? Promise.resolve())
+    const next: Promise<void> = (this.#leaseWrites.get(leaseId) ?? Promise.resolve())
       .then(write)
       .catch((error: unknown) => {
         console.error(`[brevi] lease ${leaseId} write failed: ${error instanceof Error ? error.message : String(error)}`);
+      })
+      .finally(() => {
+        // Drop the chain once it has drained, so the map never accumulates
+        // settled promises and a completion with nothing outstanding ahead of
+        // it does not defer itself a tick waiting on one.
+        if (this.#leaseWrites.get(leaseId) === next) this.#leaseWrites.delete(leaseId);
       });
     this.#leaseWrites.set(leaseId, next);
     return next;
