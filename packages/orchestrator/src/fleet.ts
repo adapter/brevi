@@ -195,7 +195,18 @@ export class FleetStore {
       capabilities: info.capabilities,
     };
     this.#workers.set(worker.id, worker);
-    await this.#persist();
+    try {
+      await this.#persist();
+    } catch (error) {
+      // Transactional, the same way revoke is, in the other direction: the
+      // caller denies the registration when this throws, so the credential is
+      // never delivered, and the token that bought it is already spent. A
+      // record left behind would be an enrollment nobody can ever
+      // authenticate as, kept alive in memory until some later successful
+      // write made it permanent.
+      this.#workers.delete(worker.id);
+      throw error;
+    }
     return { worker, credential };
   }
 

@@ -125,6 +125,22 @@ describe("FleetStore credentials", () => {
     expect(await store.revoke(worker.id)).toBe(true);
     expect(store.authenticate(worker.id, credential)).toBeNull();
   });
+
+  it("enrolls nobody when the redeem's write fails, rather than leaving a record only memory knows about", async () => {
+    // Same blocking trick as above, applied from the start so the very first
+    // write fails.
+    const blockedDir = join(dir, "blocked-redeem");
+    await writeFile(blockedDir, "");
+    const store = new FleetStore(join(blockedDir, "fleet.json"));
+    const { token } = store.mintPairingToken();
+
+    await expect(store.redeemPairing(token, { name: "bench-1", capabilities })).rejects.toThrow();
+
+    // Nothing enrolled: the caller denied the registration, so the credential
+    // this would have authenticated was never handed out, and the spent token
+    // means the machine cannot retry into the same half-made state.
+    expect(store.list()).toHaveLength(0);
+  });
 });
 
 describe("FleetStore ordering", () => {
