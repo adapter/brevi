@@ -1,4 +1,4 @@
-import type { LimitInfo, PrState, PrStatusResponse, Run, RunEvent, WorkerSummary } from "@brevi/shared";
+import type { LimitInfo, PrState, PrStatusResponse, Run, RunEvent, WorkerView } from "@brevi/shared";
 import { summarizeCosts } from "@brevi/shared/types";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -30,8 +30,8 @@ export function RunDetail({
   run: Run;
   /** owner/name of the mapped repo, resolved from config. */
   repoName: string | undefined;
-  /** Connected workers, to resolve run.sandbox.workerId to a human name. */
-  workers: WorkerSummary[];
+  /** The enrolled fleet, to resolve run.sandbox.workerId to a human name. */
+  workers: WorkerView[];
   events: RunEvent[];
   now: number;
   busy: boolean;
@@ -113,8 +113,9 @@ export function RunDetail({
   const computedCosts = run.costs.length > 0 ? summarizeCosts(run.costs) : undefined;
   const costTotals = run.costTotals ?? computedCosts;
   const costByModel = run.costTotals?.byModel ?? computedCosts?.byModel ?? [];
-  // The worker that holds this run's sandbox; fall back to the raw id once it
-  // has disconnected and dropped out of the live workers list.
+  // The worker that holds this run's sandbox. Offline workers stay in the
+  // fleet, so this only misses once one has been revoked; then the raw id is
+  // all an old run has left to name it by.
   const worker = run.sandbox.workerId
     ? workers.find((w) => w.id === run.sandbox.workerId)
     : undefined;

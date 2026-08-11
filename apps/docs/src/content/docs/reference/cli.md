@@ -19,8 +19,7 @@ brevi [command]
             connectors, CLIs
   attach <runId>
             Resume a run's agent conversation inside its retained sandbox
-  worker    Run an execution worker that connects to a brevi host and
-            executes dispatched runs
+  worker    Enroll this machine as a worker, or reconnect an enrolled one
   update    Update @brevi/cli to the latest version published on npm
 
   -V, --version   Print the version
@@ -138,25 +137,35 @@ Resume works for completed and failed runs and is Claude-only for now (Codex run
 ## `brevi worker`
 
 ```
-brevi worker [--host <url>] [--token <token>] [--name <name>] [--concurrency <n>]
+brevi worker --host <url> [--token <token>] [--name <name>] [--concurrency <n>]
 ```
 
-Runs an execution worker: a machine willing to execute runs a `brevi` host dispatches to it. The host itself is a pure scheduler and never touches a sandbox; every run's sandbox lives on whichever worker executed it. A worker only ever dials out to the host, over a single outbound WebSocket, and never listens itself.
+Runs an execution worker: a machine willing to execute the runs a `brevi` host dispatches to it. The host itself is a pure scheduler and never touches a sandbox; every run's sandbox lives on whichever worker executed it. A worker only ever dials out to the host, over a single outbound WebSocket, and never listens itself.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--host <url>` | `http://localhost:<server.port>` from this machine's local config | The brevi host to connect to |
-| `--token <token>` | this machine's local config's `fleet.token` | Pairing token; the host generates one on first start |
-| `--name <name>` | this machine's hostname | Shown for this worker on the host's dashboard |
-| `--concurrency <n>` | this machine's local config's `sandbox.concurrency` | How many dispatched runs to execute at once |
+| `--host <url>` | required | The brevi host to work for, e.g. `http://192.168.1.5:4400` |
+| `--token <token>` | none | Single-use pairing token, needed only to enroll this machine (or to enroll it again after a revoke) |
+| `--name <name>` | this machine's hostname | Name to enroll under; the host keeps its own name for this worker afterwards |
+| `--concurrency <n>` | this machine's local `sandbox.concurrency` | How many dispatched runs to execute at once |
 
-`--concurrency` accepts an integer from 1 to 64; anything outside that range is rejected before the worker connects, since the host's registration schema would otherwise refuse it and leave the process looking like it's merely reconnecting.
+`--host` is required and has no fallback to this machine's own config: which brevi instance a worker belongs to is the host's business, not something the worker's config (if it even has one) could know. It has to be an address the worker can reach, either the host machine's own address for a worker running there, or the address the host's `fleet.host` listener is bound to for a worker elsewhere (see [Configuration](/reference/configuration/#fleet) and [Running on another machine](/guides/sandboxes/#running-on-another-machine)).
 
-The worker's `sandbox.*` settings (which provider, Firecracker image paths, VM size) always come from its own local `~/.brevi/config.json`, never from the host: a worker's provider and images are local to its machine, so a dispatch's own `sandbox.*` fields are overridden with the worker's before it executes.
+`--concurrency` accepts an integer from 1 to 64; anything outside that range is rejected before the worker connects, since the host's registration schema would otherwise refuse it and leave the process looking like it's merely reconnecting. A machine with no `~/.brevi/config.json` at all, the normal case for one that only ever runs `brevi worker`, falls back to the schema's own defaults: the process provider at concurrency 1.
 
-Fails with an actionable message when no pairing token is available (neither `--token` nor a local `fleet.token`) or when the local config has none, in either case pointing at where to find or set one.
+`--token` is a pairing token minted on the host's Workers page (Configuration > Workers, `/config/workers`): "Add a worker" there mints one and shows this exact command, ready to copy, with the host address and the token already filled in. The token is single-use and expires 15 minutes after minting, and redeeming it is what enrolls this machine: the host assigns it an id and answers with a durable per-worker credential, stored at `~/.brevi/worker.json` (mode `0600`, the only fleet secret this machine keeps, and scoped to the host that issued it). Every later `brevi worker --host <url>` reconnects with that credential and needs no `--token` at all.
 
-Runs in the foreground until `Ctrl+C` (or `SIGTERM`). The first signal stops the worker from accepting new dispatches, aborts whatever runs are still in flight, and waits for their final reporting to reach the host before the process exits; a second signal exits immediately instead of waiting. Reconnects on its own with exponential backoff whenever the connection drops, resuming in-flight run reporting once it registers again; a rejected pairing token is fatal and exits non-zero instead, since it will not fix itself by retrying.
+A `--token` passed alongside a stored credential is tried first regardless, which is how a machine whose enrollment was revoked re-enrolls in one command. If the host refuses that token as invalid or expired and a stored credential is still there, the worker falls back to reconnecting with the credential instead of exiting. Starting with neither a `--token` nor an enrollment for that host fails immediately, before the sandbox preflight below (which can take minutes), pointing at "Add a worker" on the host.
+
+`--name` only picks the name this machine enrolls under, and the host keeps its own name for the worker from then on: rename it from the Workers page rather than by restarting with a different `--name`.
+
+The worker's `sandbox.*` settings (which provider, Firecracker image paths, VM size) always come from its own local `~/.brevi/config.json`, never from the host: a worker's provider and images are local to its machine, so a dispatch's own `sandbox.*` fields are overridden with the worker's before it executes. Before the first connect it resolves and preflights that provider the same way the orchestrator does (binary, host tools, kernel, rootfs, ssh keys, tap devices, IP forwarding), so the provider it reports is one that can really boot a run; `auto` downgrades to the process provider when the Firecracker preflight fails, and an explicit `process` is taken as-is. That check runs once at startup and can take a while, since on a fully provisioned Linux host it may download the prebuilt rootfs image.
+
+Every registration reports the worker's capabilities: OS, architecture, the resolved sandbox provider, whether `/dev/kvm` is usable, its concurrency, the Firecracker VM size presets it can boot, and its brevi version. While connected it heartbeats every 15 seconds with the leases it still holds; a worker silent for longer than the host's `fleet.heartbeatTimeoutSeconds` (45 by default) is dropped, and one that dropped mid-run has `fleet.reconnectGraceSeconds` (120 by default) to reconnect and resume reporting before its runs are failed.
+
+Draining the worker from the Workers page reaches it over that same connection and takes effect at once: it refuses new dispatches with "worker is draining" while the runs already in flight finish and report normally, and the state survives reconnects, so a machine being decommissioned empties itself. Re-enabling it puts it back in rotation. Revoking it kills its credential and disconnects it immediately: the worker deletes its stored credential, shuts down what it was still running, and exits non-zero rather than retrying, since reconnecting with a dead credential would only produce a rejection loop. Enrolling that machine again needs a fresh pairing token.
+
+Runs in the foreground until `Ctrl+C` (or `SIGTERM`). The first signal stops the worker from accepting new dispatches, aborts whatever runs are still in flight, and waits for their final reporting to reach the host before the process exits; a second signal exits immediately instead of waiting. Reconnects on its own with exponential backoff (jittered, capped at 30 seconds) whenever the connection drops, resuming in-flight run reporting once it registers again; a rejection that retrying cannot fix, a dead credential or a protocol mismatch, is fatal and exits non-zero instead.
 
 ## `brevi update`
 

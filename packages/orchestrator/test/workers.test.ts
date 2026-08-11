@@ -1,19 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { EventEmitter } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { WebSocket } from "ws";
 import {
   configSchema,
   repoConfigSchema,
   WORKER_PROTOCOL_VERSION,
   type BreviConfig,
-  type HostMessage,
   type Run,
   type Ticket,
-  type WorkerMessage,
 } from "@brevi/shared";
+import { FakeSocket, flush } from "./fake-socket.js";
+import { FleetStore } from "../src/fleet.js";
 import { MemoryStore } from "../src/memory.js";
 import { RunStore } from "../src/state.js";
 import { WorkerRegistry } from "../src/workers.js";
@@ -24,61 +22,7 @@ import { WorkerRegistry } from "../src/workers.js";
 // these exercise the registry against a fake one: register, dispatch, report,
 // complete, and the three ways that sequence is normally broken (a socket
 // drop, a cancel while the owner is away, and a worker sending frames for a
-// run its lease does not cover).
-
-const OPEN = 1;
-const CLOSED = 3;
-
-/**
- * Stands in for a worker's end of the socket: collects what the host sent and
- * lets a test push frames back as that worker. Only the surface the registry
- * actually uses is implemented (`on`, `send`, `close`, `terminate`,
- * `readyState`, `OPEN`).
- */
-class FakeSocket extends EventEmitter {
-  readonly sent: HostMessage[] = [];
-  readyState = OPEN;
-  readonly OPEN = OPEN;
-
-  send(raw: string): void {
-    this.sent.push(JSON.parse(raw) as HostMessage);
-  }
-
-  close(): void {
-    this.drop();
-  }
-
-  terminate(): void {
-    this.drop();
-  }
-
-  /** The socket going away, from either side. */
-  drop(): void {
-    if (this.readyState === CLOSED) return;
-    this.readyState = CLOSED;
-    this.emit("close");
-  }
-
-  /** Deliver one frame from the worker to the host. */
-  receive(message: WorkerMessage): void {
-    this.emit("message", JSON.stringify(message));
-  }
-
-  /** Every frame of one type the host has sent so far. */
-  ofType<T extends HostMessage["type"]>(type: T): Extract<HostMessage, { type: T }>[] {
-    return this.sent.filter((message) => message.type === type) as Extract<HostMessage, { type: T }>[];
-  }
-
-  last<T extends HostMessage["type"]>(type: T): Extract<HostMessage, { type: T }> | undefined {
-    return this.ofType(type).at(-1);
-  }
-
-  asWebSocket(): WebSocket {
-    return this as unknown as WebSocket;
-  }
-}
-
-const TOKEN = "pairing-token";
+// run its lease does not cover). Enrollment itself is enrollment.test.ts.
 
 const ticket: Ticket = {
   id: "ticket-1",
@@ -110,10 +54,14 @@ describe("WorkerRegistry", () => {
   let dir: string;
   let store: RunStore;
   let memories: MemoryStore;
+  let fleet: FleetStore;
   let config: BreviConfig;
   let registry: WorkerRegistry;
   let settled: string[];
   let rejected: { runId: string; reason: string }[];
+  /** The id the host assigned the enrolled worker, and the credential it minted for it. */
+  let workerId: string;
+  let credential: string;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "brevi-workers-"));
@@ -121,13 +69,18 @@ describe("WorkerRegistry", () => {
     await store.init();
     memories = new MemoryStore(join(dir, "memories"));
     await memories.init();
-    config = configSchema.parse({ fleet: { token: TOKEN, reconnectGraceSeconds: 3600 } });
+    fleet = new FleetStore(join(dir, "fleet.json"));
+    await fleet.init();
+    config = configSchema.parse({ fleet: { reconnectGraceSeconds: 3600 } });
     settled = [];
     rejected = [];
+    workerId = "";
+    credential = "";
     registry = new WorkerRegistry({
       config,
       store,
       memories,
+      fleet,
       onRunSettled: (runId) => settled.push(runId),
       onRunRejected: (runId, reason) => rejected.push({ runId, reason }),
     });
@@ -138,19 +91,43 @@ describe("WorkerRegistry", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  /** Connect one worker and wait for the host to answer its registration. */
-  function connect(workerId = "worker-1", activeLeases: { id: string; runId: string; issuedAt: string }[] = []) {
+  /**
+   * Enroll one worker with a fresh pairing token and wait for the host to
+   * answer. The id it ends up with is the host's to assign, so it is captured
+   * here rather than chosen by the test.
+   */
+  async function connect(activeLeases: { id: string; runId: string; issuedAt: string }[] = []) {
+    const { token } = fleet.mintPairingToken();
     const socket = new FakeSocket();
-    registry.accept(socket.asWebSocket());
+    registry.accept(socket.asWebSocket(), "127.0.0.1");
     socket.receive({
       type: "register",
       protocolVersion: WORKER_PROTOCOL_VERSION,
-      workerId,
-      name: `worker ${workerId}`,
-      token: TOKEN,
+      auth: { kind: "pairing", token },
+      name: "bench-1",
       capabilities: capabilities(),
       activeLeases,
     });
+    await flush();
+    const registered = socket.last("registered");
+    workerId = registered?.workerId ?? "";
+    credential = registered?.credential ?? "";
+    return socket;
+  }
+
+  /** Bring the same enrollment back on a new socket, authenticating with its stored credential. */
+  async function reconnect(activeLeases: { id: string; runId: string; issuedAt: string }[] = []) {
+    const socket = new FakeSocket();
+    registry.accept(socket.asWebSocket(), "127.0.0.1");
+    socket.receive({
+      type: "register",
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      auth: { kind: "credential", workerId, secret: credential },
+      name: "bench-1",
+      capabilities: capabilities(),
+      activeLeases,
+    });
+    await flush();
     return socket;
   }
 
@@ -169,19 +146,8 @@ describe("WorkerRegistry", () => {
     });
   }
 
-  /**
-   * Settle the queue the store's awaited writes run on. A lease's writes are
-   * chained (see #chainLeaseWrite), and a completion waits for the ones ahead
-   * of it, so a frame can take several turns of real filesystem I/O to land.
-   * One turn is not always enough; draining a few keeps that from showing up
-   * as a flaky assertion on whatever the last write settles.
-   */
-  const flush = async (): Promise<void> => {
-    for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
-  };
-
   it("registers a worker and dispatches a run to it", async () => {
-    const socket = connect();
+    const socket = await connect();
     expect(socket.last("registered")?.protocolVersion).toBe(WORKER_PROTOCOL_VERSION);
     expect(registry.list()).toHaveLength(1);
     expect(registry.capacity()).toBe(2);
@@ -198,27 +164,48 @@ describe("WorkerRegistry", () => {
 
     // The host, not the worker, records who owns the run.
     await flush();
-    expect(store.get(run.id)?.sandbox.workerId).toBe("worker-1");
+    expect(store.get(run.id)?.sandbox.workerId).toBe(workerId);
   });
 
-  it("refuses a worker whose pairing token is wrong", () => {
+  it("refuses a worker whose pairing token is wrong", async () => {
     const socket = new FakeSocket();
-    registry.accept(socket.asWebSocket());
+    registry.accept(socket.asWebSocket(), "127.0.0.1");
     socket.receive({
       type: "register",
       protocolVersion: WORKER_PROTOCOL_VERSION,
-      workerId: "worker-1",
+      auth: { kind: "pairing", token: "not-the-token" },
       name: "impostor",
-      token: "not-the-token",
       capabilities: capabilities(),
       activeLeases: [],
     });
-    expect(socket.last("rejected")?.reason).toContain("token");
+    await flush();
+    expect(socket.last("rejected")?.code).toBe("invalid-token");
+    // Nothing was enrolled, so the fleet is still empty rather than holding a
+    // record for a machine that never got in.
+    expect(registry.list()).toHaveLength(0);
+  });
+
+  it("refuses a register frame from an unsupported protocol version", async () => {
+    const socket = new FakeSocket();
+    const { token } = fleet.mintPairingToken();
+    registry.accept(socket.asWebSocket(), "127.0.0.1");
+    socket.receive({
+      type: "register",
+      protocolVersion: WORKER_PROTOCOL_VERSION + 1,
+      auth: { kind: "pairing", token },
+      name: "from-the-future",
+      capabilities: capabilities(),
+      activeLeases: [],
+    });
+    await flush();
+    expect(socket.last("rejected")?.code).toBe("protocol");
+    // The version check runs before the token is looked at, so it is still
+    // unspent and the operator's copied command keeps working.
     expect(registry.list()).toHaveLength(0);
   });
 
   it("keeps the run's owner across sandbox reports, then attaches and discards through that worker", async () => {
-    const socket = connect();
+    const socket = await connect();
     const run = await queueRun();
     dispatch(run);
     await flush();
@@ -235,14 +222,14 @@ describe("WorkerRegistry", () => {
     expect(store.get(run.id)?.sandbox).toMatchObject({
       provider: "firecracker",
       id: "vm-1",
-      workerId: "worker-1",
+      workerId,
     });
 
     // A destroyed sandbox retracts its id, and only its id: the owner and
     // the provider the worker reported stay exactly as they were.
     socket.receive({ type: "run-patch", leaseId: lease.id, runId: run.id, patch: { sandbox: { id: null } } });
     await flush();
-    expect(store.get(run.id)?.sandbox).toEqual({ provider: "firecracker", workerId: "worker-1" });
+    expect(store.get(run.id)?.sandbox).toEqual({ provider: "firecracker", workerId });
     socket.receive({ type: "run-patch", leaseId: lease.id, runId: run.id, patch: { sandbox: { id: "vm-1" } } });
     await flush();
 
@@ -267,12 +254,12 @@ describe("WorkerRegistry", () => {
     expect(finished.result?.prUrl).toBe("https://github.com/adapter/brevi/pull/1");
     expect(finished.sandbox.retainedUntil).toBe("2026-08-11T12:30:00.000Z");
     // Still owned: attach routing and the reaper both resolve the worker from it.
-    expect(finished.sandbox.workerId).toBe("worker-1");
+    expect(finished.sandbox.workerId).toBe(workerId);
     expect(settled).toEqual([run.id]);
     expect(socket.ofType("run-complete-ack")).toHaveLength(1);
     expect(registry.inFlight()).toBe(0);
 
-    expect(registry.workerFor(run.id)?.id).toBe("worker-1");
+    expect(registry.workerFor(run.id)?.id).toBe(workerId);
     const session = registry.openAttach(run.id, {
       cols: 80,
       rows: 24,
@@ -291,7 +278,7 @@ describe("WorkerRegistry", () => {
   });
 
   it("ignores lease-scoped frames that name another run", async () => {
-    const socket = connect();
+    const socket = await connect();
     const mine = await queueRun();
     const other = await queueRun();
     dispatch(mine);
@@ -350,7 +337,7 @@ describe("WorkerRegistry", () => {
   });
 
   it("replays a completion buffered across a disconnect instead of failing the run", async () => {
-    const socket = connect();
+    const socket = await connect();
     const run = await queueRun();
     dispatch(run);
     await flush();
@@ -365,7 +352,7 @@ describe("WorkerRegistry", () => {
     socket.drop();
     expect(store.get(run.id)?.status).toBe("running");
 
-    const reconnected = connect("worker-1", [{ id: lease.id, runId: run.id, issuedAt: lease.issuedAt }]);
+    const reconnected = await reconnect([{ id: lease.id, runId: run.id, issuedAt: lease.issuedAt }]);
     reconnected.receive({
       type: "run-complete",
       leaseId: lease.id,
@@ -399,7 +386,7 @@ describe("WorkerRegistry", () => {
   });
 
   it("delivers a cancellation requested while the owning worker was away", async () => {
-    const socket = connect();
+    const socket = await connect();
     const run = await queueRun();
     dispatch(run);
     await flush();
@@ -413,7 +400,7 @@ describe("WorkerRegistry", () => {
     expect(registry.cancel(run.id)).toBe("pending");
     expect(store.get(run.id)?.status).toBe("running");
 
-    const reconnected = connect("worker-1", [{ id: lease.id, runId: run.id, issuedAt: lease.issuedAt }]);
+    const reconnected = await reconnect([{ id: lease.id, runId: run.id, issuedAt: lease.issuedAt }]);
     await flush();
     const cancels = reconnected.ofType("cancel");
     expect(cancels).toHaveLength(1);
@@ -437,7 +424,7 @@ describe("WorkerRegistry", () => {
   });
 
   it("cancels a connected worker's run directly", async () => {
-    const socket = connect();
+    const socket = await connect();
     const run = await queueRun();
     dispatch(run);
     await flush();
@@ -447,7 +434,7 @@ describe("WorkerRegistry", () => {
   });
 
   it("saves a transferred artifact once and logs one that never arrived", async () => {
-    const socket = connect();
+    const socket = await connect();
     const run = await queueRun();
     dispatch(run);
     await flush();
@@ -485,7 +472,7 @@ describe("WorkerRegistry", () => {
   });
 
   it("applies a completion once when the worker replays it before the ack lands", async () => {
-    const socket = connect();
+    const socket = await connect();
     const run = await queueRun();
     dispatch(run);
     await flush();
@@ -518,7 +505,7 @@ describe("WorkerRegistry", () => {
   });
 
   it("saves an artifact sent immediately before the completion that lists it", async () => {
-    const socket = connect();
+    const socket = await connect();
     const run = await queueRun();
     dispatch(run);
     await flush();

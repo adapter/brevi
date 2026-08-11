@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { configSchema, repoConfigSchema } from "./config.js";
+import type { WorkerState } from "./fleet.js";
 import type {
   ArtifactRef,
   CostEntry,
@@ -24,13 +25,22 @@ import type {
  * section in config.ts). Every worker dials the host over a single outbound
  * WebSocket at WORKER_WS_PATH and exchanges the messages below.
  *
+ * Who a worker is, and whether it is allowed here at all, is enrollment's
+ * question and is answered in fleet.ts: the `register` frame carries either a
+ * single-use pairing token or the durable credential redeeming one bought.
+ *
  * This module is node-agnostic, like config.ts, but unlike config.ts it is
  * not imported by the browser dashboard bundle, so it may freely import the
  * domain types (types.ts) and the config schema (config.ts) it mirrors and
  * embeds.
  */
 
-export const WORKER_PROTOCOL_VERSION = 1;
+/**
+ * 2 since enrollment: `register` carries an auth envelope instead of a shared
+ * pairing token, and the host answers with the worker's assigned id, so a
+ * version-1 worker's frame is not merely older, it is unauthenticatable.
+ */
+export const WORKER_PROTOCOL_VERSION = 2;
 /** WebSocket path workers dial on the host. */
 export const WORKER_WS_PATH = "/ws/worker";
 /** How often a connected worker sends a heartbeat. */
@@ -316,13 +326,28 @@ export type RunPatch = z.infer<typeof runPatchSchema>;
 
 // --- Worker -> host messages ---------------------------------------------
 
+export const workerStateSchema = z.enum(["active", "draining"]);
+export type WorkerStateInSync = InSync<z.infer<typeof workerStateSchema>, WorkerState>;
+
+/**
+ * How a connecting worker proves who it is. "pairing" is the one-time
+ * enrollment path and is answered with a durable credential plus the worker id
+ * the host assigned; every later connect uses "credential", which carries that
+ * id, so identity comes from enrollment rather than from anything the worker
+ * gets to choose for itself.
+ */
+export const workerAuthSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("pairing"), token: z.string().min(1) }),
+  z.object({ kind: z.literal("credential"), workerId: z.string().min(1), secret: z.string().min(1) }),
+]);
+export type WorkerAuth = z.infer<typeof workerAuthSchema>;
+
 export const registerMessageSchema = z.object({
   type: z.literal("register"),
   protocolVersion: z.number(),
-  /** Stable per machine, so a reconnect is recognised as the same worker. */
-  workerId: z.string().min(1),
+  auth: workerAuthSchema,
+  /** Preferred display name, honoured only when enrolling; the host's own choice wins afterwards. */
   name: z.string().min(1),
-  token: z.string(),
   capabilities: workerCapabilitiesSchema,
   /** What the worker still believes it owns, so in-flight run reporting resumes after a drop. */
   activeLeases: z.array(runLeaseSchema).default([]),
@@ -499,12 +524,38 @@ export const registeredMessageSchema = z.object({
   protocolVersion: z.number(),
   heartbeatIntervalMs: z.number(),
   hostVersion: z.string(),
+  /** The id the host enrolled this worker under; it is the host's to assign, not the worker's to pick. */
   workerId: z.string(),
+  /** The name the fleet shows for this worker, which a rename on the dashboard can have changed. */
+  name: z.string(),
+  state: workerStateSchema,
+  /**
+   * Present only on the connection that redeemed a pairing token: the durable
+   * secret the worker stores and authenticates with from then on. Every later
+   * registration answers without it, since the worker already has one.
+   */
+  credential: z.string().optional(),
 });
 export type RegisteredMessage = z.infer<typeof registeredMessageSchema>;
 
+/** Why the host refused a registration. */
+export const workerDenyReasonSchema = z.enum([
+  "invalid-token",
+  "expired-token",
+  "unauthorized",
+  "protocol",
+  "malformed",
+]);
+export type WorkerDenyReason = z.infer<typeof workerDenyReasonSchema>;
+
 export const rejectedMessageSchema = z.object({
   type: z.literal("rejected"),
+  /**
+   * What kind of refusal this is, so the worker can tell a token worth
+   * falling back from ("invalid-token") apart from an enrollment that is gone
+   * for good ("unauthorized"), without parsing prose.
+   */
+  code: workerDenyReasonSchema,
   /** Bad pairing token, protocol mismatch, ... The host closes the socket right after sending this. */
   reason: z.string(),
 });
@@ -576,8 +627,33 @@ export type DiscardMessage = z.infer<typeof discardMessageSchema>;
 export const heartbeatAckMessageSchema = z.object({
   type: z.literal("heartbeat-ack"),
   ts: z.string(),
+  /** The operator-controlled state, echoed on every ack so a drain reaches a worker that missed the push below. */
+  state: workerStateSchema,
 });
 export type HeartbeatAckMessage = z.infer<typeof heartbeatAckMessageSchema>;
+
+/**
+ * The operator changed this worker's state on the Workers page. Pushed as it
+ * happens so a drain takes effect immediately rather than at the worker's next
+ * heartbeat; "draining" means finish the leases already held and accept
+ * nothing new.
+ */
+export const workerStateMessageSchema = z.object({
+  type: z.literal("worker-state"),
+  state: workerStateSchema,
+});
+export type WorkerStateMessage = z.infer<typeof workerStateMessageSchema>;
+
+/**
+ * The enrollment behind this connection was revoked. The worker deletes its
+ * stored credential and stops: reconnecting with it is refused, so retrying
+ * would only produce a rejection loop.
+ */
+export const revokedMessageSchema = z.object({
+  type: z.literal("revoked"),
+  reason: z.string(),
+});
+export type RevokedMessage = z.infer<typeof revokedMessageSchema>;
 
 export const attachOpenMessageSchema = z.object({
   type: z.literal("attach-open"),
@@ -623,6 +699,8 @@ export const hostMessageSchema = z.discriminatedUnion("type", [
   runCompleteAckMessageSchema,
   discardMessageSchema,
   heartbeatAckMessageSchema,
+  workerStateMessageSchema,
+  revokedMessageSchema,
   attachOpenMessageSchema,
   attachInputMessageSchema,
   attachResizeMessageSchema,
@@ -644,20 +722,4 @@ export function parseWorkerMessage(raw: unknown): WorkerMessage | undefined {
 export function parseHostMessage(raw: unknown): HostMessage | undefined {
   const result = hostMessageSchema.safeParse(raw);
   return result.success ? result.data : undefined;
-}
-
-/** The dashboard's view of one connected worker. */
-export interface WorkerSummary {
-  id: string;
-  name: string;
-  provider: SandboxProviderName;
-  kvm: boolean;
-  maxConcurrency: number;
-  /** Runs the worker currently has an active lease for. */
-  activeRuns: number;
-  version: string;
-  connectedAt: string;
-  lastSeenAt: string;
-  os: string;
-  arch: string;
 }

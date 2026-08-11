@@ -1,7 +1,7 @@
 import type { BreviConfig } from "./config.js";
+import type { WorkerView } from "./fleet.js";
 import type { ConfigPatch, SettingsApplied } from "./settings.js";
 import type { PrState, RepoMemory, Run, RunEvent, Ticket } from "./types.js";
-import type { WorkerSummary } from "./worker.js";
 
 /**
  * HTTP API served by the orchestrator (default port 4400):
@@ -9,11 +9,8 @@ import type { WorkerSummary } from "./worker.js";
  *   GET  /api/health                     -> { ok: true, version: string }
  *   GET  /api/config                     -> redacted BreviConfig
  *   GET  /api/tickets                    -> Ticket[]        (current eligible queue)
- *   GET  /api/workers                    -> WorkerSummary[] (connected workers)
- *   GET  /api/fleet/pairing              -> FleetPairingResponse (loopback callers
- *        only; 403 otherwise, since the token is what authorizes a worker)
  *        Every run executes on a worker daemon that dialled in over
- *        WS /ws/worker; with none connected, queued runs simply wait.
+ *        WS /ws/worker; with none enrolled and connected, queued runs wait.
  *   GET  /api/runs                       -> Run[]           (newest first)
  *   GET  /api/runs/:id                   -> Run
  *   GET  /api/runs/:id/events            -> RunEvent[]      (full history)
@@ -80,6 +77,24 @@ import type { WorkerSummary } from "./worker.js";
  *        URL-encoded remote ("owner/name").
  *   POST /api/memories/:repo/clear       -> MemoriesResponse
  *        Drop everything remembered about one repository.
+ *   GET  /api/workers                    -> FleetResponse
+ *        Every enrolled worker with its live connection state, capabilities,
+ *        and current load. No credential material, ever.
+ *   POST /api/workers/pair               -> PairingTokenResponse
+ *        Mint a single-use pairing token and the `brevi worker` command that
+ *        redeems it. The token is returned once and expires unused.
+ *   POST /api/workers/:id/rename         -> FleetResponse
+ *        body: WorkerRenameRequest.
+ *   POST /api/workers/:id/drain          -> FleetResponse
+ *        Finish in-flight runs, accept nothing new. Survives reconnects.
+ *   POST /api/workers/:id/enable         -> FleetResponse
+ *        Put a drained worker back in rotation.
+ *   DELETE /api/workers/:id              -> FleetResponse
+ *        Revoke: the credential dies and the worker is disconnected at once.
+ *   WS   /ws/worker                      -> WorkerMessage / HostMessage
+ *        The worker channel: register (with a pairing token or a durable
+ *        credential), heartbeat, receive dispatches, and report runs back.
+ *        See fleet.ts for enrollment and worker.ts for the wire protocol.
  *   GET  /api/connect/linear/callback    -> HTML (OAuth redirect target; the
  *        server exchanges the code, saves the token, and broadcasts config)
  *   GET  /api/github/repos               -> GithubRepo[]   (repos visible to the
@@ -279,19 +294,6 @@ export interface ResumeRunResponse {
 }
 
 /**
- * The fleet pairing token in the clear, plus the ready-to-paste command that
- * uses it. Served only to loopback callers (see GET /api/fleet/pairing):
- * whoever holds the token can register as a worker and receive dispatches
- * carrying every credential a run needs, so it is masked everywhere else,
- * including the unauthenticated config endpoint and the dashboard socket.
- */
-export interface FleetPairingResponse {
-  token: string;
-  /** `brevi worker --host <url> --token <token>`, with this host's own url filled in. */
-  command: string;
-}
-
-/**
  * The one write path for `~/.brevi/config.json`: a deep-partial patch of the
  * fields one settings card owns. Everything else on disk is left exactly as
  * it is, so concurrent hand edits and other cards survive the save.
@@ -348,14 +350,15 @@ export type ServerMessage =
       tickets: Ticket[];
       config: BreviConfig;
       linearStatus: LinearStatus;
-      workers: WorkerSummary[];
+      workers: WorkerView[];
     }
   | { type: "config"; config: BreviConfig }
   | { type: "tickets"; tickets: Ticket[] }
-  | { type: "workers"; workers: WorkerSummary[] }
   | { type: "run-updated"; run: Run }
   | { type: "run-event"; event: RunEvent }
-  | { type: "linear-status"; linearStatus: LinearStatus };
+  | { type: "linear-status"; linearStatus: LinearStatus }
+  /** The fleet changed: a worker connected, dropped, was renamed, drained, or revoked. */
+  | { type: "workers"; workers: WorkerView[] };
 
 /** Dashboard -> server WebSocket messages. */
 export type ClientMessage =

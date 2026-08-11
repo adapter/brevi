@@ -3,7 +3,7 @@ title: Sandboxes
 description: How brevi picks a sandbox provider, what the Firecracker microVM setup needs on Linux, and the caveats of the process provider.
 ---
 
-Every run executes inside a sandbox: one sandbox holds one run's workspace. The orchestrator creates it, pushes the checkout in, runs the coding agent, pulls artifacts out, and destroys it. Two providers implement the same interface.
+Every run executes inside a sandbox: one sandbox holds one run's workspace. The worker that executes the run creates it, pushes the checkout in, runs the coding agent, pulls artifacts out, and destroys it. Two providers implement the same interface.
 
 | Provider | Isolation | Where it runs |
 | --- | --- | --- |
@@ -82,3 +82,18 @@ Firecracker requires KVM, which is a Linux kernel feature. There is no macOS por
 When a run completes or fails, brevi doesn't tear its sandbox down: compute stops (the microVM shuts off; nothing uses memory or CPU) but the disk is kept, checkout, installed dependencies and credentials included, for `sandbox.retentionHours` (24 by default, `0` disables retention). The expiry is stored on the run, so it survives an orchestrator restart; a timer reaps disks once their window ends, and any leftovers are also cleaned up on startup and on `brevi stop`.
 
 Resume a retained run from its detail page in the dashboard with the "Open terminal" button, which opens the session in an embedded web terminal (the sandbox boots server-side, so this works even when the orchestrator runs on another machine), or run `brevi attach <runId>` in your own terminal. Either way boots the sandbox back up from its retained disk and opens an interactive `claude --resume` session with the run's full history; detaching releases compute again while the disk keeps counting down. Resume works for completed and failed runs and is Claude-only for now. Once the window passes, the dashboard shows a disabled "Sandbox expired" button and the API answers `410`.
+
+## Running on another machine
+
+Every run executes on a `brevi worker` daemon, so the machine running the orchestrator is a scheduler first: on a single-machine setup it is simply also the machine a worker runs on. A second machine (more sandbox capacity, or a specific host, say one with Firecracker set up) joins the same way, by enrolling as a worker:
+
+1. If the second machine is not this one, turn on the worker channel listener first: Configuration > Workers has a "Worker channel" card, or set `fleet.host` (e.g. `"0.0.0.0"`) directly in `config.json`, then restart brevi. Left at its default (empty), only a worker running on this same machine can enroll. See [Configuration](/reference/configuration/#fleet).
+2. On the Workers page (Configuration > Workers, `/config/workers`), click "Add a worker". This mints a single-use pairing token, good for 15 minutes, and shows a ready-to-copy `brevi worker --host <url> --token <token>` command with the address a worker should dial already filled in.
+3. Run that command on the second machine. It exchanges the pairing token for a durable per-worker credential, saved to `~/.brevi/worker.json` and the only fleet secret that machine keeps, then connects. Later starts are just `brevi worker --host <url>`: no token, since the stored credential authenticates them.
+4. The worker appears on the Workers page as soon as it registers, reporting its own sandbox provider, whether KVM is usable, its concurrency, and its brevi version. From then on the host dispatches queued runs to it, and the run's sandbox lives on that machine, which is also where `brevi attach` and the dashboard's web terminal reach it, relayed by the host.
+
+A worker's sandbox settings are its own: `sandbox.provider`, the Firecracker image paths and the VM size come from that machine's `~/.brevi/config.json`, never from the host, so a Linux worker can boot microVMs for a host running on a Mac. A machine that only ever runs `brevi worker` needs no config at all; without one it uses the process provider at concurrency 1.
+
+Rename, drain (finish in-flight runs, accept nothing new), re-enable, and revoke are all on the Workers page. Revoking kills the worker's credential immediately: it is disconnected, deletes its stored credential, and needs a fresh pairing token to come back.
+
+See the [CLI reference](/reference/cli/#brevi-worker) for `brevi worker`'s flags and the [API reference](/reference/api/#workers) for the underlying endpoints and worker channel.

@@ -8,3 +8,5 @@ export { checkBucketAccessible, checkWrangler } from "./r2.js";
 export type { WranglerAuth } from "./r2.js";
 export { ORCHESTRATOR_LOG_PATH, attachOrchestratorLogFile } from "./logfile.js";
 export { agentProvider } from "./limits.js";
+export { FleetStore, sanitizeWorkerName } from "./fleet.js";
+export type { WorkerRecord } from "./fleet.js";

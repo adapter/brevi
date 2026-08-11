@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { EventEmitter } from "node:events";
@@ -24,9 +24,12 @@ import {
   type RunMemoriesMessage,
   type RunPatch,
   type SandboxProviderName,
+  type WorkerDenyReason,
   type WorkerMessage,
-  type WorkerSummary,
+  type WorkerState,
+  type WorkerView,
 } from "@brevi/shared";
+import type { FleetStore, WorkerRecord } from "./fleet.js";
 import { MemoryStore } from "./memory.js";
 import { isSafePathSegment, resolveWithin } from "./safepath.js";
 import { isTerminal, RunStore } from "./state.js";
@@ -39,6 +42,15 @@ import { isTerminal, RunStore } from "./state.js";
  * host's half of that relationship: who's connected, who owns which run
  * right now, and how a dropped connection is given a chance to come back
  * before its runs are given up on.
+ *
+ * It is also the enrollment gate. Whether a connecting machine is allowed
+ * here at all is decided by the FleetStore in fleet.ts, which this registry
+ * consults on every register frame: a worker either redeems a single-use
+ * pairing token (enrolling, and receiving a durable credential in the
+ * answer) or authenticates with the credential a previous enrollment bought
+ * it. A worker record can exist with no live connection (enrolled but
+ * offline); a live connection always corresponds to exactly one record,
+ * because nothing installs one without a successful redeem or authenticate.
  */
 
 const require = createRequire(import.meta.url);
@@ -54,14 +66,32 @@ const HOST_VERSION = ((): string => {
 /** A worker's first frame must be a valid `register` within this long, or the socket is dropped. */
 const REGISTRATION_TIMEOUT_MS = 10_000;
 
+/**
+ * A heartbeat that changes nothing (the worker still claims exactly the
+ * leases it claimed last time) still refreshes lastSeenAt in the store, but
+ * that alone isn't worth waking every dashboard client every
+ * WORKER_HEARTBEAT_MS. Instead the age shown for an idle worker is allowed to
+ * lag reality by up to this much before the next heartbeat emits anyway, so
+ * it never grows unbounded on a screen someone left open.
+ */
+const HEARTBEAT_BROADCAST_MS = 30_000;
+
 /** One connected worker's socket and what it told us about itself. */
 interface ConnectedWorker {
   id: string;
   name: string;
   socket: WebSocket;
   capabilities: RegisterMessage["capabilities"];
+  /** Remote address of the socket, for the Workers page; undefined when the transport didn't report one. */
+  address?: string;
   connectedAt: string;
   lastSeenAt: string;
+  /**
+   * The lease ids this worker claimed on its last heartbeat, sorted and
+   * joined. Compared against the next heartbeat's to tell an idle keep-alive
+   * apart from one that reports work finishing (see #handleHeartbeat).
+   */
+  claimedLeases: string;
 }
 
 /** One outstanding dispatch, tracked host-side. Mirrors RunLease minus the fields the wire form needs but bookkeeping doesn't. */
@@ -122,6 +152,8 @@ export interface WorkerRegistryOptions {
   config: BreviConfig;
   store: RunStore;
   memories: MemoryStore;
+  /** Who is enrolled, and the credentials that prove it; see fleet.ts. */
+  fleet: FleetStore;
   /** A run reached a terminal or waiting state; the caller re-arms whatever follow-on timer that implies and tries to dispatch more of the queue. */
   onRunSettled(runId: string): void;
   /** A worker rejected (or lost) a dispatch before doing any work; the caller requeues the run. */
@@ -129,7 +161,7 @@ export interface WorkerRegistryOptions {
 }
 
 interface WorkerRegistryEvents {
-  workers: [WorkerSummary[]];
+  workers: [WorkerView[]];
 }
 
 /** What cancel() managed to do: "unknown" when the run has no active lease at all. */
@@ -201,6 +233,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   readonly #config: BreviConfig;
   readonly #store: RunStore;
   readonly #memories: MemoryStore;
+  readonly #fleet: FleetStore;
   readonly #onRunSettled: (runId: string) => void;
   readonly #onRunRejected: (runId: string, reason: string, kind: DispatchRequest["kind"]) => void;
 
@@ -232,12 +265,19 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
    * events, the artifact reconciliation and the scheduler's settled callback.
    */
   #completing = new Set<string>();
+  /** Chain that registration and revoke() serialize on; see #serialize. */
+  #gate: Promise<void> = Promise.resolve();
+  /** Set by stop(); a close event arriving after shutdown has nothing left to clean up. */
+  #stopped = false;
+  /** Epoch ms of the last `workers` emit; drives the heartbeat throttle (see #handleHeartbeat). */
+  #lastEmitAt = 0;
 
   constructor(options: WorkerRegistryOptions) {
     super();
     this.#config = options.config;
     this.#store = options.store;
     this.#memories = options.memories;
+    this.#fleet = options.fleet;
     this.#onRunSettled = options.onRunSettled;
     this.#onRunRejected = options.onRunRejected;
   }
@@ -248,12 +288,15 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
    * on, and a socket that never sends one is dropped once the registration
    * timeout passes.
    */
-  accept(socket: WebSocket): void {
+  accept(socket: WebSocket, address?: string): void {
     let entry: ConnectedWorker | undefined;
+    /** Set between the register frame arriving and the host answering it; see below. */
+    let registering = false;
+    let closed = false;
     const pendingTimer = setTimeout(() => {
       const reason = `no register frame within ${REGISTRATION_TIMEOUT_MS / 1000}s`;
       console.warn(`[brevi] rejected a worker connection: ${reason}`);
-      this.#reject(socket, reason);
+      this.#reject(socket, "malformed", reason);
       socket.terminate();
     }, REGISTRATION_TIMEOUT_MS);
     pendingTimer.unref();
@@ -261,6 +304,11 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     socket.on("message", (raw) => {
       const parsed = safeJsonParse(raw);
       if (!entry) {
+        // Registration is asynchronous now (it awaits fleet-state writes), so
+        // a frame arriving in that window is neither pre-register traffic to
+        // wait on nor post-register traffic to act on: the connection has no
+        // identity to attribute it to yet, so it is dropped.
+        if (registering) return;
         if (!looksLikeRegister(parsed)) return; // not a register frame (or not even JSON); the registration timer is the real deadline
         clearTimeout(pendingTimer);
         const result = registerMessageSchema.safeParse(parsed);
@@ -268,12 +316,35 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
           const issue = result.error.issues[0];
           const reason = issue ? (issue.path.length ? `${issue.path.join(".")}: ${issue.message}` : issue.message) : "malformed register frame";
           console.warn(`[brevi] rejected a worker registration: ${reason}`);
-          this.#reject(socket, reason);
+          this.#reject(socket, "malformed", reason);
           socket.close();
           return;
         }
-        entry = this.#handleRegister(socket, result.data);
-        if (!entry) socket.close(); // #handleRegister already sent `rejected`
+        registering = true;
+        // #handleRegister awaits fleet-state writes that can reject (full
+        // disk, bad permissions). Left unhandled that becomes an unhandled
+        // rejection and can take the host process down over one worker's
+        // registration, so it is caught here and the socket refused instead.
+        void this.#handleRegister(socket, result.data, address).then(
+          (registered) => {
+            registering = false;
+            if (!registered) {
+              socket.close(); // #handleRegister already sent `rejected`
+              return;
+            }
+            entry = registered;
+            // The socket went away while its registration was still in
+            // flight, so its "close" had nothing to clean up at the time;
+            // run that path now against the connection just installed.
+            if (closed) this.#handleDisconnect(registered);
+          },
+          (error: unknown) => {
+            registering = false;
+            console.error(`[brevi] worker registration failed: ${error instanceof Error ? error.message : String(error)}`);
+            this.#reject(socket, "malformed", "registration could not be completed");
+            socket.close();
+          },
+        );
         return;
       }
       const message = parseWorkerMessage(parsed);
@@ -282,6 +353,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     });
 
     socket.on("close", () => {
+      closed = true;
       clearTimeout(pendingTimer);
       if (entry) this.#handleDisconnect(entry);
     });
@@ -289,33 +361,117 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     socket.on("error", () => socket.terminate());
   }
 
-  /** Every connected worker, for the dashboard. */
-  list(): WorkerSummary[] {
-    return [...this.#workers.values()].map((worker) => ({
-      id: worker.id,
-      name: worker.name,
-      provider: worker.capabilities.provider,
-      kvm: worker.capabilities.kvm,
-      maxConcurrency: worker.capabilities.maxConcurrency,
-      activeRuns: this.#leasesForWorker(worker.id).length,
-      version: worker.capabilities.version,
-      connectedAt: worker.connectedAt,
-      lastSeenAt: worker.lastSeenAt,
-      os: worker.capabilities.os,
-      arch: worker.capabilities.arch,
-    }));
+  /**
+   * Every enrolled worker, connected or not: the Workers page shows a machine
+   * that is merely offline as a member of the fleet, not as a gap. The
+   * enrollment record is the source of truth for identity and state, and
+   * whatever live connection exists is merged onto it.
+   */
+  list(): WorkerView[] {
+    return this.#fleet.list().map((record) => {
+      const live = this.#workers.get(record.id);
+      const view: WorkerView = {
+        id: record.id,
+        name: record.name,
+        state: record.state,
+        connection: live ? "online" : "offline",
+        activeRuns: this.#leasesForWorker(record.id).length,
+        enrolledAt: record.enrolledAt,
+      };
+      // What the worker reported on this connection beats what it reported on
+      // its last one: a worker that gained /dev/kvm, or was restarted with a
+      // different concurrency, says so at register time.
+      const capabilities = live?.capabilities ?? record.capabilities;
+      if (capabilities) view.capabilities = capabilities;
+      if (live) view.connectedAt = live.connectedAt;
+      // Prefer the live connection's own lastSeenAt over the store's: the
+      // store's copy only advances when a heartbeat's write lands, so between
+      // that write starting and finishing the connection's in-memory value is
+      // the more current one.
+      const lastSeenAt = live?.lastSeenAt ?? record.lastSeenAt;
+      if (lastSeenAt) view.lastSeenAt = lastSeenAt;
+      if (live?.address) view.address = live.address;
+      return view;
+    });
   }
 
-  /** Sum of every connected worker's maxConcurrency. */
+  /**
+   * Sum of every connected worker's maxConcurrency, draining workers
+   * excluded: a drained machine finishes what it holds but is no longer part
+   * of the capacity the scheduler is allowed to plan against.
+   */
   capacity(): number {
     let total = 0;
-    for (const worker of this.#workers.values()) total += worker.capabilities.maxConcurrency;
+    for (const worker of this.#workers.values()) {
+      if (this.#isDraining(worker.id)) continue;
+      total += worker.capabilities.maxConcurrency;
+    }
     return total;
   }
 
   /** Runs with an active lease right now, across every worker. */
   inFlight(): number {
     return this.#leases.size;
+  }
+
+  /** Mint a single-use pairing token; redeeming it is what enrolls a machine. */
+  mintPairingToken(): { token: string; expiresAt: string } {
+    return this.#fleet.mintPairingToken();
+  }
+
+  /** Rename an enrolled worker. `name` is trusted to already be sanitized and non-empty. */
+  async rename(id: string, name: string): Promise<boolean> {
+    if (!(await this.#fleet.rename(id, name))) return false;
+    this.#emitWorkers();
+    return true;
+  }
+
+  /**
+   * Set the operator-controlled state. A connected worker is told
+   * immediately rather than at its next heartbeat, so a drain stops it
+   * taking on local work as soon as the operator asked for it; the host's own
+   * dispatching stops the moment the record is written, either way.
+   */
+  async setState(id: string, state: WorkerState): Promise<boolean> {
+    if (!(await this.#fleet.setState(id, state))) return false;
+    const live = this.#workers.get(id);
+    if (live) this.#send(live.socket, { type: "worker-state", state });
+    this.#emitWorkers();
+    return true;
+  }
+
+  /**
+   * Revoke an enrollment: drop the record and, only once that write is
+   * durable, disconnect the live connection. Persisting first is what makes
+   * a successful return mean both things happened; closing the socket first
+   * and then failing to persist would report an error to the operator after
+   * the worker had already been told it was revoked, which is backwards.
+   * Serialized against registration on the same #gate: see #serialize for
+   * the race that closes.
+   */
+  async revoke(id: string): Promise<boolean> {
+    return this.#serialize(async () => {
+      if (!(await this.#fleet.revoke(id))) return false;
+      const live = this.#workers.get(id);
+      if (live) {
+        this.#send(live.socket, { type: "revoked", reason: "This worker's enrollment was revoked." });
+        this.#workers.delete(id);
+        const timer = this.#heartbeatTimers.get(id);
+        if (timer) clearTimeout(timer);
+        this.#heartbeatTimers.delete(id);
+        // The socket's own "close" still runs #handleDisconnect, which is
+        // what strands whatever leases this worker was holding: a revoked
+        // worker's in-flight runs are given up on exactly like a worker that
+        // walked away.
+        live.socket.close();
+        // close() is graceful and can hang forever against a dead peer or a
+        // wedged proxy; a successful revoke has to guarantee disconnection,
+        // not just ask for it, so force it if the handshake doesn't finish.
+        setTimeout(() => live.socket.terminate(), 1000).unref();
+      }
+      this.#emitWorkers();
+      return true;
+    });
   }
 
   /**
@@ -437,6 +593,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
 
   /** Cancel every outstanding lease and close every socket; called on orchestrator shutdown. */
   stop(): void {
+    this.#stopped = true;
     // Every socket below is about to be terminated regardless, so whether
     // each cancel() came back "sent" or "pending" makes no difference here.
     for (const runId of this.#leaseByRun.keys()) this.cancel(runId);
@@ -461,11 +618,22 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     return [...this.#leases.values()].filter((lease) => lease.workerId === workerId);
   }
 
-  /** The connected worker with the most free capacity, or undefined when none has room. */
+  /** Whether the store has this worker parked out of rotation. */
+  #isDraining(workerId: string): boolean {
+    return this.#fleet.get(workerId)?.state === "draining";
+  }
+
+  /**
+   * The connected worker with the most free capacity, or undefined when none
+   * has room. Draining workers are skipped outright: they keep the leases
+   * they already hold and report them normally, they are simply never handed
+   * anything new.
+   */
   #pickWorker(): ConnectedWorker | undefined {
     let best: ConnectedWorker | undefined;
     let bestFree = 0;
     for (const worker of this.#workers.values()) {
+      if (this.#isDraining(worker.id)) continue;
       const free = worker.capabilities.maxConcurrency - this.#leasesForWorker(worker.id).length;
       if (free > bestFree) {
         best = worker;
@@ -479,98 +647,174 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
   }
 
-  #reject(socket: WebSocket, reason: string): void {
-    this.#send(socket, { type: "rejected", reason });
+  #reject(socket: WebSocket, code: WorkerDenyReason, reason: string): void {
+    this.#send(socket, { type: "rejected", code, reason });
   }
 
-  /** Constant-time pairing token comparison: a length mismatch alone must never be observable. */
-  #tokenMatches(candidate: string): boolean {
-    const expected = Buffer.from(this.#config.fleet.token);
-    const provided = Buffer.from(candidate);
-    if (expected.length === 0 || expected.length !== provided.length) return false;
-    return timingSafeEqual(expected, provided);
+  #emitWorkers(): void {
+    this.#lastEmitAt = Date.now();
+    this.emit("workers", this.list());
   }
 
-  #handleRegister(socket: WebSocket, message: RegisterMessage): ConnectedWorker | undefined {
+  /**
+   * Chains `task` onto one promise so a registration and a revoke never run
+   * concurrently. Without this, a revoke landing while a registration is
+   * mid-await (between checking a credential and installing the live
+   * connection) sees no connection to kill, deletes the record, and reports
+   * success; the registration then resumes and installs a socket for a
+   * worker that no longer exists. rename/setState don't touch live
+   * connections in a way that races revoke, so they don't go through this.
+   *
+   * A rejected task still lets the chain move on (the same recovery
+   * FleetStore#enqueue uses): only the caller of that particular task sees
+   * the rejection.
+   */
+  #serialize<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.#gate.then(task, task);
+    this.#gate = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  /**
+   * Answer one register frame: authenticate it against the enrolled fleet,
+   * then install the live connection. Both halves run inside #serialize, so
+   * a revoke cannot land between them.
+   */
+  async #handleRegister(socket: WebSocket, message: RegisterMessage, address?: string): Promise<ConnectedWorker | undefined> {
     if (message.protocolVersion !== WORKER_PROTOCOL_VERSION) {
       const reason = `unsupported protocol version ${message.protocolVersion}; the host runs ${WORKER_PROTOCOL_VERSION}`;
-      console.warn(`[brevi] rejected worker ${message.workerId}: ${reason}`);
-      this.#reject(socket, reason);
-      return undefined;
-    }
-    if (!this.#tokenMatches(message.token)) {
-      console.warn(`[brevi] rejected worker ${message.workerId}: invalid pairing token`);
-      this.#reject(socket, "invalid pairing token");
+      console.warn(`[brevi] rejected a worker registration: ${reason}`);
+      this.#reject(socket, "protocol", reason);
       return undefined;
     }
 
-    const previous = this.#workers.get(message.workerId);
-    const now = new Date().toISOString();
-    const entry: ConnectedWorker = {
-      id: message.workerId,
-      name: message.name,
-      socket,
-      capabilities: message.capabilities,
-      connectedAt: now,
-      lastSeenAt: now,
-    };
-    this.#workers.set(message.workerId, entry);
-    if (previous) {
-      // Not a drop: the worker itself opened a fresh connection (a restart,
-      // usually) while the host still thought the old one was live. Closing
-      // it here, after the map already points at the new entry, makes its
-      // own "close" handler a no-op (see #handleDisconnect's identity
-      // check), so this never races the grace path below.
-      console.log(`[brevi] worker ${entry.name} (${entry.id}) reconnected on a new socket; closing the previous one`);
-      previous.socket.terminate();
-    }
+    return this.#serialize(async () => {
+      const auth = message.auth;
+      let record: WorkerRecord;
+      let credential: string | undefined;
+      if (auth.kind === "pairing") {
+        const result = await this.#fleet.redeemPairing(auth.token, {
+          name: message.name,
+          capabilities: message.capabilities,
+        });
+        // The denial deliberately says no more than its code already does:
+        // telling "wrong token" apart from "right token, expired" is the most
+        // a guesser gets, and there is no reason to spell it out twice.
+        if ("error" in result) {
+          console.warn(`[brevi] rejected a worker enrollment: ${result.error}`);
+          this.#reject(socket, result.error, "the pairing token was not accepted");
+          return undefined;
+        }
+        record = result.worker;
+        credential = result.credential;
+      } else {
+        const found = this.#fleet.authenticate(auth.workerId, auth.secret);
+        if (!found) {
+          console.warn(`[brevi] rejected worker ${auth.workerId}: unknown or revoked credential`);
+          this.#reject(socket, "unauthorized", "registration was not accepted");
+          return undefined;
+        }
+        record =
+          (await this.#fleet.touch(found.id, {
+            lastSeenAt: new Date().toISOString(),
+            capabilities: message.capabilities,
+          })) ?? found;
+      }
 
-    const grace = this.#grace.get(message.workerId);
-    if (grace) {
-      clearTimeout(grace.timer);
-      this.#grace.delete(message.workerId);
-    }
-    // Reconcile against what the worker says it still owns: anything this
-    // host still has an active lease for, under this worker id, that the
-    // worker no longer lists in activeLeases was lost on its side (finished
-    // without reporting, or the process restarted mid-run) and is stranded
-    // right away rather than waiting out a grace window reconnection already
-    // answered. Leases it does still claim are left exactly as they were;
-    // its buffered reporting resumes on this connection.
-    const claimed = new Set(message.activeLeases.map((lease) => lease.id));
-    for (const lease of this.#leasesForWorker(message.workerId)) {
-      if (!claimed.has(lease.id)) void this.#strandLease(lease.id);
-    }
+      // Belt and braces immediately before installing the connection: confirm
+      // the worker is still enrolled. Serializing against revoke already rules
+      // out the race this guards, but re-checking here is cheap and means the
+      // invariant doesn't quietly depend on #serialize alone.
+      if (!this.#fleet.get(record.id)) {
+        this.#reject(socket, "unauthorized", "registration was not accepted");
+        return undefined;
+      }
 
-    this.#send(socket, {
-      type: "registered",
-      protocolVersion: WORKER_PROTOCOL_VERSION,
-      heartbeatIntervalMs: WORKER_HEARTBEAT_MS,
-      hostVersion: HOST_VERSION,
-      workerId: message.workerId,
+      // The id is the store record's, never anything the worker chose: a
+      // worker's identity comes from its enrollment, and the register frame
+      // has no field to assert one with.
+      const workerId = record.id;
+      const previous = this.#workers.get(workerId);
+      const now = new Date().toISOString();
+      const entry: ConnectedWorker = {
+        id: workerId,
+        name: record.name,
+        socket,
+        capabilities: message.capabilities,
+        address,
+        connectedAt: now,
+        lastSeenAt: now,
+        claimedLeases: message.activeLeases
+          .map((lease) => lease.id)
+          .sort()
+          .join(","),
+      };
+      this.#workers.set(workerId, entry);
+      if (previous) {
+        // Not a drop: the worker itself opened a fresh connection (a restart,
+        // usually) while the host still thought the old one was live. Closing
+        // it here, after the map already points at the new entry, makes its
+        // own "close" handler a no-op (see #handleDisconnect's identity
+        // check), so this never races the grace path below.
+        console.log(`[brevi] worker ${entry.name} (${entry.id}) reconnected on a new socket; closing the previous one`);
+        previous.socket.terminate();
+      }
+
+      const grace = this.#grace.get(workerId);
+      if (grace) {
+        clearTimeout(grace.timer);
+        this.#grace.delete(workerId);
+      }
+      // Reconcile against what the worker says it still owns: anything this
+      // host still has an active lease for, under this worker id, that the
+      // worker no longer lists in activeLeases was lost on its side (finished
+      // without reporting, or the process restarted mid-run) and is stranded
+      // right away rather than waiting out a grace window reconnection already
+      // answered. Leases it does still claim are left exactly as they were;
+      // its buffered reporting resumes on this connection.
+      const claimed = new Set(message.activeLeases.map((lease) => lease.id));
+      for (const lease of this.#leasesForWorker(workerId)) {
+        if (!claimed.has(lease.id)) void this.#strandLease(lease.id);
+      }
+
+      this.#send(socket, {
+        type: "registered",
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        heartbeatIntervalMs: WORKER_HEARTBEAT_MS,
+        hostVersion: HOST_VERSION,
+        workerId,
+        name: record.name,
+        state: record.state,
+        // Only the connection that redeemed a pairing token gets one; every
+        // later registration already arrived holding it.
+        ...(credential ? { credential } : {}),
+      });
+
+      // The other direction: a lease the worker still claims that this host has
+      // no record of (already settled, or stranded while it was disconnected)
+      // can never be accepted. Ack it right away so the worker stops holding it
+      // open waiting for a reply that will never come.
+      for (const claimedLease of message.activeLeases) {
+        if (!this.#leases.has(claimedLease.id)) {
+          this.#send(socket, { type: "run-complete-ack", leaseId: claimedLease.id, runId: claimedLease.runId });
+        }
+      }
+      // A cancel requested while this worker was disconnected never reached it;
+      // replay it now so a reconnecting worker is aborted before it resumes
+      // normal run-patch / run-complete reporting.
+      for (const lease of this.#leasesForWorker(workerId)) {
+        if (this.#cancelIntents.has(lease.id)) {
+          this.#send(socket, { type: "cancel", leaseId: lease.id, runId: lease.runId });
+        }
+      }
+
+      this.#armHeartbeatWatchdog(entry);
+      this.#emitWorkers();
+      return entry;
     });
-
-    // The other direction: a lease the worker still claims that this host has
-    // no record of (already settled, or stranded while it was disconnected)
-    // can never be accepted. Ack it right away so the worker stops holding it
-    // open waiting for a reply that will never come.
-    for (const claimedLease of message.activeLeases) {
-      if (!this.#leases.has(claimedLease.id)) {
-        this.#send(socket, { type: "run-complete-ack", leaseId: claimedLease.id, runId: claimedLease.runId });
-      }
-    }
-    // A cancel requested while this worker was disconnected never reached it;
-    // replay it now so a reconnecting worker is aborted before it resumes
-    // normal run-patch / run-complete reporting.
-    for (const lease of this.#leasesForWorker(message.workerId)) {
-      if (this.#cancelIntents.has(lease.id)) {
-        this.#send(socket, { type: "cancel", leaseId: lease.id, runId: lease.runId });
-      }
-    }
-
-    this.#armHeartbeatWatchdog(entry);
-    this.emit("workers", this.list());
-    return entry;
   }
 
   /** (Re)arm the timer that drops a worker for going quiet; called on register and on every heartbeat. */
@@ -585,16 +829,67 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     this.#heartbeatTimers.set(entry.id, timer);
   }
 
+  /**
+   * One heartbeat: refresh the enrollment record's liveness, ack with the
+   * worker's current state (which is how a drain reaches a worker that missed
+   * the push), and decide whether the fleet is worth re-emitting.
+   *
+   * The emit does double duty, and that is the tradeoff here. Dashboards want
+   * it rarely (an idle worker's lastSeenAt ticking over is not news), but the
+   * scheduler listens to the same event to re-drive a queue stuck behind
+   * capacity it cannot see finishing: a dispatch the worker rejected as full,
+   * or runs it came back from a host restart still executing. So a heartbeat
+   * that reports a change in what the worker claims always emits, and an
+   * otherwise idle one emits at most every HEARTBEAT_BROADCAST_MS. The cost
+   * is that a queue in that invisible-capacity state can wait up to that long
+   * to be retried instead of one heartbeat interval, which is a far better
+   * trade than waking every open dashboard for every worker every 15s.
+   */
+  async #handleHeartbeat(worker: ConnectedWorker, leaseIds: string[]): Promise<void> {
+    const claimed = [...leaseIds].sort().join(",");
+    const changed = claimed !== worker.claimedLeases;
+    worker.claimedLeases = claimed;
+    const record = await this.#fleet.touch(worker.id, { lastSeenAt: worker.lastSeenAt });
+    // Re-check rather than trust the entry captured before the await: a
+    // register could have installed a fresh connection for this worker while
+    // the write was in flight, and acting now would speak for that newer,
+    // unrelated socket.
+    if (this.#workers.get(worker.id) !== worker) return;
+    if (!record) {
+      // touch found nothing to update, which only happens once the record is
+      // gone: this worker was revoked while its socket stayed open (the
+      // revoke and this heartbeat's write happened to interleave). Tell it
+      // the same way a live revoke would, rather than acking as though
+      // nothing had happened and leaving an orphaned connection nobody knows
+      // to clean up.
+      this.#send(worker.socket, { type: "revoked", reason: "This worker's enrollment was revoked." });
+      this.#workers.delete(worker.id);
+      worker.socket.close();
+      this.#emitWorkers();
+      return;
+    }
+    this.#send(worker.socket, { type: "heartbeat-ack", ts: new Date().toISOString(), state: record.state });
+    if (changed || Date.now() - this.#lastEmitAt >= HEARTBEAT_BROADCAST_MS) this.#emitWorkers();
+  }
+
   #handleDisconnect(entry: ConnectedWorker): void {
+    // Shutdown already cancelled every lease and cleared every timer; a close
+    // arriving after that must not arm a fresh grace window for a host that
+    // is on its way out.
+    if (this.#stopped) return;
+    const current = this.#workers.get(entry.id);
     // A register on a new socket for this worker id already replaced this
     // entry (see #handleRegister); this close event is the old socket
     // catching up and must not strand leases the new connection already owns.
-    if (this.#workers.get(entry.id) !== entry) return;
+    // No entry at all is a different case, not a replacement: revoke() drops
+    // the map entry before closing the socket, and those leases do still have
+    // to be given up on, so that path falls through.
+    if (current && current !== entry) return;
     this.#workers.delete(entry.id);
     const timer = this.#heartbeatTimers.get(entry.id);
     if (timer) clearTimeout(timer);
     this.#heartbeatTimers.delete(entry.id);
-    this.emit("workers", this.list());
+    this.#emitWorkers();
 
     const leaseIds = this.#leasesForWorker(entry.id).map((lease) => lease.id);
     if (leaseIds.length === 0) return;
@@ -680,15 +975,15 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
         return; // already registered on this connection; a repeat frame is ignored, not fatal
       case "heartbeat":
         this.#armHeartbeatWatchdog(worker);
-        this.#send(worker.socket, { type: "heartbeat-ack", ts: new Date().toISOString() });
-        // The host's view of a worker's free capacity can be wrong in the
-        // worker's favour: it rejected a dispatch as full, or it came back
-        // from a host restart still executing runs this host has no leases
-        // for. Nothing else fires when those finish, so a queued run would
-        // wait forever. The heartbeat is the one signal that keeps arriving,
-        // so let it re-drive the queue; the listener only dispatches when
-        // there is something queued and a worker with room.
-        this.emit("workers", this.list());
+        // The ack and the store write are both async now (the fleet record's
+        // lastSeenAt has to land on disk), so a failing write can't be left
+        // to become an unhandled rejection that takes the host down.
+        void this.#handleHeartbeat(worker, message.leaseIds).catch((error: unknown) => {
+          console.error(
+            `[brevi] worker ${worker.name} (${worker.id}) heartbeat write failed: ` +
+              `${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
         return;
       case "dispatch-accepted":
         return; // acknowledgement only; the lease already exists from dispatch()

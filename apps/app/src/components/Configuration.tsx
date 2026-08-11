@@ -1,4 +1,4 @@
-import type { BreviConfig, HealthResponse, LinearStatus, Run, WorkerSummary } from "@brevi/shared";
+import type { BreviConfig, HealthResponse, LinearStatus, Run, WorkerView } from "@brevi/shared";
 import type { ConfigSection } from "../lib/useOrchestrator";
 import { AgentSection } from "./config/AgentSection";
 import { ConnectorsSection } from "./config/ConnectorsSection";
@@ -7,12 +7,14 @@ import { OrchestratorSection } from "./config/OrchestratorSection";
 import { RepositoriesSection } from "./config/RepositoriesSection";
 import { SandboxSection } from "./config/SandboxSection";
 import { ServerSection } from "./config/ServerSection";
+import { WorkersSection } from "./config/WorkersSection";
 
 const SECTIONS: { id: ConfigSection; label: string }[] = [
   { id: "connectors", label: "Connectors" },
   { id: "repositories", label: "Repositories" },
   { id: "agent", label: "Agent" },
   { id: "sandbox", label: "Sandbox" },
+  { id: "workers", label: "Workers" },
   { id: "memory", label: "Memory" },
   { id: "orchestrator", label: "Orchestrator" },
   { id: "server", label: "Server" },
@@ -35,15 +37,17 @@ export function ConfigurationPage({
   section,
   onSection,
   onConfig,
+  onWorkers,
 }: {
   config: BreviConfig | null;
   runs: Run[];
-  workers: WorkerSummary[];
+  workers: WorkerView[];
   linearStatus: LinearStatus | null;
   health: HealthResponse | null;
   section: ConfigSection;
   onSection: (section: ConfigSection) => void;
   onConfig: (config: BreviConfig) => void;
+  onWorkers: (workers: WorkerView[]) => void;
 }) {
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-5 sm:py-7 md:px-8">
@@ -106,6 +110,14 @@ export function ConfigurationPage({
           </div>
           <div hidden={section !== "sandbox"}>
             <SandboxSection config={config} health={health} workers={workers} onConfig={onConfig} />
+          </div>
+          <div hidden={section !== "workers"}>
+            <WorkersSection
+              config={config}
+              workers={workers}
+              onConfig={onConfig}
+              onWorkers={onWorkers}
+            />
           </div>
           <div hidden={section !== "memory"}>
             <MemorySection config={config} onConfig={onConfig} />

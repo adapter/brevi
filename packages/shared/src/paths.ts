@@ -18,8 +18,18 @@ export const IMAGES_DIR = join(BREVI_HOME, "images");
 export const WORKSPACES_DIR = join(BREVI_HOME, "workspaces");
 /** Per-repository memories, one JSON file per repo key (see MemoryStore). */
 export const MEMORIES_DIR = join(BREVI_HOME, "memories");
-/** Stable per-machine worker id (a randomUUID), created on first `brevi worker` run. */
-export const WORKER_ID_PATH = join(BREVI_HOME, "worker-id");
+/**
+ * Enrolled workers on the host: runtime state, not configuration, so it lives
+ * beside the run history rather than in config.json (see FleetStore).
+ */
+export const FLEET_PATH = join(BREVI_HOME, "fleet.json");
+/**
+ * A worker's own enrollment on its own machine: the id the host assigned it
+ * and the credential it earned by redeeming a pairing token. The only fleet
+ * secret that touches worker disk, and what makes a reconnect recognisable as
+ * the same worker.
+ */
+export const WORKER_STATE_PATH = join(BREVI_HOME, "worker.json");
 /** Directory for log files, e.g. the orchestrator's tee target. */
 export const LOGS_DIR = join(BREVI_HOME, "logs");
 /** Persistent orchestrator log, tailed by `brevi doctor` as diagnosis evidence. */

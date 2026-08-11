@@ -1,12 +1,11 @@
-import { loadConfig } from "@brevi/orchestrator";
 import { WORKER_MAX_CONCURRENCY } from "@brevi/shared";
-import { runWorker } from "@brevi/worker";
+import { enrollmentFor, runWorker } from "@brevi/worker";
 import type { Command } from "commander";
 import pc from "picocolors";
 import { errorMessage } from "../lib/util.js";
 
 interface WorkerCommandOptions {
-  host?: string;
+  host: string;
   token?: string;
   name?: string;
   concurrency?: string;
@@ -15,33 +14,24 @@ interface WorkerCommandOptions {
 export function registerWorkerCommand(program: Command): void {
   program
     .command("worker")
-    .description("Run an execution worker that connects to a brevi host and executes dispatched runs")
-    .option("--host <url>", "brevi host to connect to (default: http://localhost:<server.port> from the local config)")
-    .option("--token <token>", "pairing token (default: the local config's fleet.token)")
-    .option("--name <name>", "name shown for this worker on the host's dashboard (default: this machine's hostname)")
+    .description("Enroll this machine as a worker, or reconnect an enrolled one")
+    // Required, with no fallback to the local config: which brevi instance a
+    // worker belongs to is the host's business, not something this machine's
+    // own config (if it even has one) could know.
+    .requiredOption("--host <url>", "the brevi host to work for, e.g. http://192.168.1.5:4400")
+    .option(
+      "--token <token>",
+      "single-use pairing token minted on the host's Workers page; needed only to enroll this machine, or to enroll it again after its credential was revoked",
+    )
+    .option(
+      "--name <name>",
+      "name to enroll under (default: this machine's hostname); the host keeps its own name for this worker afterwards, so later renames happen on the dashboard",
+    )
     .option(
       "--concurrency <n>",
-      "how many dispatched runs to execute at once (default: the local config's sandbox.concurrency)",
+      "how many dispatched runs to execute at once (default: the local config's sandbox.concurrency, or 1 on a machine with no brevi config)",
     )
     .action(async (options: WorkerCommandOptions) => {
-      const config = await loadConfig().catch((err: unknown) => {
-        console.error(pc.red(`✖ ${errorMessage(err)}`));
-        console.error(pc.dim("  Run `npx @brevi/cli init` to create one."));
-        process.exit(1);
-      });
-
-      const hostUrl = options.host ?? `http://localhost:${config.server.port}`;
-      const token = options.token ?? config.fleet.token;
-      if (!token) {
-        console.error(pc.red("✖ No pairing token available."));
-        console.error(
-          pc.dim(
-            "  Pass --token, or set fleet.token in this machine's config. The host generates one on first start; copy it from its dashboard or ~/.brevi/config.json.",
-          ),
-        );
-        process.exit(1);
-      }
-
       let concurrency: number | undefined;
       if (options.concurrency !== undefined) {
         concurrency = Number(options.concurrency);
@@ -55,8 +45,23 @@ export function registerWorkerCommand(program: Command): void {
         }
       }
 
+      // Enrollment is the only way onto a host's fleet, and a pairing token is
+      // the only way to enroll: without one, and without a credential an
+      // earlier enrollment with this host left behind, there is nothing to
+      // connect with. Said here rather than after the sandbox provider has
+      // been resolved, which can take minutes on a first run.
+      if (!options.token && !(await enrollmentFor(options.host))) {
+        console.error(pc.red(`✖ This machine is not enrolled with ${options.host}, and no --token was given.`));
+        console.error(
+          pc.dim(
+            '  Open Configuration > Workers on that host and use "Add a worker": it mints a pairing token and shows the exact command to run here.',
+          ),
+        );
+        process.exit(1);
+      }
+
       try {
-        await runWorker({ hostUrl, token, name: options.name, concurrency });
+        await runWorker({ hostUrl: options.host, token: options.token, name: options.name, concurrency });
       } catch (err) {
         console.error(pc.red(`✖ ${errorMessage(err)}`));
         process.exit(1);

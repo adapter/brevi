@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import type { Server as HttpServer, IncomingMessage } from "node:http";
+import { createServer, type Server as HttpServer, type IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { createRequire } from "node:module";
 import { totalmem } from "node:os";
@@ -24,7 +24,8 @@ import {
   type ServerMessage,
   type SettingsUpdateRequest,
   type Ticket,
-  type WorkerSummary,
+  type WorkerRenameRequest,
+  type WorkerView,
 } from "@brevi/shared";
 import { loadConfig } from "./config.js";
 import { attachOrchestratorLogFile } from "./logfile.js";
@@ -135,36 +136,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * True only for addresses that can never have left the machine: IPv4
- * loopback (127.0.0.0/8), IPv6 loopback (::1), and the IPv4-mapped IPv6 form
- * a dual-stack listener reports for those same v4 peers (::ffff:127.x.x.x).
- * Everything else, including an unreadable/empty address, is treated as
- * remote: the pairing token hands out standing worker credentials, so an
- * address we can't positively vouch for must not qualify.
- */
-function isLoopbackAddress(address: string | null | undefined): boolean {
-  if (!address) return false;
-  if (address === "::1") return true;
-  const v4 = address.startsWith("::ffff:") ? address.slice("::ffff:".length) : address;
-  return v4.startsWith("127.");
-}
-
-/**
- * Best-effort peer address for a request handled by @hono/node-server: the
- * node adapter stashes the raw `IncomingMessage` on `c.env`, whose socket
- * carries the TCP peer. Wrapped in a try/catch because that shape isn't part
- * of Hono's public contract, only this adapter's, and a future change there
- * should degrade to "not loopback" rather than throw through the route.
- */
-function isLoopbackCaller(c: { env: HttpBindings }): boolean {
-  try {
-    return isLoopbackAddress(c.env.incoming.socket?.remoteAddress);
-  } catch {
-    return false;
-  }
-}
-
 function buildApp(
   orchestrator: Orchestrator,
   config: BreviConfig,
@@ -193,23 +164,56 @@ function buildApp(
 
   app.get("/api/tickets", (c) => c.json(orchestrator.tickets));
 
-  app.get("/api/workers", (c) => c.json(orchestrator.listWorkers()));
+  app.get("/api/workers", (c) => c.json({ workers: orchestrator.listWorkers() }));
 
-  app.get("/api/fleet/pairing", (c) => {
-    // Whoever holds the pairing token can dial in as a worker and be handed
-    // runs carrying every credential they need, so this readback is confined
-    // to callers that are provably this machine, the way the config on disk
-    // already is.
-    if (!isLoopbackCaller(c)) {
-      return c.json(
-        {
-          error:
-            "the fleet pairing token is readable only from the machine running brevi, in ~/.brevi/config.json there",
-        },
-        403,
-      );
+  app.post("/api/workers/pair", (c) => {
+    // Nothing about the request's own origin is used: the command printed
+    // here is meant to be pasted on another machine, so the orchestrator
+    // names it from whichever listener actually bound (see #pairingEndpoint).
+    try {
+      return c.json(orchestrator.mintPairingToken());
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }
-    return c.json(orchestrator.fleetPairing(new URL(c.req.url).origin));
+  });
+
+  app.post("/api/workers/:id/rename", async (c) => {
+    let body: WorkerRenameRequest;
+    try {
+      body = (await c.req.json()) as WorkerRenameRequest;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    if (typeof body?.name !== "string") return c.json({ error: "name must be a string" }, 400);
+    try {
+      return c.json(await orchestrator.renameWorker(c.req.param("id"), body.name));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/workers/:id/drain", async (c) => {
+    try {
+      return c.json(await orchestrator.setWorkerState(c.req.param("id"), "draining"));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/workers/:id/enable", async (c) => {
+    try {
+      return c.json(await orchestrator.setWorkerState(c.req.param("id"), "active"));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.delete("/api/workers/:id", async (c) => {
+    try {
+      return c.json(await orchestrator.revokeWorker(c.req.param("id")));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
   });
 
   app.get("/api/runs", (c) => c.json(orchestrator.listRuns()));
@@ -496,7 +500,9 @@ function attachWebSockets(
     // broadcast loop below (a worker socket speaks a different protocol
     // entirely and must not be mistaken for a dashboard client).
     if (pathname === WORKER_WS_PATH) {
-      wss.handleUpgrade(request, socket, head, (ws) => orchestrator.acceptWorkerSocket(ws));
+      wss.handleUpgrade(request, socket, head, (ws) =>
+        orchestrator.acceptWorkerSocket(ws, request.socket.remoteAddress),
+      );
       return;
     }
     if (pathname !== "/ws") {
@@ -536,7 +542,7 @@ function attachWebSockets(
   const onConfig = (redacted: BreviConfig): void => broadcast({ type: "config", config: redacted });
   const onLinearStatus = (linearStatus: LinearStatus): void =>
     broadcast({ type: "linear-status", linearStatus });
-  const onWorkers = (workers: WorkerSummary[]): void => broadcast({ type: "workers", workers });
+  const onWorkers = (workers: WorkerView[]): void => broadcast({ type: "workers", workers });
   const onRunUpdated = (run: Run): void => broadcast({ type: "run-updated", run });
   const onRunEvent = (event: RunEvent): void => {
     for (const client of clients) {
@@ -567,6 +573,82 @@ function attachWebSockets(
   };
 }
 
+/**
+ * The worker channel's own listener, bound separately from the dashboard's
+ * `server` (whose upgrade handler still serves WORKER_WS_PATH too, for a
+ * worker on this same machine or an intentionally LAN-bound dashboard). It
+ * answers every ordinary HTTP request with a 404 and upgrades nothing but
+ * WORKER_WS_PATH: no dashboard, no management API, just the authenticated
+ * worker protocol. Off when `config.fleet.host` is empty. A bind failure
+ * (port in use, address not available) is logged and returns undefined rather
+ * than throwing, so a bad fleet.host/port can't take the whole orchestrator
+ * down.
+ */
+async function startFleetListener(
+  orchestrator: Orchestrator,
+  config: BreviConfig,
+): Promise<{ close(): Promise<void> } | undefined> {
+  if (!config.fleet.host) return undefined;
+
+  const fleetWss = new WebSocketServer({ noServer: true });
+  const httpServer = createServer((_req, res) => {
+    res.writeHead(404).end();
+  });
+  httpServer.on("upgrade", (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const { pathname } = new URL(request.url ?? "/", "http://localhost");
+    if (pathname !== WORKER_WS_PATH) {
+      socket.destroy();
+      return;
+    }
+    fleetWss.handleUpgrade(request, socket, head, (ws) =>
+      orchestrator.acceptWorkerSocket(ws, request.socket.remoteAddress),
+    );
+  });
+
+  try {
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      httpServer.once("error", rejectPromise);
+      httpServer.listen(config.fleet.port, config.fleet.host, () => resolvePromise());
+    });
+  } catch (error) {
+    console.error(
+      `[brevi] fleet listener failed to bind ${config.fleet.host}:${config.fleet.port} (${errorMessage(error)}); workers can still enroll through the dashboard's own listener on this machine.`,
+    );
+    fleetWss.close();
+    httpServer.close();
+    return undefined;
+  }
+  // The bind's own "error" listener only ever rejects a promise that has
+  // already resolved, and a server left with no listener at all throws on
+  // the next error it emits: either way a socket-level failure here would go
+  // unreported or take the whole process down over the fleet listener alone.
+  httpServer.removeAllListeners("error");
+  httpServer.on("error", (error) => {
+    console.error(`[brevi] fleet listener error: ${errorMessage(error)}`);
+  });
+
+  const address = httpServer.address();
+  const port = typeof address === "object" && address ? address.port : config.fleet.port;
+  orchestrator.setFleetEndpoint({ host: config.fleet.host, port });
+  console.log(`[brevi] fleet listener bound at ${config.fleet.host}:${port}`);
+
+  return {
+    async close(): Promise<void> {
+      // Every live worker socket has to be terminated before the server is
+      // closed: an upgraded socket never ends on its own, and close() only
+      // calls back once every connection has, so skipping this hangs
+      // shutdown for as long as one worker stays connected. The registry's
+      // own stop() does the same for the sockets it knows about, but it runs
+      // later in the shutdown sequence and only ever sees registered
+      // workers, not one still inside its register deadline.
+      for (const client of fleetWss.clients) client.terminate();
+      fleetWss.close();
+      httpServer.closeAllConnections();
+      await new Promise<void>((resolveClose) => httpServer.close(() => resolveClose()));
+    },
+  };
+}
+
 export async function startOrchestrator(options: StartOptions = {}): Promise<OrchestratorHandle> {
   attachOrchestratorLogFile();
   const config = options.config ?? (await loadConfig(options.configPath));
@@ -588,13 +670,20 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : config.server.port;
   boundPort = port;
+  // Both halves of what this listener really bound, captured here rather than
+  // read back off the config later: `server.host` and `server.port` are
+  // restart-required, so a saved change reaches the live config while this
+  // socket stays where it is (see Orchestrator#dashboardEndpoint).
+  orchestrator.setDashboardEndpoint({ host: config.server.host, port });
   const sockets = attachWebSockets(server, orchestrator, config);
+  const fleetListener = await startFleetListener(orchestrator, config);
 
   return {
     port,
     url: `http://${urlHost(config.server.host)}:${port}`,
     async stop(): Promise<void> {
       sockets.close();
+      await fleetListener?.close();
       await orchestrator.stop();
       await new Promise<void>((resolveClose, rejectClose) => {
         server.close((error) => (error ? rejectClose(error) : resolveClose()));
