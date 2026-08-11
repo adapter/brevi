@@ -1,17 +1,22 @@
-import type { BreviConfig, HealthResponse } from "@brevi/shared";
+import { useEffect, useState } from "react";
+import type { BreviConfig, FleetPairingResponse, HealthResponse, WorkerSummary } from "@brevi/shared";
 import {
   FIRECRACKER_SIZES,
   resolveFirecrackerResources,
   type FirecrackerVmSize,
 } from "@brevi/shared/sizes";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { duration } from "../../lib/format";
 import { useSettingsDraft } from "../../lib/settings";
+import { Command } from "../Bits";
 import { Warn } from "../Icons";
 import {
   Advanced,
   FieldRow,
   NumberField,
   RadioField,
+  SecretField,
   SectionIntro,
   SegmentedField,
   SettingsCard,
@@ -36,14 +41,17 @@ const SIZES = (["small", "medium", "large"] as const).map((size) => ({
 export function SandboxSection({
   config,
   health,
+  workers,
   onConfig,
 }: {
   config: BreviConfig;
   health: HealthResponse | null;
+  workers: WorkerSummary[];
   onConfig: (config: BreviConfig) => void;
 }) {
   const sandbox = useSettingsDraft(config, onConfig);
   const vm = useSettingsDraft(config, onConfig);
+  const fleet = useSettingsDraft(config, onConfig);
 
   const provider = sandbox.value("sandbox.provider");
   // health.sandboxProvider is what the running process actually resolved
@@ -77,6 +85,28 @@ export function SandboxSection({
   if (concurrency > 1) hintWords.push("concurrent");
   if (!override && typeof size === "string") hintWords.push(size);
   hintWords.push(runWord, verb, `${formatGb(reservedMib)} GB of host memory`);
+
+  // fleet.token is masked in every config read, so the copyable `brevi
+  // worker` command can only come from the loopback-only pairing route.
+  // Fetched once on mount; a non-loopback browser (or the route being
+  // unreachable) leaves pairing null and the command falls back to a
+  // placeholder.
+  const [pairing, setPairing] = useState<FleetPairingResponse | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/fleet/pairing", { headers: { Accept: "application/json" } })
+      .then((res) => (res.ok ? (res.json() as Promise<FleetPairingResponse>) : Promise.reject(res)))
+      .then((next) => {
+        if (!cancelled) setPairing(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const workerCommand =
+    pairing?.command ?? `brevi worker --host ${window.location.origin} --token <fleet.token>`;
+  const now = Date.now();
 
   return (
     <>
@@ -230,6 +260,83 @@ export function SandboxSection({
             />
           </Advanced>
         </SettingsCard>
+
+        <SettingsCard title="Fleet" draft={fleet}>
+          <SecretField
+            label="Pairing token"
+            path="fleet.token"
+            draft={fleet}
+            help="Shared secret workers present with `brevi worker --host <url> --token <token>`. The host generates one on first start; it's readable in the clear only on the machine running brevi."
+          />
+          <NumberField
+            label="Heartbeat timeout"
+            path="fleet.heartbeatTimeoutSeconds"
+            draft={fleet}
+            unit="s"
+            min={15}
+            max={600}
+            help="Seconds a connected worker may go silent before the host drops it and fails its in-flight runs."
+          />
+          <NumberField
+            label="Reconnect grace"
+            path="fleet.reconnectGraceSeconds"
+            draft={fleet}
+            unit="s"
+            min={10}
+            max={3600}
+            help="How long a worker that dropped mid-run has to reconnect before its runs are failed."
+          />
+        </SettingsCard>
+
+        <Card size="sm" className="gap-2">
+          <CardHeader className="gap-0">
+            <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
+              Workers
+            </h3>
+            <p className="mt-1.5 text-[12px] leading-relaxed text-haze-400">
+              Every run executes on a connected <code className="font-mono text-[11px]">brevi worker</code>{" "}
+              daemon; with none connected, runs stay queued instead of failing.
+            </p>
+          </CardHeader>
+          <CardContent className="mt-2.5 flex flex-col">
+            {workers.length === 0 ? (
+              <div className="flex flex-col gap-2">
+                <p className="text-[12.5px] leading-relaxed text-haze-700">
+                  No workers connected yet. Start one to let runs execute.
+                </p>
+                <Command text={workerCommand} />
+                {!pairing && (
+                  <p className="text-[11.5px] leading-relaxed text-haze-700">
+                    The token is readable only from the machine running brevi, in
+                    ~/.brevi/config.json.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <ul>
+                {workers.map((worker) => (
+                  <li
+                    key={worker.id}
+                    className="flex items-start justify-between gap-3 border-t border-ink-800 py-2 first:border-t-0 first:pt-0"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-[12.5px] text-haze-100">{worker.name}</p>
+                      <p className="mt-0.5 font-plate text-[9px] tracking-[0.14em] text-haze-700 uppercase">
+                        {[
+                          worker.provider,
+                          worker.kvm ? "kvm" : "no kvm",
+                          `${worker.activeRuns}/${worker.maxConcurrency} active`,
+                          `v${worker.version}`,
+                          `connected ${duration(worker.connectedAt, now)}`,
+                        ].join(" · ")}
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </>
   );

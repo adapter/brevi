@@ -16,7 +16,7 @@ Every field on this page is editable from the dashboard's Configuration page, at
 | Connectors | Connect/Disconnect per provider, `linear.teamKeys`, `github.prDescription`, `r2` |
 | Repositories | `repos`, `defaultRepo` |
 | Agent | `agent` (models, effort, command, args, Codex review) |
-| Sandbox | `sandbox`, including the Firecracker fields |
+| Sandbox | `sandbox`, including the Firecracker fields, and `fleet` |
 | Memory | `memory`, plus the stored memories themselves |
 | Orchestrator | `trigger`, `pollIntervalSeconds`, `restart` |
 | Server | `server`, `connect` |
@@ -69,6 +69,11 @@ A freshly initialised config, with every default filled in:
     },
     "timeoutMinutes": 240,
     "retentionHours": 24
+  },
+  "fleet": {
+    "token": "",
+    "heartbeatTimeoutSeconds": 45,
+    "reconnectGraceSeconds": 120
   },
   "connect": {
     "apiBase": "https://api.brevi.dev",
@@ -216,10 +221,12 @@ A wrong memory is worse than no memory, because every later run in that repo is 
 
 ## `sandbox`
 
+Where runs execute. These fields are read by the **worker** that executes a run, not by the scheduling host: each worker resolves them from its own `~/.brevi/config.json`, so a fleet of workers can each run a different provider, concurrency, or VM size.
+
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `provider` | `"auto"` \| `"firecracker"` \| `"process"` | `"auto"` | See [Sandboxes](/guides/sandboxes/). |
-| `concurrency` | integer 1-16 | `1` | How many sandboxed runs execute at once. Each Firecracker microVM reserves its own memory (7.5 GB for the default `medium` size preset, see `firecracker.size`) and one tap device from the pool created by [the network setup script](/guides/sandboxes/) (16 by default), so the host needs enough of both for all of them running simultaneously. Adjustable live from the dashboard; takes effect immediately, no restart needed. |
+| `concurrency` | integer 1-16 | `1` | How many sandboxed runs this worker executes at once. Each Firecracker microVM reserves its own memory (7.5 GB for the default `medium` size preset, see `firecracker.size`) and one tap device from the pool created by [the network setup script](/guides/sandboxes/) (16 by default), so the worker's host needs enough of both for all of them running simultaneously. Adjustable live from the dashboard; takes effect immediately, no restart needed. |
 | `timeoutMinutes` | integer ≥ 1 | `240` | Hard wall-clock limit applied per agent execution: the implementation pass, each of the parallel Codex reviewers, the synthesis pass, and the fix pass each get their own budget, rather than one limit for the whole run. The default 240 minutes gives each execution four hours. |
 | `retentionHours` | number ≥ 0 | `24` | How many hours a finished (completed or failed) run's sandbox disk is kept for interactive resume, either from the dashboard's "Open terminal" button or `brevi attach <runId>`. `0` disables retention. A retained sandbox's compute is stopped; it costs disk only, no memory or CPU. |
 | `firecracker` | object | see below | Only consulted when the Firecracker provider is used. |
@@ -237,6 +244,18 @@ A wrong memory is worse than no memory, because every later run in that repo is 
 | `memMib` | integer ≥ 512 | unset | Explicit memory override, in MiB. Wins over `size` when set; existing config files with an explicit value keep their exact behavior. Picking a preset in the dashboard clears it. |
 
 A config file from before size presets that sets only one of `vcpus`/`memMib` (and no `size`) keeps the old default for the other (2 vCPUs, 4096 MiB): the preset never changes an allocation such a config was already getting.
+
+## `fleet`
+
+The fleet is the pool of `brevi worker` daemons that dial into this host and execute runs. The host itself is a pure scheduler: it holds the run store, polls Linear, and opens PRs, but every run's sandbox lives on a connected worker, never on the host process itself.
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `token` | string | `""` | Shared pairing token workers present with `brevi worker --host <url> --token <token>`. Generated on first start when empty. |
+| `heartbeatTimeoutSeconds` | integer 15-600 | `45` | Seconds a connected worker may go silent before the host drops it and fails its in-flight runs. |
+| `reconnectGraceSeconds` | integer 10-3600 | `120` | How long a worker that dropped mid-run has to reconnect and resume reporting before its runs are failed. |
+
+`fleet.token` is a secret like any other: masked in every API read, including the unauthenticated `GET /api/config` and the dashboard's WebSocket, because whoever holds it can register as a worker and receive dispatches carrying every credential a run needs. The dashboard's Fleet card is write-only for it, the same treatment `connect.linearClientSecret` gets. The token is readable in the clear only from the machine running brevi: directly in `~/.brevi/config.json`, or via `GET /api/fleet/pairing`, which answers only loopback callers (the machine's own dashboard) with the token and a ready-to-paste `brevi worker` command.
 
 ## `connect`
 

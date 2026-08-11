@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: "Reference for the brevi command line: the default invocation, init, setup, start, status, doctor and update."
+description: "Reference for the brevi command line: the default invocation, init, setup, start, status, doctor, worker and update."
 ---
 
 The CLI is [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli), exposed as the `brevi` binary. Run it with `npx @brevi/cli [command]`, or install it globally with `npm install -g @brevi/cli` (see [Getting started](/getting-started/)).
@@ -19,6 +19,8 @@ brevi [command]
             connectors, CLIs
   attach <runId>
             Resume a run's agent conversation inside its retained sandbox
+  worker    Run an execution worker that connects to a brevi host and
+            executes dispatched runs
   update    Update @brevi/cli to the latest version published on npm
 
   -V, --version   Print the version
@@ -127,11 +129,34 @@ When at least one check fails and the `claude` CLI is installed, doctor offers a
 
 Resumes a finished run's agent conversation, right where it left off, inside its retained sandbox. The dashboard's "Open terminal" button opens the same session as an embedded web terminal.
 
-Calls `POST /api/runs/:id/resume`, which boots the sandbox back up from its retained disk if it isn't already running, and prepares an interactive `claude --resume` session with the run's full history, working directory at the run's checkout. `attach` then opens that session in your terminal: over ssh for Firecracker sandboxes, directly on the host for the process provider.
+Calls `POST /api/runs/:id/resume`, which boots the sandbox back up from its retained disk if it isn't already running, on whichever worker executed the run, and prepares an interactive `claude --resume` session with the run's full history, working directory at the run's checkout. `attach` then bridges your terminal to that session over the host's `/ws/runs/:id/attach` WebSocket, which relays to a PTY on the worker holding the run's sandbox.
 
 On exit, `attach` calls `POST /api/runs/:id/release`, which stops the sandbox's compute again; its disk stays until `sandbox.retentionHours` runs out.
 
 Resume works for completed and failed runs and is Claude-only for now (Codex runs report "Resume unavailable", since the run has no captured session id to resume from). Fails with a clear message once the retention window has passed and the sandbox's disk was already reclaimed.
+
+## `brevi worker`
+
+```
+brevi worker [--host <url>] [--token <token>] [--name <name>] [--concurrency <n>]
+```
+
+Runs an execution worker: a machine willing to execute runs a `brevi` host dispatches to it. The host itself is a pure scheduler and never touches a sandbox; every run's sandbox lives on whichever worker executed it. A worker only ever dials out to the host, over a single outbound WebSocket, and never listens itself.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--host <url>` | `http://localhost:<server.port>` from this machine's local config | The brevi host to connect to |
+| `--token <token>` | this machine's local config's `fleet.token` | Pairing token; the host generates one on first start |
+| `--name <name>` | this machine's hostname | Shown for this worker on the host's dashboard |
+| `--concurrency <n>` | this machine's local config's `sandbox.concurrency` | How many dispatched runs to execute at once |
+
+`--concurrency` accepts an integer from 1 to 64; anything outside that range is rejected before the worker connects, since the host's registration schema would otherwise refuse it and leave the process looking like it's merely reconnecting.
+
+The worker's `sandbox.*` settings (which provider, Firecracker image paths, VM size) always come from its own local `~/.brevi/config.json`, never from the host: a worker's provider and images are local to its machine, so a dispatch's own `sandbox.*` fields are overridden with the worker's before it executes.
+
+Fails with an actionable message when no pairing token is available (neither `--token` nor a local `fleet.token`) or when the local config has none, in either case pointing at where to find or set one.
+
+Runs in the foreground until `Ctrl+C` (or `SIGTERM`). The first signal stops the worker from accepting new dispatches, aborts whatever runs are still in flight, and waits for their final reporting to reach the host before the process exits; a second signal exits immediately instead of waiting. Reconnects on its own with exponential backoff whenever the connection drops, resuming in-flight run reporting once it registers again; a rejected pairing token is fatal and exits non-zero instead, since it will not fix itself by retrying.
 
 ## `brevi update`
 

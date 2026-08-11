@@ -292,7 +292,14 @@ export interface Run {
   ticket: Ticket;
   status: RunStatus;
   sandbox: {
-    provider: SandboxProviderName;
+    /**
+     * Which provider the run executed on. Absent while the run is still
+     * queued: the sandbox lives on whichever worker picks the run up, so the
+     * scheduling host only learns this once that worker reports it.
+     */
+    provider?: SandboxProviderName;
+    /** Id of the worker that executed the run and holds its sandbox. */
+    workerId?: string;
     /** Provider-specific sandbox id once booted. */
     id?: string;
     /**
@@ -362,6 +369,12 @@ export type RunEvent =
   | { runId: string; ts: string; type: "artifact"; artifact: ArtifactRef }
   /** LLM usage of one finished agent execution. */
   | { runId: string; ts: string; type: "cost"; entry: CostEntry }
+  /**
+   * An agent usage limit ended an execution. The run's own `limit` and
+   * `resumeAt` carry the current state; this records the moment it was hit,
+   * so the console shows why an attempt stopped where it did.
+   */
+  | { runId: string; ts: string; type: "limit"; limit: LimitInfo }
   /** Marks the start of an agent execution; events that follow belong to it. */
   | { runId: string; ts: string; type: "attempt"; number: number };
 

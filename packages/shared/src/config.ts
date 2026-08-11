@@ -215,15 +215,22 @@ export const configSchema = z.object({
     .prefault({}),
   sandbox: z
     .object({
-      /** "auto" picks firecracker on Linux with KVM, process otherwise. */
+      /**
+       * "auto" picks firecracker on Linux with KVM, process otherwise. Read
+       * by the worker that executes runs, not by the scheduling host: each
+       * worker resolves this from its own `~/.brevi/config.json`.
+       */
       provider: z.enum(["auto", "firecracker", "process"]).default("auto"),
+      /** Read by the worker that executes runs, from its own `~/.brevi/config.json`. */
       firecracker: firecrackerConfigSchema.prefault({}),
       /**
        * How many sandboxed runs may execute at once. Each Firecracker microVM
        * reserves its own memory (the firecracker.size preset, 7680 MiB for
        * the default medium, unless an explicit memMib override is set) and
        * one tap device from the pool setup-network.sh provisions (16 by
-       * default), so keep this in line with what the host can hold.
+       * default), so keep this in line with what the host can hold. Read by
+       * the worker that executes runs: each worker reads its own copy from
+       * its own `~/.brevi/config.json` and caps its own concurrency with it.
        */
       concurrency: z.number().int().min(1).max(16).default(1),
       /**
@@ -239,6 +246,23 @@ export const configSchema = z.object({
        * sandbox consumes only disk, no memory or CPU. 0 disables retention.
        */
       retentionHours: z.number().min(0).default(24),
+    })
+    .prefault({}),
+  /**
+   * The fleet: the pool of `brevi worker` daemons that dial into this host
+   * and execute runs. The host itself is a pure scheduler, it holds the run
+   * store, polls Linear, and opens PRs, but every run's sandbox lives on a
+   * connected worker, never on the host process. See worker.ts for the wire
+   * protocol workers speak once paired.
+   */
+  fleet: z
+    .object({
+      /** Shared pairing token workers present with `brevi worker --token`. Generated on first start when empty. */
+      token: z.string().default(""),
+      /** Seconds a connected worker may go silent before the host drops it and fails its in-flight runs. */
+      heartbeatTimeoutSeconds: z.number().int().min(15).max(600).default(45),
+      /** How long a worker that dropped mid-run has to reconnect and resume reporting before its runs are failed. */
+      reconnectGraceSeconds: z.number().int().min(10).max(3600).default(120),
     })
     .prefault({}),
   /** OAuth app settings powering the dashboard's one-click Connect flows. */
@@ -316,5 +340,12 @@ export function redactConfig(config: BreviConfig): BreviConfig {
       codexAuthJson: mask(config.agent.codexAuthJson),
     },
     connect: { ...config.connect, linearClientSecret: mask(config.connect.linearClientSecret) },
+    // The pairing token is a credential, not a setting: whoever holds it can
+    // register as a worker and be dispatched runs, which hands them every
+    // credential those runs need. /api/config and the dashboard socket are
+    // unauthenticated, so it is masked there like any other secret; the
+    // loopback-only /api/fleet/pairing endpoint is what reveals it to someone
+    // sitting at this machine.
+    fleet: { ...config.fleet, token: mask(config.fleet.token) },
   };
 }

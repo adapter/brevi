@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
-import type { ResumeRunResponse } from "@brevi/shared";
+import type { AttachClientMessage, AttachServerMessage, ResumeRunResponse } from "@brevi/shared";
 import { loadConfig } from "@brevi/orchestrator";
 import type { Command } from "commander";
 import pc from "picocolors";
+import { WebSocket } from "ws";
 import { errorMessage } from "../lib/util.js";
 
 export function registerAttachCommand(program: Command): void {
@@ -39,55 +39,101 @@ export function registerAttachCommand(program: Command): void {
       }
 
       const { run, attach } = (await res.json()) as ResumeRunResponse;
-      console.log(pc.dim(`Attaching to run ${runId} (${run.ticket.identifier})...`));
+      console.log(
+        pc.dim(`Attaching to run ${runId} (${run.ticket.identifier}) on worker ${attach.workerName}...`),
+      );
 
       const exitCode = await new Promise<number>((resolve) => {
-        // Ctrl+C goes to the whole foreground process group: the interactive
-        // session receives it directly and decides what it means. The wrapper
-        // ignores it so it survives to release the sandbox once the child
-        // exits; without this, Node's default SIGINT exit would skip the
-        // /release below and leave a rehydrated VM running until the reaper.
-        // SIGTERM targets the wrapper alone, so it is forwarded to the child;
-        // the exit handler then resolves and the release still runs.
+        const socket = new WebSocket(`ws://localhost:${port}/ws/runs/${encodeURIComponent(runId)}/attach`);
+        const stdin = process.stdin;
+        const isTty = stdin.isTTY === true;
+
+        // In raw mode Ctrl+C is a 0x03 byte on stdin rather than a signal, so
+        // it travels to the remote session, which decides what it means. The
+        // handler below only covers the non-tty case (piped stdin, where the
+        // terminal still raises SIGINT): ignoring it keeps this process alive
+        // long enough to release the sandbox, where Node's default SIGINT exit
+        // would skip the /release below and leave a rehydrated VM running
+        // until the reaper. SIGTERM targets this process alone, so it closes
+        // the socket and lets the settle path run the release.
         const onSigint = (): void => {};
         const onSigterm = (): void => {
-          child.kill("SIGTERM");
+          socket.close();
         };
         process.on("SIGINT", onSigint);
         process.on("SIGTERM", onSigterm);
+
+        const onStdinData = (chunk: string): void => {
+          send({ type: "input", data: chunk });
+        };
+        const sendResize = (): void => {
+          send({ type: "resize", cols: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24 });
+        };
+
         const settle = (code: number): void => {
           process.off("SIGINT", onSigint);
           process.off("SIGTERM", onSigterm);
+          stdin.off("data", onStdinData);
+          process.stdout.off("resize", sendResize);
+          if (isTty) stdin.setRawMode(false);
+          // stdin was resumed to read the session's keystrokes, and a flowing
+          // stdin keeps the event loop referenced: without this the command
+          // would print its detach line and then hang instead of exiting.
+          stdin.pause();
           resolve(code);
         };
 
-        const child =
-          attach.kind === "local"
-            ? spawn("/bin/sh", [attach.scriptPath], { stdio: "inherit" })
-            : spawn(
-                "ssh",
-                [
-                  // -t forces a tty for the interactive agent.
-                  "-t",
-                  "-i",
-                  attach.keyPath,
-                  "-o",
-                  "StrictHostKeyChecking=no",
-                  "-o",
-                  "UserKnownHostsFile=/dev/null",
-                  "-o",
-                  "LogLevel=ERROR",
-                  `${attach.user}@${attach.host}`,
-                  attach.scriptPath,
-                ],
-                { stdio: "inherit" },
-              );
+        const send = (message: AttachClientMessage): void => {
+          if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+        };
 
-        child.on("error", (err) => {
-          console.error(pc.red(`✖ ${errorMessage(err)}`));
-          settle(1);
+        let opened = false;
+
+        socket.on("open", () => {
+          opened = true;
+          if (isTty) stdin.setRawMode(true);
+          stdin.setEncoding("utf8");
+          stdin.on("data", onStdinData);
+          stdin.resume();
+
+          // No resize has arrived yet on a brand-new socket; sending one now
+          // matches this terminal's real size instead of the server's default.
+          sendResize();
+          process.stdout.on("resize", sendResize);
         });
-        child.on("exit", (code) => settle(code ?? 0));
+
+        socket.on("message", (raw) => {
+          let message: AttachServerMessage;
+          try {
+            message = JSON.parse(String(raw)) as AttachServerMessage;
+          } catch {
+            return;
+          }
+          if (message.type === "data") {
+            process.stdout.write(message.data);
+          } else if (message.type === "exit") {
+            settle(message.code);
+          } else if (message.type === "error") {
+            console.error(pc.red(`✖ ${message.message}`));
+            settle(1);
+          }
+        });
+
+        socket.on("close", () => {
+          // A socket that never opened means the terminal bridge itself could
+          // not be reached, which otherwise looks exactly like a session that
+          // ended normally the moment it started.
+          if (!opened) {
+            console.error(pc.red(`✖ could not open the terminal bridge on port ${port}`));
+            settle(1);
+            return;
+          }
+          settle(0);
+        });
+        // "close" always follows "error" for a ws client socket, and the
+        // handler above reports it; this only keeps the default 'error'
+        // behavior from crashing the process on an unhandled event.
+        socket.on("error", () => {});
       });
 
       // Stop the VM again; the disk stays until the retention window ends.

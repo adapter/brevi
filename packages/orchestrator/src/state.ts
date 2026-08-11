@@ -10,7 +10,6 @@ import {
   type RunAttempt,
   type RunEvent,
   type RunStatus,
-  type SandboxProviderName,
   type Ticket,
 } from "@brevi/shared";
 import { isSafePathSegment } from "./safepath.js";
@@ -103,13 +102,19 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
     }
   }
 
-  async createRun(ticket: Ticket, provider: SandboxProviderName): Promise<Run> {
+  /**
+   * The host never boots a sandbox itself, so a fresh run starts with an
+   * empty `sandbox`: whichever worker picks it up off the queue reports its
+   * own provider back (see WorkerRegistry.dispatch), and `provider` is
+   * optional for exactly this queued-but-not-yet-claimed window.
+   */
+  async createRun(ticket: Ticket): Promise<Run> {
     const now = new Date().toISOString();
     const run: Run = {
       id: newRunId(),
       ticket,
       status: "queued",
-      sandbox: { provider },
+      sandbox: {},
       createdAt: now,
       queuedAt: now,
       attempts: [],

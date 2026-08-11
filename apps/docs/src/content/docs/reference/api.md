@@ -14,6 +14,8 @@ There is no authentication: by default the server is loopback-only and anything 
 | `GET` | `/api/health` | `HealthResponse` |
 | `GET` | `/api/config` | Redacted `BreviConfig` |
 | `GET` | `/api/tickets` | `Ticket[]`: the current eligible queue |
+| `GET` | `/api/workers` | `WorkerSummary[]`: the connected worker fleet |
+| `GET` | `/api/fleet/pairing` | `FleetPairingResponse`, loopback callers only |
 | `GET` | `/api/runs` | `Run[]`, newest first |
 | `GET` | `/api/runs/:id` | `Run` |
 | `GET` | `/api/runs/:id/events` | `RunEvent[]`: full history |
@@ -26,6 +28,7 @@ There is no authentication: by default the server is loopback-only and anything 
 | `POST` | `/api/runs/:id/resume` | `ResumeRunResponse` |
 | `POST` | `/api/runs/:id/release` | `Run` |
 | `WS` | `/ws/runs/:id/attach` | Web-terminal bridge into the retained sandbox |
+| `WS` | `/ws/worker` | Where `brevi worker` daemons register and receive dispatches |
 | `PUT` | `/api/settings/credentials` | `CredentialsUpdateResponse` |
 | `POST` | `/api/connect/:provider` | `ConnectResponse` |
 | `POST` | `/api/connect/github/poll` | `DevicePollResponse` |
@@ -114,7 +117,7 @@ Errors: `404` unknown run, `409` when the run is not completed, another executio
 
 ### Web terminal
 
-`WS /ws/runs/:id/attach` is what the run detail page's "Open terminal" button connects to: the server performs the whole resume flow itself (boot, session script, release on disconnect) and bridges the session to the socket through a PTY, so the browser needs no ssh access and the orchestrator can live on a different machine. Messages are JSON in both directions:
+`WS /ws/runs/:id/attach` is what the run detail page's "Open terminal" button connects to. A finished run's retained sandbox lives on the worker that executed it, never on the scheduling host, so the host relays: it asks that worker to open the resume session and passes its PTY bytes through to this socket. The browser needs no ssh access, and `brevi attach` uses the same socket for the same reason. Messages are JSON in both directions:
 
 ```ts
 // server -> client
@@ -130,6 +133,14 @@ type AttachClientMessage =
 ```
 
 Multiple clients (web terminals, `brevi attach` sessions) share one booted sandbox; it stops again when the last one disconnects.
+
+### Worker fleet
+
+Runs execute on `brevi worker` daemons, not on the host: the orchestrator is a pure scheduler. Each worker dials `WS /ws/worker` outbound and never accepts inbound connections, so a worker behind NAT needs no port open. The wire protocol is defined as zod schemas in `packages/shared/src/worker.ts` and is versioned (`WORKER_PROTOCOL_VERSION`); a worker on a different version is rejected on registration.
+
+A connection goes: `register` (pairing token, capabilities, and the leases the worker still believes it owns) answered by `registered` or `rejected`, then `heartbeat` on an interval, `dispatch` for each run the host hands over, a stream of `run-patch` / `run-event` / `run-artifact` / `run-memories` frames as the run executes, and finally `run-complete` carrying the whole terminal state, which the host answers with `run-complete-ack`. The worker keeps claiming a lease until that acknowledgement arrives, so a run that finished while the socket was down replays its completion on the next connection instead of being recorded as a disconnect failure. `cancel` and `discard` travel the other way, as does `attach-open` and the rest of the interactive-session relay behind the web terminal.
+
+`GET /api/workers` returns what the dashboard shows for the fleet: one `WorkerSummary` per connected worker (provider, KVM, active runs against `maxConcurrency`, version, when it connected and when it was last seen).
 
 ### Credentials
 
@@ -252,7 +263,7 @@ The patch is merged onto the config on disk, the **whole** result is validated a
 
 Two rules span fields and are checked after the schema: `defaultRepo` has to name a configured repo key, and a non-empty `r2.publicBaseUrl` has to parse as an `http(s)` URL.
 
-Credential fields are refused here with `400`: `linear.apiKey`, `linear.refreshToken`, `linear.tokenExpiresAt`, `github.token`, and the four `agent.*` keys. Most of them are masked in every read, so accepting them would let a form round-trip the mask over a live secret; `linear.tokenExpiresAt` is not itself masked and is refused because the OAuth flow maintains it. They are written by the Connect flows and `PUT /api/settings/credentials`, which verify each key with its provider. `connect.linearClientSecret` is write-only rather than refused: it can be set, but the literal mask value is rejected.
+Credential fields are refused here with `400`: `linear.apiKey`, `linear.refreshToken`, `linear.tokenExpiresAt`, `github.token`, and the four `agent.*` keys. Most of them are masked in every read, so accepting them would let a form round-trip the mask over a live secret; `linear.tokenExpiresAt` is not itself masked and is refused because the OAuth flow maintains it. They are written by the Connect flows and `PUT /api/settings/credentials`, which verify each key with its provider. `connect.linearClientSecret` and `fleet.token` are write-only rather than refused: they can be set, but the literal mask value is rejected. `fleet.token` is masked in every read for the same reason the credentials are: whoever holds the pairing token can register as a worker and be dispatched runs, which hands them every credential those runs need. Read it back with `GET /api/fleet/pairing`, which answers loopback callers only, or from `~/.brevi/config.json` on the machine running brevi.
 
 The check compares credential values on the merged result, not paths in the patch, so deleting a whole section (`{"linear": null}`, which would let the schema defaults refill it with empty strings) is refused the same way as setting the field directly.
 
@@ -266,9 +277,17 @@ Connect to `ws://localhost:4400/ws`. The server sends a `hello` immediately, the
 
 ```ts
 type ServerMessage =
-  | { type: "hello"; runs: Run[]; tickets: Ticket[]; config: BreviConfig; linearStatus: LinearStatus }
+  | {
+      type: "hello";
+      runs: Run[];
+      tickets: Ticket[];
+      config: BreviConfig;
+      linearStatus: LinearStatus;
+      workers: WorkerSummary[];
+    }
   | { type: "config"; config: BreviConfig }
   | { type: "tickets"; tickets: Ticket[] }
+  | { type: "workers"; workers: WorkerSummary[] }
   | { type: "run-updated"; run: Run }
   | { type: "run-event"; event: RunEvent }
   | { type: "linear-status"; linearStatus: LinearStatus };
@@ -285,7 +304,7 @@ type ClientMessage =
 
 Every `config` payload is redacted. By default a client receives `run-event` messages for **all** runs; once it subscribes to at least one run id it receives events only for its subscriptions. `linear-status` is pushed whenever the Linear connector's state changes, e.g. an OAuth token refresh failing, so the dashboard can show a Reconnect prompt without polling for it. `auth-error` means the stored credential is dead and polling is paused until a reconnect; `refresh-failing` means the expired token can't be refreshed for a transient reason (network, rate limit), polling is paused, and brevi retries by itself until a refresh succeeds.
 
-`RunEvent` is one of a status change, a log line (`stdout` / `stderr` / `system`), an `agent` event forwarded from the agent's `stream-json` output, an artifact reference, or a `cost` entry recording one agent execution's LLM usage. Events are also persisted as JSONL, which is what `GET /api/runs/:id/events` replays.
+`RunEvent` is one of a status change, a log line (`stdout` / `stderr` / `system`), an `agent` event forwarded from the agent's `stream-json` output, an artifact reference, a `cost` entry recording one agent execution's LLM usage, or a `limit` event recording the agent usage limit that ended an execution. Events are also persisted as JSONL, which is what `GET /api/runs/:id/events` replays.
 
 ## api.brevi.dev
 

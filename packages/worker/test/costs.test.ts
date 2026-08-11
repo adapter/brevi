@@ -3,7 +3,7 @@ import { summarizeCosts } from "@brevi/shared";
 import { ccusageCostEntry, parseCcusageSessions } from "../src/ccusage.js";
 import { usageCollector } from "../src/costs.js";
 
-// Run with `bun test packages/orchestrator` from the repo root (after
+// Run with `bun test packages/worker` from the repo root (after
 // `bun run build`, so the @brevi/shared import resolves to its dist output).
 // Not part of the tsc build: the package's tsconfig only includes src/.
 

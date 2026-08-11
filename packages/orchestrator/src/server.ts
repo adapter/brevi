@@ -5,13 +5,14 @@ import type { Duplex } from "node:stream";
 import { createRequire } from "node:module";
 import { totalmem } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
-import { serve } from "@hono/node-server";
+import { serve, type HttpBindings } from "@hono/node-server";
 import { Hono } from "hono";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   isPlainObject,
   redactConfig,
   urlHost,
+  WORKER_WS_PATH,
   type BreviConfig,
   type ClientMessage,
   type CredentialsUpdateRequest,
@@ -23,6 +24,7 @@ import {
   type ServerMessage,
   type SettingsUpdateRequest,
   type Ticket,
+  type WorkerSummary,
 } from "@brevi/shared";
 import { loadConfig } from "./config.js";
 import { attachOrchestratorLogFile } from "./logfile.js";
@@ -40,8 +42,6 @@ export interface StartOptions {
    * CLI bundles the dashboard and passes its own path here.
    */
   appDist?: string;
-  /** The @brevi/cli release version, forwarded to the orchestrator for prebuilt rootfs resolution. */
-  cliVersion?: string;
 }
 
 export interface OrchestratorHandle {
@@ -135,6 +135,36 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * True only for addresses that can never have left the machine: IPv4
+ * loopback (127.0.0.0/8), IPv6 loopback (::1), and the IPv4-mapped IPv6 form
+ * a dual-stack listener reports for those same v4 peers (::ffff:127.x.x.x).
+ * Everything else, including an unreadable/empty address, is treated as
+ * remote: the pairing token hands out standing worker credentials, so an
+ * address we can't positively vouch for must not qualify.
+ */
+function isLoopbackAddress(address: string | null | undefined): boolean {
+  if (!address) return false;
+  if (address === "::1") return true;
+  const v4 = address.startsWith("::ffff:") ? address.slice("::ffff:".length) : address;
+  return v4.startsWith("127.");
+}
+
+/**
+ * Best-effort peer address for a request handled by @hono/node-server: the
+ * node adapter stashes the raw `IncomingMessage` on `c.env`, whose socket
+ * carries the TCP peer. Wrapped in a try/catch because that shape isn't part
+ * of Hono's public contract, only this adapter's, and a future change there
+ * should degrade to "not loopback" rather than throw through the route.
+ */
+function isLoopbackCaller(c: { env: HttpBindings }): boolean {
+  try {
+    return isLoopbackAddress(c.env.incoming.socket?.remoteAddress);
+  } catch {
+    return false;
+  }
+}
+
 function buildApp(
   orchestrator: Orchestrator,
   config: BreviConfig,
@@ -146,8 +176,8 @@ function buildApp(
    * point at the socket that will receive the callback.
    */
   boundPort: () => number,
-): Hono {
-  const app = new Hono();
+): Hono<{ Bindings: HttpBindings }> {
+  const app = new Hono<{ Bindings: HttpBindings }>();
 
   app.get("/api/health", (c) => {
     const health: HealthResponse = {
@@ -162,6 +192,25 @@ function buildApp(
   app.get("/api/config", (c) => c.json(redactConfig(config)));
 
   app.get("/api/tickets", (c) => c.json(orchestrator.tickets));
+
+  app.get("/api/workers", (c) => c.json(orchestrator.listWorkers()));
+
+  app.get("/api/fleet/pairing", (c) => {
+    // Whoever holds the pairing token can dial in as a worker and be handed
+    // runs carrying every credential they need, so this readback is confined
+    // to callers that are provably this machine, the way the config on disk
+    // already is.
+    if (!isLoopbackCaller(c)) {
+      return c.json(
+        {
+          error:
+            "the fleet pairing token is readable only from the machine running brevi, in ~/.brevi/config.json there",
+        },
+        403,
+      );
+    }
+    return c.json(orchestrator.fleetPairing(new URL(c.req.url).origin));
+  });
 
   app.get("/api/runs", (c) => c.json(orchestrator.listRuns()));
 
@@ -442,6 +491,14 @@ function attachWebSockets(
       wss.handleUpgrade(request, socket, head, (ws) => handleAttachSocket(ws, orchestrator, runId));
       return;
     }
+    // Worker daemons dial in here; handed straight to the registry rather
+    // than through the "connection" event, so it never reaches the dashboard
+    // broadcast loop below (a worker socket speaks a different protocol
+    // entirely and must not be mistaken for a dashboard client).
+    if (pathname === WORKER_WS_PATH) {
+      wss.handleUpgrade(request, socket, head, (ws) => orchestrator.acceptWorkerSocket(ws));
+      return;
+    }
     if (pathname !== "/ws") {
       socket.destroy();
       return;
@@ -459,6 +516,7 @@ function attachWebSockets(
       tickets: orchestrator.tickets,
       config: redactConfig(config),
       linearStatus: orchestrator.linearStatus,
+      workers: orchestrator.listWorkers(),
     });
     socket.on("message", (data) => {
       let message: ClientMessage;
@@ -478,6 +536,7 @@ function attachWebSockets(
   const onConfig = (redacted: BreviConfig): void => broadcast({ type: "config", config: redacted });
   const onLinearStatus = (linearStatus: LinearStatus): void =>
     broadcast({ type: "linear-status", linearStatus });
+  const onWorkers = (workers: WorkerSummary[]): void => broadcast({ type: "workers", workers });
   const onRunUpdated = (run: Run): void => broadcast({ type: "run-updated", run });
   const onRunEvent = (event: RunEvent): void => {
     for (const client of clients) {
@@ -488,6 +547,7 @@ function attachWebSockets(
   orchestrator.on("tickets", onTickets);
   orchestrator.on("config", onConfig);
   orchestrator.on("linear-status", onLinearStatus);
+  orchestrator.on("workers", onWorkers);
   orchestrator.store.on("run-updated", onRunUpdated);
   orchestrator.store.on("run-event", onRunEvent);
 
@@ -496,6 +556,7 @@ function attachWebSockets(
       orchestrator.off("tickets", onTickets);
       orchestrator.off("config", onConfig);
       orchestrator.off("linear-status", onLinearStatus);
+      orchestrator.off("workers", onWorkers);
       orchestrator.store.off("run-updated", onRunUpdated);
       orchestrator.store.off("run-event", onRunEvent);
       server.off("upgrade", onUpgrade);
@@ -509,13 +570,7 @@ function attachWebSockets(
 export async function startOrchestrator(options: StartOptions = {}): Promise<OrchestratorHandle> {
   attachOrchestratorLogFile();
   const config = options.config ?? (await loadConfig(options.configPath));
-  const orchestrator = new Orchestrator(
-    config,
-    undefined,
-    options.configPath,
-    undefined,
-    options.cliVersion,
-  );
+  const orchestrator = new Orchestrator(config, undefined, options.configPath);
   await orchestrator.start();
 
   // Filled in once the listener binds; the OAuth flows read it through the

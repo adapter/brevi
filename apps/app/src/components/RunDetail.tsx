@@ -1,4 +1,4 @@
-import type { LimitInfo, PrState, PrStatusResponse, Run, RunEvent } from "@brevi/shared";
+import type { LimitInfo, PrState, PrStatusResponse, Run, RunEvent, WorkerSummary } from "@brevi/shared";
 import { summarizeCosts } from "@brevi/shared/types";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -19,6 +19,7 @@ import { ResultCard } from "./ResultCard";
 export function RunDetail({
   run,
   repoName,
+  workers,
   events,
   now,
   busy,
@@ -29,6 +30,8 @@ export function RunDetail({
   run: Run;
   /** owner/name of the mapped repo, resolved from config. */
   repoName: string | undefined;
+  /** Connected workers, to resolve run.sandbox.workerId to a human name. */
+  workers: WorkerSummary[];
   events: RunEvent[];
   now: number;
   busy: boolean;
@@ -110,6 +113,11 @@ export function RunDetail({
   const computedCosts = run.costs.length > 0 ? summarizeCosts(run.costs) : undefined;
   const costTotals = run.costTotals ?? computedCosts;
   const costByModel = run.costTotals?.byModel ?? computedCosts?.byModel ?? [];
+  // The worker that holds this run's sandbox; fall back to the raw id once it
+  // has disconnected and dropped out of the live workers list.
+  const worker = run.sandbox.workerId
+    ? workers.find((w) => w.id === run.sandbox.workerId)
+    : undefined;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -282,7 +290,10 @@ export function RunDetail({
                   {run.attempts.length > 1 && (
                     <Field label="Attempts">{run.attempts.length}</Field>
                   )}
-                  <Field label="Sandbox">{run.sandbox.provider}</Field>
+                  {run.sandbox.provider && <Field label="Sandbox">{run.sandbox.provider}</Field>}
+                  {run.sandbox.workerId && (
+                    <Field label="Worker">{worker ? worker.name : run.sandbox.workerId}</Field>
+                  )}
                   {run.sandbox.id && <Field label="VM">{run.sandbox.id}</Field>}
                   <Field label="Run">{run.id}</Field>
                 </div>

@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { watch, type FSWatcher } from "node:fs";
-import { readdir, readFile, rm } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { basename, dirname } from "node:path";
+import type { WebSocket } from "ws";
 import {
   configSchema,
   CONFIG_PATH,
@@ -14,7 +16,6 @@ import {
   needsRestart,
   readConfigPath,
   redactConfig,
-  WORKSPACES_DIR,
   type BreviConfig,
   type ConnectResponse,
   type CredentialProvider,
@@ -22,6 +23,8 @@ import {
   type CredentialsUpdateRequest,
   type CredentialsUpdateResponse,
   type DevicePollResponse,
+  type DispatchPrompts,
+  type FleetPairingResponse,
   type GithubRepo,
   type LinearProject,
   type LinearStatus,
@@ -33,17 +36,12 @@ import {
   type R2Status,
   type ResumeRunResponse,
   type Run,
-  type RunAttachInfo,
   type RunEvent,
   type SettingsUpdateResponse,
   type Ticket,
+  type WorkerSummary,
+  urlHost,
 } from "@brevi/shared";
-import {
-  createSandboxProvider,
-  ROOTFS_VERSION,
-  type Sandbox,
-  type SandboxProvider,
-} from "@brevi/sandbox";
 import { saveConfig, serializeConfig } from "./config.js";
 import {
   discoverAnthropicCredential,
@@ -73,14 +71,17 @@ import {
 import { fetchPrStatus, fetchPullRequestState, listRepos } from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
 import { isLinearAuthError, LinearService, type LinearAuthHooks } from "./linear.js";
-import { executeFollowUp } from "./followup.js";
-import { MemoryStore } from "./memory.js";
-import { provisionCredentials } from "./provision.js";
+import { memoryKeyFor, MemoryStore, selectMemories } from "./memory.js";
 import { checkWrangler, DEFAULT_EVIDENCE_BUCKET, provisionBucket, startWranglerLogin } from "./r2.js";
-import { buildResumeScript } from "./resume.js";
-import { collectAgentEnv, executeRun, playwrightBrowsersPath } from "./runner.js";
 import { isSafePathSegment } from "./safepath.js";
 import { ACTIVE_STATUSES, RunStore, isTerminal } from "./state.js";
+import {
+  WorkerRegistry,
+  type AttachSession,
+  type AttachSessionOptions,
+  type CancelOutcome,
+  type DispatchRequest,
+} from "./workers.js";
 
 /** Error with an HTTP-mappable code, thrown by orchestrator commands. */
 export class OrchestratorError extends Error {
@@ -97,6 +98,7 @@ interface OrchestratorEvents {
   tickets: [Ticket[]];
   config: [BreviConfig];
   "linear-status": [LinearStatus];
+  workers: [WorkerSummary[]];
 }
 
 /**
@@ -189,20 +191,11 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   readonly memories: MemoryStore;
 
   #configPath: string;
-  /**
-   * The @brevi/cli release version, used to key prebuilt rootfs downloads.
-   * The "0.0.0" fallback only resolves from-source/custom images: the
-   * versioned prebuilt path needs a real CLI release.
-   */
-  #cliVersion: string;
   #linear?: LinearService;
-  #provider?: SandboxProvider;
+  /** The worker fleet: undefined only before start() runs. */
+  #workers?: WorkerRegistry;
   #tickets: Ticket[] = [];
   #queue: string[] = [];
-  /** Abort controller per run currently executing in a sandbox. */
-  #aborts = new Map<string, AbortController>();
-  /** Settled when a run's execution finishes; awaited by stop(). */
-  #running = new Map<string, Promise<void>>();
   #pollTimer?: NodeJS.Timeout;
   /** Lazy GitHub PR-state poll for recent runs with a live PR. */
   #prTimer?: NodeJS.Timeout;
@@ -212,13 +205,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #resumeTimers = new Map<string, NodeJS.Timeout>();
   /** Tail of each run's command chain; cancel/retry/follow-up serialize through it so two commands can never act on the same stale snapshot. */
   #runLocks = new Map<string, Promise<void>>();
-  /**
-   * Sandboxes rehydrated for interactive resume, keyed by run id; a promise so
-   * concurrent resume calls share one boot. `clients` counts the attach
-   * sessions sharing it, so a release only stops the VM when the last one
-   * detaches.
-   */
-  #attached = new Map<string, { pending: Promise<Sandbox>; clients: number }>();
   /** One pending reap timer per run with a retained sandbox, keyed by run id. */
   #reapTimers = new Map<string, NodeJS.Timeout>();
   /**
@@ -227,6 +213,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    * anyway.
    */
   #followUps = new Set<string>();
+  /** #dispatchQueued logs "waiting on fleet capacity" once per stretch of unavailability, not on every attempt. */
+  #warnedNoCapacity = false;
   #stopped = false;
   #warnedNoRepo = new Set<string>();
   #githubDevice?: GithubDeviceSession;
@@ -273,19 +261,26 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     store: RunStore = new RunStore(),
     configPath?: string,
     memories: MemoryStore = new MemoryStore(),
-    cliVersion?: string,
   ) {
     super();
     this.config = config;
     this.store = store;
     this.memories = memories;
     this.#configPath = configPath ?? CONFIG_PATH;
-    this.#cliVersion = cliVersion ?? "0.0.0";
     if (config.linear.apiKey) this.#linear = new LinearService(config, this.#linearAuth);
   }
 
+  /**
+   * What the fleet actually runs on, for the dashboard's health chip: the
+   * single provider every connected worker reports, "mixed" when they
+   * disagree, "none" when nothing is connected. The host itself never picks
+   * a provider, each worker resolves its own.
+   */
   get providerName(): string {
-    return this.#provider?.name ?? this.config.sandbox.provider;
+    const providers = new Set((this.#workers?.list() ?? []).map((worker) => worker.provider));
+    if (providers.size === 0) return "none";
+    if (providers.size > 1) return "mixed";
+    return [...providers][0]!;
   }
 
   get tickets(): Ticket[] {
@@ -294,6 +289,49 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
 
   listRuns(): Run[] {
     return this.store.list();
+  }
+
+  /** Every connected worker, for the dashboard's fleet panel. */
+  listWorkers(): WorkerSummary[] {
+    return this.#workers?.list() ?? [];
+  }
+
+  /**
+   * Hand a freshly-upgraded `/ws/worker` socket to the fleet registry. A
+   * socket that reaches this before `start()` has run has nothing to
+   * register with (there is no registry yet), so it is terminated outright
+   * rather than buffered for later.
+   */
+  acceptWorkerSocket(socket: WebSocket): void {
+    if (!this.#workers) {
+      socket.terminate();
+      return;
+    }
+    this.#workers.accept(socket);
+  }
+
+  /**
+   * Open an interactive attach session on a run's owning worker. Thin
+   * delegation: the registry is the one that knows which worker holds the
+   * run and how to route its `attach-*` frames, this just exposes that to
+   * `WS /ws/runs/:id/attach`.
+   */
+  openRunAttach(runId: string, options: AttachSessionOptions): AttachSession | undefined {
+    return this.#workers?.openAttach(runId, options);
+  }
+
+  /**
+   * The pairing token in the clear, plus the ready-to-paste `brevi worker`
+   * command using it. Only ever called from the loopback-only pairing
+   * route: the token is masked everywhere else config reaches the network
+   * (see redactConfig), since holding it is enough to register as a worker
+   * and receive every credential a dispatched run carries.
+   */
+  fleetPairing(hostUrl: string): FleetPairingResponse {
+    return {
+      token: this.config.fleet.token,
+      command: `brevi worker --host ${hostUrl} --token ${this.config.fleet.token}`,
+    };
   }
 
   getRun(id: string): Run | undefined {
@@ -329,24 +367,40 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return this.listMemories();
   }
 
-  /** Load state, boot the sandbox provider, and begin the poll loop. */
+  /**
+   * Load state, stand up the worker registry, and begin the poll loop. The
+   * host never touches a sandbox: every run's compute lives on whichever
+   * `brevi worker` dials in and claims it (see workers.ts).
+   */
   async start(): Promise<void> {
     await this.store.init();
     await this.memories.init();
-    this.#provider = await createSandboxProvider({
-      requested: this.config.sandbox.provider,
-      firecracker: this.config.sandbox.firecracker,
-      concurrency: this.config.sandbox.concurrency,
-      // console is teed to ~/.brevi/logs/orchestrator.log, so a rootfs download's progress
-      // lines land there too.
-      log: (line) => console.log(line),
-      cliVersion: this.#cliVersion,
-      // The orchestrator is the dispatching host, so it pins the guest contract its runs
-      // assume: a worker build older than this one refuses the work with an "update the
-      // worker" error instead of running it on an older guest.
-      requiredRootfsVersion: ROOTFS_VERSION,
+
+    // A pairing token is how a worker proves it's allowed to execute this
+    // host's runs; generate one on first boot rather than shipping a default
+    // every install would share.
+    if (!this.config.fleet.token) {
+      this.config.fleet.token = randomUUID();
+      await this.#persistConfig();
+      console.log(
+        `[brevi] generated a fleet pairing token; connect a worker with:\n` +
+          `  brevi worker --host http://${urlHost(this.config.server.host)}:${this.config.server.port} --token ${this.config.fleet.token}`,
+      );
+    }
+    this.#workers = new WorkerRegistry({
+      config: this.config,
+      store: this.store,
+      memories: this.memories,
+      onRunSettled: (runId) => this.#onRunSettled(runId),
+      onRunRejected: (runId, reason) => this.#onRunRejected(runId, reason),
     });
-    await this.#provider.ensureAvailable();
+    this.#workers.on("workers", (workers) => {
+      this.emit("workers", workers);
+      // A worker connecting (or freeing up) is exactly when a queue that was
+      // stuck for lack of capacity can move again.
+      this.#dispatchQueued();
+    });
+
     // Runs left with a retained sandbox from a previous process pick their
     // reaper back up: a window that already passed is reclaimed right away,
     // otherwise a timer is armed for when it ends.
@@ -358,10 +412,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       if (Date.parse(retainedUntil) <= Date.now()) await this.#maybeReap(run.id);
       else this.#scheduleReap(run.id);
     }
-    // Clears workspace dirs left behind by a crashed or interrupted run:
-    // store.init() already marked interrupted runs failed, and they carry no
-    // retainedUntil, so anything without an active or retained owner is stale.
-    await this.#sweepWorkspaces();
     // Runs left waiting on a limit reset by a previous process pick their
     // schedule back up.
     for (const run of this.store.list()) {
@@ -838,6 +888,13 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     if (readConfigPath(patch, "connect.linearClientSecret") === MASKED_SECRET) {
       throw new OrchestratorError("invalid", "connect.linearClientSecret: replace it or leave it alone");
     }
+    // fleet.token is masked in every redacted config the dashboard reads (see
+    // redactConfig), so it has the exact same round-trip hazard: a settings
+    // form that never touched the pairing token must not be able to stamp
+    // the mask over the live one.
+    if (readConfigPath(patch, "fleet.token") === MASKED_SECRET) {
+      throw new OrchestratorError("invalid", "fleet.token: replace it or leave it alone");
+    }
 
     return this.#transact(async () => {
       const before = structuredClone(this.config);
@@ -949,11 +1006,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       JSON.stringify(readConfigPath(before, path)) !== JSON.stringify(readConfigPath(next, path));
 
     if (changed("pollIntervalSeconds")) this.#armPollTimer();
-    if (changed("sandbox.concurrency")) {
-      // Raising the limit can start queued runs right away; lowering it only
-      // affects new starts, already-running sandboxes finish out.
-      this.#kickWorker();
-    }
     if (changed("linear.teamKeys")) this.#tickets = [];
     this.emit("config", redactConfig(this.config));
     if (changed("repos") || changed("defaultRepo")) {
@@ -1058,15 +1110,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       const run = this.store.get(runId);
       if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
       if (isTerminal(run.status)) return run;
-      if (run.status === "queued") {
-        this.#queue = this.#queue.filter((id) => id !== runId);
-        // A cancelled queued follow-up must not misroute a later retry into
-        // the follow-up path. It also still owns its retained disk's reap
-        // timer (starting the follow-up cleared it, and no worker will reach
-        // #execute's tail to re-arm it), so restore the reaper here.
-        if (this.#followUps.delete(runId)) this.#scheduleReap(runId);
-        return this.store.setStatus(runId, "cancelled", { finishedAt: new Date().toISOString() });
-      }
       if (run.status === "waiting") {
         this.#clearResume(runId);
         return this.store.setStatus(runId, "cancelled", {
@@ -1074,8 +1117,41 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
           resumeAt: undefined,
         });
       }
-      this.#aborts.get(runId)?.abort();
-      return this.store.get(runId) ?? run;
+      // "queued" covers two different situations now that dispatch is a
+      // network round trip rather than an in-process handoff: still sitting
+      // in #queue (never sent anywhere), or already handed to a worker and
+      // simply not yet reported "preparing" back. Only the former can be
+      // cancelled locally; the latter has to go through the worker like any
+      // other active run, below.
+      if (run.status === "queued" && this.#queue.includes(runId)) {
+        this.#queue = this.#queue.filter((id) => id !== runId);
+        // A cancelled queued follow-up must not misroute a later retry into
+        // the follow-up path. It also still owns its retained disk's reap
+        // timer (starting the follow-up cleared it, and nothing will reach
+        // #onRunSettled to re-arm it), so restore the reaper here.
+        if (this.#followUps.delete(runId)) this.#scheduleReap(runId);
+        return this.store.setStatus(runId, "cancelled", { finishedAt: new Date().toISOString() });
+      }
+      const outcome: CancelOutcome = this.#workers?.cancel(runId) ?? "unknown";
+      if (outcome === "sent") return this.store.get(runId) ?? run;
+      if (outcome === "pending") {
+        // The owning worker is mid-reconnect; the registry holds onto the
+        // cancel and replays it once the worker's socket comes back, so
+        // there is nothing more to do here than say so.
+        this.store.appendEvent({
+          runId,
+          ts: new Date().toISOString(),
+          type: "log",
+          stream: "system",
+          text: "cancellation recorded; it will be delivered once the run's worker reconnects",
+        });
+        return this.store.get(runId) ?? run;
+      }
+      // "unknown": no lease exists for this run at all, so no worker is out
+      // there executing it (every earlier branch above already handled the
+      // still-queued and waiting cases). Nothing to tell a worker; cancel it
+      // here instead of leaving it stuck "active" forever.
+      return this.store.setStatus(runId, "cancelled", { finishedAt: new Date().toISOString() });
     });
   }
 
@@ -1156,7 +1232,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         `ticket ${run.ticket.identifier} already has an active run (${clash.id})`,
       );
     }
-    if (this.#attached.has(runId)) {
+    if (this.#workers?.hasAttachSession(runId)) {
       throw new OrchestratorError(
         "conflict",
         "an interactive session is attached to this run's sandbox; detach it before starting a follow-up",
@@ -1166,8 +1242,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     // Reserve the run before the first await: two concurrent requests could
     // otherwise both pass the checks above during the GitHub round-trip and
     // queue the same run twice. The reservation doubles as the execution-kind
-    // marker that #execute claims; it is released only on failure here, when
-    // a queued follow-up is cancelled, or by #execute's claim.
+    // marker #buildDispatchPayload claims; it is released only on failure
+    // here, when a queued follow-up is cancelled, or by a successful dispatch.
     this.#followUps.add(runId);
     try {
       try {
@@ -1191,7 +1267,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       if (!current || !isTerminal(current.status) || !current.result?.prUrl) {
         throw new OrchestratorError("conflict", `run ${runId} is no longer eligible for a follow-up`);
       }
-      if (this.#attached.has(runId)) {
+      if (this.#workers?.hasAttachSession(runId)) {
         throw new OrchestratorError(
           "conflict",
           "an interactive session is attached to this run's sandbox; detach it before starting a follow-up",
@@ -1199,7 +1275,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       }
 
       // Take ownership of the retained disk for the duration: clear any
-      // pending reap timer without discarding it. #execute re-arms the
+      // pending reap timer without discarding it. #onRunSettled re-arms the
       // reaper after the run (see its existing tail below), and cancelling
       // the queued follow-up re-arms it too.
       const reapTimer = this.#reapTimers.get(runId);
@@ -1217,7 +1293,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         resumeAt: undefined,
       });
       if (!this.#queue.includes(runId)) this.#queue.push(runId);
-      this.#kickWorker();
+      this.#dispatchQueued();
       return queued;
     } catch (error) {
       this.#followUps.delete(runId);
@@ -1247,10 +1323,12 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   }
 
   /**
-   * Boot a finished run's retained sandbox back up (if it isn't already) and
-   * install a resume script inside it that reattaches the agent conversation.
-   * `brevi attach` calls this, then opens the session the returned attach
-   * info describes.
+   * Check a finished run is eligible for interactive resume and resolve
+   * which worker its retained sandbox lives on. `brevi attach` and the
+   * dashboard's web terminal both call this first, then open
+   * `WS /ws/runs/:id/attach`, which the host relays to that worker: the
+   * sandbox itself never lives on the scheduling host, so there is nothing
+   * left for this call to boot.
    */
   async resumeRun(runId: string): Promise<ResumeRunResponse> {
     if (!isSafePathSegment(runId)) throw new OrchestratorError("invalid", "malformed run id");
@@ -1281,102 +1359,28 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         "no agent session id was captured for this run; interactive resume supports Claude runs only",
       );
     }
-    const provider = this.#provider;
-    if (!provider || provider.name !== run.sandbox.provider) {
+    const worker = this.#workers?.workerFor(runId);
+    if (!worker) {
       throw new OrchestratorError(
         "conflict",
-        `this run's sandbox provider (${run.sandbox.provider}) is no longer the active one (${provider?.name ?? "none"}); it can't be resumed`,
+        "the worker holding this run's sandbox isn't connected right now; it can't be resumed",
       );
     }
-
-    let entry = this.#attached.get(runId);
-    if (!entry) {
-      const pending = (async () => {
-        const env = collectAgentEnv(this.config);
-        env.PLAYWRIGHT_BROWSERS_PATH = await playwrightBrowsersPath(provider.name);
-        return provider.rehydrate({ id: runId, env });
-      })();
-      entry = { pending, clients: 0 };
-      this.#attached.set(runId, entry);
-      pending.catch(() => this.#attached.delete(runId)); // a failed boot must not poison later resumes
-      this.store.appendEvent({
-        runId,
-        ts: new Date().toISOString(),
-        type: "log",
-        stream: "system",
-        text: "booting retained sandbox for interactive resume",
-      });
-    }
-    const sandbox = await entry.pending;
-    entry.clients += 1;
-
-    // Reinstalled fresh on every resume call: cheap, and keeps credentials
-    // current if they changed since the sandbox was retained. Provisioning is
-    // sandbox-wide (shell profile + Codex auth.json + git askpass), so plain
-    // shells opened beside the resumed conversation are authenticated too,
-    // not just the resumed process. The GitHub token travels only on this
-    // attach path; runs never hold push credentials.
-    const env = collectAgentEnv(this.config);
-    env.PLAYWRIGHT_BROWSERS_PATH = await playwrightBrowsersPath(provider.name);
-    const provisioned = await provisionCredentials({
-      sandbox,
-      runId,
-      env,
-      codexAuthJson: this.config.agent.codexAuthJson || undefined,
-      githubToken: this.config.github.token || undefined,
-    });
-    const connection = sandbox.connection();
-    // Kept outside the workspace/checkout in both cases, so the script never
-    // dirties the run's tree: /root for ssh, alongside (not inside) the
-    // workspace dir on the host for the process provider.
-    const scriptPath =
-      connection.kind === "ssh" ? "/root/brevi-resume.sh" : join(WORKSPACES_DIR, runId, "brevi-resume.sh");
-    await sandbox.writeFile(
-      scriptPath,
-      buildResumeScript({
-        workspacePath: sandbox.workspacePath,
-        profilePath: provisioned.profilePath,
-        command: this.config.agent.command,
-        sessionId: run.agentSessionId,
-      }),
-    );
-    await sandbox.exec("chmod", ["755", scriptPath]);
-
-    const attach: RunAttachInfo =
-      connection.kind === "ssh"
-        ? { kind: "ssh", scriptPath, host: connection.host, user: connection.user, keyPath: connection.keyPath }
-        : { kind: "local", scriptPath };
-
-    return { run: this.store.get(runId) ?? run, attach };
+    return { run, attach: { kind: "worker", workerId: worker.id, workerName: worker.name } };
   }
 
   /**
-   * Detach one resume client; stops the sandbox's compute again (keeping its
-   * disk until the retention window ends) once the last client is gone. A
-   * no-op when nothing is currently attached.
+   * Thin on purpose: the worker that holds a run's retained sandbox releases
+   * its compute itself once the last attach session for that run closes (see
+   * WorkerRegistry.openAttach), so the host has nothing left to release. The
+   * endpoint stays so `brevi attach` and the dashboard's terminal keep a
+   * symmetric resume/release pair to call, without needing to know that the
+   * second half became a no-op when execution moved to the fleet.
    */
   async releaseRun(runId: string): Promise<Run> {
     const run = this.store.get(runId);
     if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
-    const entry = this.#attached.get(runId);
-    if (entry) {
-      entry.clients = Math.max(0, entry.clients - 1);
-      if (entry.clients > 0) return this.store.get(runId) ?? run;
-      this.#attached.delete(runId);
-      const sandbox = await entry.pending.catch(() => undefined);
-      await sandbox?.release().catch(() => undefined);
-      const retainedUntil = this.store.get(runId)?.sandbox.retainedUntil;
-      if (retainedUntil) {
-        this.store.appendEvent({
-          runId,
-          ts: new Date().toISOString(),
-          type: "log",
-          stream: "system",
-          text: `sandbox released; disk retained until ${retainedUntil}`,
-        });
-      }
-    }
-    return this.store.get(runId) ?? run;
+    return run;
   }
 
   /** Stop polling and abort any active run. Resolves once the worker settles. */
@@ -1389,24 +1393,19 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     // Waiting runs stay "waiting" on disk; the next boot reschedules them.
     for (const timer of this.#resumeTimers.values()) clearTimeout(timer);
     this.#resumeTimers.clear();
-    for (const abort of this.#aborts.values()) abort.abort();
     // Cancel anything still waiting in the queue so it isn't left "queued" forever.
     for (const id of this.#queue.splice(0)) {
       await this.store
         .setStatus(id, "cancelled", { finishedAt: new Date().toISOString() })
         .catch(() => undefined);
     }
-    await Promise.allSettled(this.#running.values());
     for (const timer of this.#reapTimers.values()) clearTimeout(timer);
     this.#reapTimers.clear();
-    for (const entry of this.#attached.values()) {
-      const sandbox = await entry.pending.catch(() => undefined);
-      await sandbox?.release().catch(() => undefined);
-    }
-    this.#attached.clear();
-    // Expired and untracked workspace dirs go; unexpired retained disks
-    // survive so the resume window persists across restarts.
-    await this.#sweepWorkspaces();
+    // Runs already handed to a worker are the worker's to finish or cancel;
+    // stop() asks it to cancel every one it's still holding a lease for and
+    // closes every socket. Their compute and any retained disk live on the
+    // worker, not here, so there's nothing local left to clean up for them.
+    this.#workers?.stop();
     await this.store.flush();
   }
 
@@ -1690,7 +1689,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       result: undefined,
     });
     if (!this.#queue.includes(runId)) this.#queue.push(runId);
-    this.#kickWorker();
+    this.#dispatchQueued();
     return run;
   }
 
@@ -1701,35 +1700,32 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   }
 
   /**
-   * Tear down a run's retained sandbox: an already-attached (rehydrated)
-   * instance is destroyed directly, otherwise the provider is asked to
+   * Tear down a run's retained sandbox by asking the worker holding it to
    * discard the disk. Shared by the reaper (retention window expired) and
-   * requeue (a retry makes any retained disk stale immediately). Cleanup
-   * failures propagate, and retainedUntil is cleared only after the disk is
-   * actually gone: the retained disk carries credential material, so a
-   * failed teardown must keep the metadata a retry needs rather than report
-   * the sandbox as removed.
+   * requeue (a retry makes any retained disk stale immediately). The wire
+   * protocol has no discard acknowledgement, so "reached the worker" is as
+   * much confirmation as the host ever gets; when the worker isn't connected
+   * at all, the disk genuinely can't be reclaimed from here, so this throws
+   * and retainedUntil is left in place rather than reporting the sandbox as
+   * gone (it carries credential material). The reaper's own retry (see
+   * #maybeReap) is what tries again later; #requeue propagates the failure
+   * as-is.
    */
   async #discardRetained(runId: string): Promise<void> {
     const timer = this.#reapTimers.get(runId);
     if (timer) clearTimeout(timer);
     this.#reapTimers.delete(runId);
 
-    const entry = this.#attached.get(runId);
-    if (entry) {
-      this.#attached.delete(runId);
-      const sandbox = await entry.pending.catch(() => undefined);
-      // A rehydration that never produced a sandbox still leaves the
-      // retained disk on the host; fall through to the provider's discard.
-      if (sandbox) await sandbox.destroy();
-      else await this.#provider?.discard(runId);
-    } else if (this.store.get(runId)?.sandbox.retainedUntil) {
-      await this.#provider?.discard(runId);
-    }
-
     const run = this.store.get(runId);
     if (run?.sandbox.retainedUntil) {
-      await this.store.update(runId, { sandbox: { ...run.sandbox, retainedUntil: undefined } });
+      if (!this.#workers?.discard(runId)) {
+        throw new Error(`the worker holding run ${runId}'s retained sandbox isn't connected`);
+      }
+    }
+
+    const current = this.store.get(runId);
+    if (current?.sandbox.retainedUntil) {
+      await this.store.update(runId, { sandbox: { ...current.sandbox, retainedUntil: undefined } });
     }
   }
 
@@ -1794,30 +1790,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       stream: "system",
       text: "retained sandbox expired and was removed",
     });
-  }
-
-  /**
-   * Run workspaces are ephemeral except while a run is active or its sandbox
-   * is retained; delete anything else left behind under WORKSPACES_DIR
-   * (a crash, an interrupted retry, a provider that never got to clean up).
-   */
-  async #sweepWorkspaces(): Promise<void> {
-    let entries;
-    try {
-      entries = await readdir(WORKSPACES_DIR, { withFileTypes: true });
-    } catch {
-      return; // nothing to sweep
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const runId = entry.name;
-      const run = this.store.get(runId);
-      const retainedUntil = run?.sandbox.retainedUntil;
-      const retained = retainedUntil !== undefined && Date.parse(retainedUntil) > Date.now();
-      if (run && (ACTIVE_STATUSES.has(run.status) || retained)) continue;
-      console.log(`[brevi] removed leftover sandbox workspace ${runId}`);
-      await rm(join(WORKSPACES_DIR, runId), { recursive: true, force: true }).catch(() => undefined);
-    }
   }
 
   /** Arm a timer that fires at the run's resumeAt (or right away when past). */
@@ -1915,95 +1887,133 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     await this.#enqueue(ticket);
   }
 
+  /** Create the run for a ticket and enter it into the dispatch queue. */
   async #enqueue(ticket: Ticket): Promise<Run> {
-    const provider = this.#provider;
-    if (!provider) throw new Error("orchestrator not started");
-    const run = await this.store.createRun(ticket, provider.name);
+    const run = await this.store.createRun(ticket);
     this.#queue.push(run.id);
-    this.#kickWorker();
+    this.#dispatchQueued();
     return run;
   }
 
-  /** Start queued runs until the concurrency limit is reached. */
-  #kickWorker(): void {
-    if (this.#stopped) return;
-    const limit = Math.max(1, this.config.sandbox.concurrency);
-    // An id still executing must not start a second time; it waits here until
-    // that execution's finally() removes it from #running and kicks again.
-    const deferred: string[] = [];
-    while (this.#running.size < limit && this.#queue.length > 0) {
-      const runId = this.#queue.shift();
-      if (!runId) break;
-      if (this.#running.has(runId)) {
-        deferred.push(runId);
+  /**
+   * Drain #queue in FIFO order for as long as the fleet keeps accepting
+   * dispatches. A no-op before start() (nothing to dispatch to yet) and
+   * after stop(). Every other mutation of #queue (enqueue, requeue, a
+   * worker freeing up) funnels through this same method, so there is one
+   * place that decides what leaves the queue and when.
+   */
+  #dispatchQueued(): void {
+    if (this.#stopped || !this.#workers) return;
+    while (this.#queue.length > 0) {
+      const runId = this.#queue[0]!;
+      const run = this.store.get(runId);
+      // Gone, or claimed by something else (a cancel that raced this drain)
+      // since it was queued: drop it and keep going, there is nothing left
+      // here for it.
+      if (!run || run.status !== "queued") {
+        this.#queue.shift();
         continue;
       }
-      const run = this.store.get(runId);
-      if (!run || run.status !== "queued") continue;
-      const promise = this.#execute(runId).finally(() => {
-        this.#running.delete(runId);
-        this.#kickWorker();
-      });
-      this.#running.set(runId, promise);
+      const payload = this.#buildDispatchPayload(runId);
+      if (!payload) {
+        // The run has already been failed by the builder (no resolved repo);
+        // drop it from the queue and move on to the next one.
+        this.#queue.shift();
+        continue;
+      }
+      if (!this.#workers.dispatch(payload)) {
+        // No connected worker has room right now. Leave this run at the
+        // head so the next capacity change (a worker connecting, or one of
+        // its runs settling) resumes exactly here, and say so once rather
+        // than on every fruitless attempt in between.
+        if (!this.#warnedNoCapacity) {
+          this.#warnedNoCapacity = true;
+          console.warn(`[brevi] ${this.#queue.length} run(s) queued but waiting on fleet capacity`);
+        }
+        return;
+      }
+      this.#warnedNoCapacity = false;
+      this.#queue.shift();
+      // The follow-up marker is only consumed on a successful dispatch: a
+      // rejected dispatch (see #onRunRejected) must still know to build a
+      // follow-up payload the next time this run is tried.
+      if (payload.kind === "follow-up") this.#followUps.delete(runId);
     }
-    this.#queue.unshift(...deferred);
   }
 
-  async #execute(runId: string): Promise<void> {
-    // Claiming the run's execution kind and clearing its reservation is one
-    // synchronous step, so even a duplicate queue entry could never route
-    // the same run into both pipelines.
-    const followUp = this.#followUps.delete(runId);
-    const provider = this.#provider;
-    if (!provider) {
-      // Only possible before start(); leave the run queued for the next kick.
-      if (followUp) this.#followUps.add(runId);
-      this.#queue.unshift(runId);
-      return;
-    }
-    const linear = this.#linear;
-    if (!followUp && !linear) {
-      // Linear was disconnected after this run was queued. Follow-ups never
-      // talk to Linear (the ticket stays In Review), so only implementation
-      // runs fail here.
-      await this.store
-        .setStatus(runId, "failed", {
-          error: "Linear was disconnected before the run started",
-          finishedAt: new Date().toISOString(),
-        })
+  /**
+   * Resolve everything a dispatch needs beyond the run itself. Mirrors how
+   * the old in-process executeRun resolved a run's repo: `ticket.repo`
+   * already names a configured repo key (Linear resolution or defaultRepo
+   * picked it before the ticket was ever queued), so this just looks it up
+   * in the live config. Returns undefined, after failing the run itself,
+   * when that lookup comes up empty: there is no later point in the
+   * dispatch path where that failure could be reported instead.
+   */
+  #buildDispatchPayload(runId: string): DispatchRequest | undefined {
+    const run = this.store.get(runId);
+    if (!run) return undefined;
+    const repoKey = run.ticket.repo;
+    const repo = repoKey ? this.config.repos[repoKey] : undefined;
+    if (!repoKey || !repo) {
+      const text = `ticket ${run.ticket.identifier} has no resolved repo mapping: add a "repo:<key>" label or set defaultRepo`;
+      this.store.appendEvent({ runId, ts: new Date().toISOString(), type: "log", stream: "system", text });
+      void this.store
+        .setStatus(runId, "failed", { error: text, finishedAt: new Date().toISOString() })
         .catch(() => undefined);
-      return;
+      return undefined;
     }
-    const abort = new AbortController();
-    this.#aborts.set(runId, abort);
-    try {
-      await (followUp ? executeFollowUp : executeRun)({
-        runId,
-        config: this.config,
-        store: this.store,
-        memories: this.memories,
-        provider,
-        linear,
-        signal: abort.signal,
-      });
-    } catch (error) {
-      // executeRun handles its own failures; this is a last line of defense.
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[brevi] run ${runId} crashed: ${message}`);
-      const current = this.store.get(runId);
-      if (current && !isTerminal(current.status)) {
-        await this.store
-          .setStatus(runId, "failed", { error: message, finishedAt: new Date().toISOString() })
-          .catch(() => undefined);
-      }
-    } finally {
-      this.#aborts.delete(runId);
+    const memories = this.config.memory.enabled
+      ? selectMemories(this.memories.list(memoryKeyFor(repo.remote)), this.config.memory.maxChars)
+      : [];
+    const prompts: DispatchPrompts = {
+      prDescription: this.config.github.prDescription,
+      memories,
+      recordMemories: this.config.memory.enabled,
+    };
+    return {
+      kind: this.#followUps.has(runId) ? "follow-up" : "implementation",
+      run,
+      repoKey,
+      repo,
+      config: this.config,
+      prompts,
+    };
+  }
+
+  /**
+   * A run dispatched to a worker reached a terminal or "waiting" state.
+   * Re-arm whatever follow-on timer that implies, the same two #execute's
+   * tail used to arm back when a run finished in-process, then try the
+   * queue again: this run's slot freeing up on its worker is exactly the
+   * kind of capacity change #dispatchQueued was waiting on.
+   */
+  #onRunSettled(runId: string): void {
+    const run = this.store.get(runId);
+    if (run?.status === "waiting") this.#scheduleResume(runId);
+    if (run?.sandbox.retainedUntil) this.#scheduleReap(runId);
+    this.#dispatchQueued();
+  }
+
+  /**
+   * A worker refused (or lost) a dispatch before doing any work: nothing
+   * happened to the run, so there is nothing to unwind, just a queue slot
+   * to give back. Put it at the front rather than the back, so one flaky
+   * worker doesn't push a run behind everything queued after it, and leave
+   * it there rather than immediately retrying: #dispatchQueued runs again
+   * on the next capacity change on its own.
+   */
+  #onRunRejected(runId: string, reason: string): void {
+    console.warn(`[brevi] dispatch of run ${runId} was rejected: ${reason}`);
+    this.store.appendEvent({
+      runId,
+      ts: new Date().toISOString(),
+      type: "log",
+      stream: "system",
+      text: `dispatch was rejected (${reason}); requeued`,
+    });
+    if (this.store.get(runId)?.status === "queued" && !this.#queue.includes(runId)) {
+      this.#queue.unshift(runId);
     }
-    // An attempt that ended on a usage limit parked the run as waiting;
-    // arm the timer that will start the next attempt.
-    if (this.store.get(runId)?.status === "waiting") this.#scheduleResume(runId);
-    // A completed/failed attempt that retained its sandbox needs a reaper
-    // armed for when the retention window ends.
-    if (this.store.get(runId)?.sandbox.retainedUntil) this.#scheduleReap(runId);
   }
 }

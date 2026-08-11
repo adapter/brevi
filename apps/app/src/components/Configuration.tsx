@@ -1,4 +1,4 @@
-import type { BreviConfig, HealthResponse, LinearStatus, Run } from "@brevi/shared";
+import type { BreviConfig, HealthResponse, LinearStatus, Run, WorkerSummary } from "@brevi/shared";
 import type { ConfigSection } from "../lib/useOrchestrator";
 import { AgentSection } from "./config/AgentSection";
 import { ConnectorsSection } from "./config/ConnectorsSection";
@@ -29,6 +29,7 @@ const SECTIONS: { id: ConfigSection; label: string }[] = [
 export function ConfigurationPage({
   config,
   runs,
+  workers,
   linearStatus,
   health,
   section,
@@ -37,6 +38,7 @@ export function ConfigurationPage({
 }: {
   config: BreviConfig | null;
   runs: Run[];
+  workers: WorkerSummary[];
   linearStatus: LinearStatus | null;
   health: HealthResponse | null;
   section: ConfigSection;
@@ -103,7 +105,7 @@ export function ConfigurationPage({
             <AgentSection config={config} onConfig={onConfig} />
           </div>
           <div hidden={section !== "sandbox"}>
-            <SandboxSection config={config} health={health} onConfig={onConfig} />
+            <SandboxSection config={config} health={health} workers={workers} onConfig={onConfig} />
           </div>
           <div hidden={section !== "memory"}>
             <MemorySection config={config} onConfig={onConfig} />

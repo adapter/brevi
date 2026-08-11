@@ -25,8 +25,10 @@ export const CONFIG_DEFAULTS: BreviConfig = configSchema.parse({});
  * round-trip over a live secret. `linear.tokenExpiresAt` is not itself secret,
  * it is refused because the OAuth flow maintains it.
  *
- * `connect.linearClientSecret` is deliberately absent: it is a write-only form
- * field, guarded by MASKED_SECRET below rather than frozen.
+ * `connect.linearClientSecret` and `fleet.token` are deliberately absent: they
+ * are write-only form fields, guarded by MASKED_SECRET below rather than
+ * frozen. Both are masked in every read all the same, so neither can be read
+ * back out of the unauthenticated config channels.
  */
 export const SETTINGS_SECRET_PATHS = [
   "linear.apiKey",
