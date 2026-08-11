@@ -75,7 +75,7 @@ Firecracker requires KVM, which is a Linux kernel feature. There is no macOS por
 
 ## Timeouts and cleanup
 
-`sandbox.timeoutMinutes` (60 by default) is a hard wall-clock limit on the agent command; hitting it kills the command and fails the run. A cancelled run's sandbox is destroyed immediately, and its scratch directory under `~/.brevi/workspaces/` is removed. A completed or failed run's sandbox is kept instead, for interactive resume, see below. Artifacts have already been copied into `~/.brevi/runs/` by then either way, so they survive.
+`sandbox.timeoutMinutes` (240, four hours, by default) is a hard wall-clock limit applied per agent execution: the implementation pass, each parallel Codex reviewer, the synthesis pass, and the fix pass each get their own budget, rather than one limit for the whole run. Hitting it kills that command. What that costs depends on which execution it was: an implementation or fix pass that times out fails the run, while a reviewer or the synthesis pass timing out only skips part or all of the best-effort [Codex review](/reference/configuration/#codex-review), and the run carries on to finalizing. A cancelled run's sandbox is destroyed immediately, and its scratch directory under `~/.brevi/workspaces/` is removed. A completed or failed run's sandbox is kept instead, for interactive resume, see below. Artifacts have already been copied into `~/.brevi/runs/` by then either way, so they survive.
 
 ## Retention and resuming
 

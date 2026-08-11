@@ -229,9 +229,10 @@ export const configSchema = z.object({
       /**
        * Hard wall-clock limit applied per agent execution, not per run: the
        * implementation pass, each Codex reviewer, the synthesis pass, and the
-       * fix pass each get their own budget.
+       * fix pass each get their own budget. Defaults to 4 hours per
+       * execution.
        */
-      timeoutMinutes: z.number().int().min(1).default(60),
+      timeoutMinutes: z.number().int().min(1).default(240),
       /**
        * How many hours a finished (completed or failed) run's sandbox disk is
        * kept for interactive resume via `brevi attach`. While retained the

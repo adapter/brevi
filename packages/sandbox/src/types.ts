@@ -18,6 +18,12 @@ export interface ExecOptions {
 
 export interface ExecResult {
   exitCode: number;
+  /**
+   * True when `timeoutMs` elapsed and the command was killed. A timeout is
+   * reported as exit code 124, but a child can also exit 124 on its own, so
+   * this is the only reliable way to tell the two apart.
+   */
+  timedOut: boolean;
   stdout: string;
   stderr: string;
 }

@@ -36,7 +36,7 @@ Runs execute serially (one at a time, FIFO) and move through the statuses `queue
 
 **Preparing.** brevi clones the mapped repo (depth 50, default branch, or from `repo.path` if you configured a local checkout), rewrites `origin` to a token-free URL, creates the branch `brevi/<ticket-identifier>` in lowercase, creates the sandbox, and pushes the checkout into it. Best effort, it also moves the Linear issue to its team's first "started" state.
 
-**Running.** The configured agent command runs headless inside the sandbox with the generated prompt. Structured `stream-json` output is parsed and forwarded to the dashboard as it arrives, so you watch the run live. A run is killed at `sandbox.timeoutMinutes` (60 by default), and a non-zero agent exit fails the run.
+**Running.** The configured agent command runs headless inside the sandbox with the generated prompt. Structured `stream-json` output is parsed and forwarded to the dashboard as it arrives, so you watch the run live. Each agent execution is killed at `sandbox.timeoutMinutes` (240, four hours, by default), and a coding agent that times out or exits non-zero fails the run.
 
 As soon as the coding phase finishes, brevi checkpoints it: the workspace is pulled out, committed, force-pushed to `brevi/<ticket-id>`, and opened as a **draft** pull request, with a Linear comment linking to it. Everything after that point can fail, time out, or be cancelled without losing the implementation, and a retry updates the same PR instead of starting from nothing. The checkpoint is best effort: if it fails the run carries on, since finalizing pushes and opens the PR anyway.
 
