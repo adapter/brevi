@@ -16,10 +16,11 @@ import {
   type RunLease,
   type RunStatus,
   type WorkerCapabilities,
+  type WorkerMessage,
 } from "@brevi/shared";
 import { createSandboxProvider, isReadWritable, type SandboxProvider } from "@brevi/sandbox";
 import { loadConfig } from "@brevi/orchestrator";
-import { LinearService } from "@brevi/orchestrator/internal";
+import { isTerminal, LinearService } from "@brevi/orchestrator/internal";
 import { createAttachSessions, type AttachSessions } from "./attach.js";
 import { connectToHost, type WorkerConnection } from "./connection.js";
 import { executeFollowUp } from "./followup.js";
@@ -181,6 +182,15 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
    * still considers valid.
    */
   const claimedLeases = new Map<string, RunLease>();
+  /**
+   * Completion frames handed to the socket but not yet acknowledged, keyed by
+   * lease. socket.send() accepting a frame is not the host receiving it, so a
+   * drop in that window would otherwise lose the completion permanently: the
+   * lease stays claimed, the reconnect re-advertises it, the host keeps it,
+   * and nothing ever resends. Replayed on every registration, cleared by the
+   * host's run-complete-ack.
+   */
+  const unacknowledgedCompletions = new Map<string, WorkerMessage>();
   // Set once a shutdown signal lands: new dispatches are refused from that
   // point on, so the set of runs this worker is still finishing only ever
   // shrinks during shutdown.
@@ -266,11 +276,29 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
         await (kind === "follow-up" ? executeFollowUp : executeRun)(ctx);
       } catch (error) {
         console.error(`[brevi] run ${run.id} crashed: ${errorMessage(error)}`);
+        // Reaching here means the failure escaped the execution's own error
+        // handling, so nothing has recorded a reason. The completion frame is
+        // built from the reporter below and would carry a bare "failed" with
+        // no error text and an attempt left open, which is what the user sees
+        // in the dashboard. Record both before that frame is built.
+        if (!isTerminal(reporter.run.status)) {
+          try {
+            await reporter.endAttempt(run.id, { error: errorMessage(error) });
+            await reporter.setStatus(run.id, "failed", {
+              error: errorMessage(error),
+              finishedAt: new Date().toISOString(),
+            });
+          } catch (reportError) {
+            console.error(`[brevi] could not record run ${run.id}'s failure: ${errorMessage(reportError)}`);
+          }
+        }
       } finally {
         activeRuns.delete(run.id);
         knownRuns.set(run.id, reporter.run);
         console.log(`[brevi] run ${run.id} finished: ${reporter.run.status}`);
-        connection.send(runCompleteFor(lease.id, run.id, reporter));
+        const completion = runCompleteFor(lease.id, run.id, reporter);
+        unacknowledgedCompletions.set(lease.id, completion);
+        connection.send(completion);
       }
     })();
     activeRuns.set(run.id, { lease, abort, reporter, execution });
@@ -293,6 +321,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   /** The host applied this run's completion and released the lease; a run this worker no longer claims (already dropped, or from a previous process) is ignored rather than treated as an error. */
   const handleRunCompleteAck = (message: RunCompleteAckMessage): void => {
     claimedLeases.delete(message.leaseId);
+    unacknowledgedCompletions.delete(message.leaseId);
   };
 
   connection = connectToHost({
@@ -302,6 +331,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     name,
     capabilities,
     activeLeases: () => [...claimedLeases.values()],
+    unacknowledged: () => [...unacknowledgedCompletions.values()],
   });
 
   attachSessions = createAttachSessions({

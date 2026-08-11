@@ -26,6 +26,15 @@ export interface WorkerConnectionOptions {
   capabilities: WorkerCapabilities;
   /** Evaluated fresh on every register and heartbeat: the leases this worker still believes it owns. */
   activeLeases: () => RunLease[];
+  /**
+   * Evaluated fresh on every successful registration: frames the host has not
+   * acknowledged yet, requeued so a reconnect replays them. Handing a frame to
+   * the socket is not delivery, and a completion lost that way would otherwise
+   * strand its run forever, since the lease stays claimed and nothing resends.
+   * Replays are safe to duplicate: the host drops frames for a lease it has
+   * already settled, and acks a lease it no longer knows about.
+   */
+  unacknowledged?: () => WorkerMessage[];
 }
 
 export interface WorkerConnection {
@@ -69,7 +78,7 @@ function withJitter(baseMs: number): number {
  * that is noted on the console once, not on every drop.
  */
 export function connectToHost(options: WorkerConnectionOptions): WorkerConnection {
-  const { hostUrl, token, workerId, name, capabilities, activeLeases } = options;
+  const { hostUrl, token, workerId, name, capabilities, activeLeases, unacknowledged } = options;
   const wsUrl = toWsUrl(hostUrl);
 
   let socket: WebSocket | undefined;
@@ -181,6 +190,9 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
         backoffMs = WORKER_BACKOFF_INITIAL_MS;
         console.log(`[brevi] registered with ${hostUrl} as worker "${name}" (host ${message.hostVersion})`);
         startHeartbeat();
+        // Requeued behind anything already waiting, so a replayed completion
+        // still trails the frames that were reported before it.
+        for (const message of unacknowledged?.() ?? []) enqueue(message);
         flush();
         return;
       }

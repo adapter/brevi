@@ -69,6 +69,13 @@ interface Lease {
   id: string;
   runId: string;
   workerId: string;
+  /**
+   * What this dispatch asked the worker to do. Carried so a rejection can tell
+   * the scheduler which kind of work to rebuild when it requeues the run: a
+   * follow-up that came back rejected must not be retried as a fresh
+   * implementation against a PR that already exists.
+   */
+  kind: DispatchRequest["kind"];
 }
 
 /** A worker's leases while its socket is down but its reconnect window hasn't expired yet. */
@@ -118,7 +125,7 @@ export interface WorkerRegistryOptions {
   /** A run reached a terminal or waiting state; the caller re-arms whatever follow-on timer that implies and tries to dispatch more of the queue. */
   onRunSettled(runId: string): void;
   /** A worker rejected (or lost) a dispatch before doing any work; the caller requeues the run. */
-  onRunRejected(runId: string, reason: string): void;
+  onRunRejected(runId: string, reason: string, kind: DispatchRequest["kind"]): void;
 }
 
 interface WorkerRegistryEvents {
@@ -195,7 +202,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   readonly #store: RunStore;
   readonly #memories: MemoryStore;
   readonly #onRunSettled: (runId: string) => void;
-  readonly #onRunRejected: (runId: string, reason: string) => void;
+  readonly #onRunRejected: (runId: string, reason: string, kind: DispatchRequest["kind"]) => void;
 
   #workers = new Map<string, ConnectedWorker>();
   #leases = new Map<string, Lease>();
@@ -207,6 +214,15 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   #cancelIntents = new Set<string>();
   /** Artifact names actually saved to disk per lease, so run-complete's manifest check has something to compare against. */
   #savedArtifacts = new Map<string, Set<string>>();
+  /**
+   * Tail of each lease's write chain. Frames arrive in order on one socket but
+   * their handlers are async, so a run-artifact still writing bytes when the
+   * run-complete behind it lands would be reconciled as "never reached the
+   * host" and then recorded after the lease's bookkeeping was already torn
+   * down. Appending here keeps a lease's writes in the order they were sent,
+   * and lets run-complete wait for the ones ahead of it.
+   */
+  #leaseWrites = new Map<string, Promise<void>>();
 
   constructor(options: WorkerRegistryOptions) {
     super();
@@ -304,7 +320,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
 
     const issuedAt = new Date().toISOString();
     const leaseId = randomUUID();
-    this.#leases.set(leaseId, { id: leaseId, runId: payload.run.id, workerId: target.id });
+    this.#leases.set(leaseId, { id: leaseId, runId: payload.run.id, workerId: target.id, kind: payload.kind });
     this.#leaseByRun.set(payload.run.id, leaseId);
 
     const run: Run = { ...payload.run, sandbox: { ...payload.run.sandbox, workerId: target.id } };
@@ -614,6 +630,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     if (this.#leaseByRun.get(lease.runId) === leaseId) this.#leaseByRun.delete(lease.runId);
     this.#cancelIntents.delete(leaseId);
     this.#savedArtifacts.delete(leaseId);
+    this.#leaseWrites.delete(leaseId);
   }
 
   /** A lease active for exactly this worker, or undefined; a stale or foreign leaseId must never let a message through. */
@@ -661,13 +678,13 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
         const lease = this.#leaseFor(workerId, message.leaseId, message.runId, "dispatch-rejected");
         if (!lease) return;
         this.#settleLease(lease.id);
-        this.#onRunRejected(lease.runId, message.reason);
+        this.#onRunRejected(lease.runId, message.reason, lease.kind);
         return;
       }
       case "run-patch": {
         const lease = this.#leaseFor(workerId, message.leaseId, message.runId, "run-patch");
         if (!lease) return;
-        void this.#applyRunPatch(lease, message.patch);
+        void this.#chainLeaseWrite(lease.id, () => this.#applyRunPatch(lease, message.patch));
         return;
       }
       case "run-event": {
@@ -684,13 +701,13 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       case "run-artifact": {
         const lease = this.#leaseFor(workerId, message.leaseId, message.runId, "run-artifact");
         if (!lease) return;
-        void this.#saveArtifact(lease, message);
+        void this.#chainLeaseWrite(lease.id, () => this.#saveArtifact(lease, message));
         return;
       }
       case "run-memories": {
         const lease = this.#leaseFor(workerId, message.leaseId, message.runId, "run-memories");
         if (!lease) return;
-        void this.#recordMemories(lease.runId, message);
+        void this.#chainLeaseWrite(lease.id, () => this.#recordMemories(lease.runId, message));
         return;
       }
       case "run-complete": {
@@ -792,12 +809,31 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
    * mean "the host has it".
    */
   async #completeRun(workerId: string, lease: Lease, message: RunCompleteMessage): Promise<void> {
+    // Everything this lease sent ahead of the completion has to have landed
+    // before the manifest is reconciled against what was saved, and before
+    // settleLease drops the lease's bookkeeping underneath a late write.
+    await this.#leaseWrites.get(lease.id);
     await this.#applyRunComplete(lease, message);
     this.#reconcileArtifacts(lease, message.artifacts);
     const live = this.#workers.get(workerId);
     if (live) this.#send(live.socket, { type: "run-complete-ack", leaseId: lease.id, runId: lease.runId });
     this.#settleLease(lease.id);
     this.#onRunSettled(lease.runId);
+  }
+
+  /**
+   * Append one lease-scoped write to that lease's chain. A failing write is
+   * logged and swallowed so it cannot break the chain for the frames behind
+   * it: losing one artifact must not strand the completion that follows.
+   */
+  #chainLeaseWrite(leaseId: string, write: () => Promise<void>): Promise<void> {
+    const next = (this.#leaseWrites.get(leaseId) ?? Promise.resolve())
+      .then(write)
+      .catch((error: unknown) => {
+        console.error(`[brevi] lease ${leaseId} write failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    this.#leaseWrites.set(leaseId, next);
+    return next;
   }
 
   async #applyRunComplete(lease: Lease, message: RunCompleteMessage): Promise<void> {

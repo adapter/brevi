@@ -273,9 +273,9 @@ export function SandboxSection({
             path="fleet.heartbeatTimeoutSeconds"
             draft={fleet}
             unit="s"
-            min={15}
+            min={30}
             max={600}
-            help="Seconds a connected worker may go silent before the host drops it and fails its in-flight runs."
+            help="Seconds a connected worker may go silent before the host drops it and fails its in-flight runs. Workers heartbeat every 15s, so the floor is two intervals: a timeout close to one interval lets ordinary jitter drop a healthy worker."
           />
           <NumberField
             label="Reconnect grace"

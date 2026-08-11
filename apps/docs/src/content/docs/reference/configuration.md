@@ -252,7 +252,7 @@ The fleet is the pool of `brevi worker` daemons that dial into this host and exe
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `token` | string | `""` | Shared pairing token workers present with `brevi worker --host <url> --token <token>`. Generated on first start when empty. |
-| `heartbeatTimeoutSeconds` | integer 15-600 | `45` | Seconds a connected worker may go silent before the host drops it and fails its in-flight runs. |
+| `heartbeatTimeoutSeconds` | integer 30-600 | `45` | Seconds a connected worker may go silent before the host drops it and fails its in-flight runs. Workers heartbeat every 15 seconds, so the floor is two intervals: a timeout close to one interval lets ordinary jitter drop a healthy worker. |
 | `reconnectGraceSeconds` | integer 10-3600 | `120` | How long a worker that dropped mid-run has to reconnect and resume reporting before its runs are failed. |
 
 `fleet.token` is a secret like any other: masked in every API read, including the unauthenticated `GET /api/config` and the dashboard's WebSocket, because whoever holds it can register as a worker and receive dispatches carrying every credential a run needs. The dashboard's Fleet card is write-only for it, the same treatment `connect.linearClientSecret` gets. The token is readable in the clear only from the machine running brevi: directly in `~/.brevi/config.json`, or via `GET /api/fleet/pairing`, which answers only loopback callers (the machine's own dashboard) with the token and a ready-to-paste `brevi worker` command.

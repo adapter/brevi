@@ -392,7 +392,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       store: this.store,
       memories: this.memories,
       onRunSettled: (runId) => this.#onRunSettled(runId),
-      onRunRejected: (runId, reason) => this.#onRunRejected(runId, reason),
+      onRunRejected: (runId, reason, kind) => this.#onRunRejected(runId, reason, kind),
     });
     this.#workers.on("workers", (workers) => {
       this.emit("workers", workers);
@@ -2003,8 +2003,13 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    * it there rather than immediately retrying: #dispatchQueued runs again
    * on the next capacity change on its own.
    */
-  #onRunRejected(runId: string, reason: string): void {
+  #onRunRejected(runId: string, reason: string, kind: DispatchRequest["kind"]): void {
     console.warn(`[brevi] dispatch of run ${runId} was rejected: ${reason}`);
+    // Dispatching a follow-up releases its reservation (an executing follow-up
+    // must not keep blocking attach), but a rejected one never executed: put
+    // the reservation back, or the requeued run is rebuilt as a fresh
+    // implementation and re-runs the ticket against a PR that already exists.
+    if (kind === "follow-up") this.#followUps.add(runId);
     this.store.appendEvent({
       runId,
       ts: new Date().toISOString(),

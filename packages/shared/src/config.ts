@@ -259,8 +259,15 @@ export const configSchema = z.object({
     .object({
       /** Shared pairing token workers present with `brevi worker --token`. Generated on first start when empty. */
       token: z.string().default(""),
-      /** Seconds a connected worker may go silent before the host drops it and fails its in-flight runs. */
-      heartbeatTimeoutSeconds: z.number().int().min(15).max(600).default(45),
+      /**
+       * Seconds a connected worker may go silent before the host drops it and
+       * fails its in-flight runs. Workers heartbeat every 15s
+       * (WORKER_HEARTBEAT_MS), so the floor here is two intervals: a timeout at
+       * or near one interval makes the watchdog and the heartbeat come due
+       * together, and ordinary event-loop or network jitter is then enough to
+       * drop a perfectly healthy worker.
+       */
+      heartbeatTimeoutSeconds: z.number().int().min(30).max(600).default(45),
       /** How long a worker that dropped mid-run has to reconnect and resume reporting before its runs are failed. */
       reconnectGraceSeconds: z.number().int().min(10).max(3600).default(120),
     })
