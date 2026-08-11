@@ -132,7 +132,7 @@ export function SandboxSection({
             </p>
           )}
           <NumberField
-            label="Run timeout"
+            label="Execution timeout"
             path="sandbox.timeoutMinutes"
             draft={sandbox}
             unit="min"

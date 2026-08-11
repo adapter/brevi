@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { execa, type Result as ExecaResult } from "execa";
-import { BREVI_HOME, WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type LimitInfo, type RepoConfig, type RunResult, type Ticket } from "@brevi/shared";
+import { BREVI_HOME, formatDuration, WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type LimitInfo, type RepoConfig, type RunResult, type Ticket } from "@brevi/shared";
 import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
 import { ccusageCostEntry, resolveCcusageCommand, startCcusageSampler, type CcusageSampler } from "./ccusage.js";
 import { usageCollector } from "./costs.js";
@@ -220,7 +220,8 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     if (model) args.push("--model", model);
     if (effort) args.push("--effort", effort);
     args.push(...extraArgs, ...config.agent.args);
-    log("system", `running ${config.agent.command} (${label}${model ? ` on ${model}` : ""}, timeout ${config.sandbox.timeoutMinutes}m)`);
+    const timeoutMs = config.sandbox.timeoutMinutes * 60_000;
+    log("system", `running ${config.agent.command} (${label}${model ? ` on ${model}` : ""}, timeout ${formatDuration(timeoutMs)})`);
     // Labeled before the racing await so an abort still knows which
     // execution's usage to persist.
     pendingCostLabel = labelFor(label);
@@ -250,7 +251,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     const exec = await activeSandbox.exec(config.agent.command, args, {
       cwd: activeSandbox.workspacePath,
       env: { CODEX_HOME: codexHome },
-      timeoutMs: config.sandbox.timeoutMinutes * 60_000,
+      timeoutMs,
       signal,
       onStdout: (chunk) => stdoutSink.write(chunk),
       onStderr: (chunk) => stderrSink.write(chunk),
@@ -261,6 +262,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     throwIfAborted(signal);
     if (exec.exitCode !== 0) {
       if (detectedLimit) throw new AgentLimitError(detectedLimit);
+      if (exec.timedOut) throw new Error(`agent timed out after ${formatDuration(timeoutMs)} (${label})`);
       throw new Error(`agent exited with code ${exec.exitCode} (${label})`);
     }
   };

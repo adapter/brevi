@@ -1,4 +1,5 @@
 import { StringDecoder } from "node:string_decoder";
+import { formatDuration } from "@brevi/shared";
 import { execa, type Options } from "execa";
 import type { ExecResult } from "./types.js";
 
@@ -56,7 +57,12 @@ export async function runCommand(
   const note = failureNote(result, options.timeoutMs);
   if (note !== undefined) stderr.push(note);
 
-  return { exitCode: exitCodeOf(result), stdout: stdout.finish(), stderr: stderr.finish() };
+  return {
+    exitCode: exitCodeOf(result),
+    timedOut: result.timedOut,
+    stdout: stdout.finish(),
+    stderr: stderr.finish(),
+  };
 }
 
 /** Convenience wrapper for internal commands where a non-zero exit is a bug, not a result. */
@@ -87,7 +93,7 @@ function exitCodeOf(result: CommandOutcome): number {
 
 /** Surfaces timeouts, cancellations, and spawn failures, which otherwise leave both streams empty. */
 function failureNote(result: CommandOutcome, timeoutMs: number | undefined): string | undefined {
-  if (result.timedOut) return `\nbrevi: command timed out after ${timeoutMs ?? 0}ms\n`;
+  if (result.timedOut) return `\nbrevi: command timed out after ${formatDuration(timeoutMs ?? 0)}\n`;
   if (result.isCanceled) return "\nbrevi: command cancelled\n";
   if (!result.failed || result.exitCode !== undefined) return undefined;
   return `\nbrevi: ${shortMessageOf(result) ?? "command failed to run"}\n`;

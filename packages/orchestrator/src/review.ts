@@ -8,7 +8,7 @@
  */
 
 import type { Sandbox } from "@brevi/sandbox";
-import type { BreviConfig, CostEntry, Ticket } from "@brevi/shared";
+import { formatDuration, type BreviConfig, type CostEntry, type Ticket } from "@brevi/shared";
 import { ccusageCostEntry, readCodexSessionUsage } from "./ccusage.js";
 import { usageCollector } from "./costs.js";
 import { agentProvider } from "./limits.js";
@@ -93,7 +93,7 @@ export async function runCodexReview(options: CodexReviewOptions): Promise<strin
 
     const runReviewer = async (angle: ReviewAngle): Promise<number> => {
       const prompt = buildReviewerPrompt({ angle, ticket, outFile: `${REVIEW_DIR}/${angle.key}.md` });
-      const exitCode = await runCodexExec({
+      const { exitCode, timedOut } = await runCodexExec({
         sandbox,
         config,
         signal,
@@ -103,7 +103,7 @@ export async function runCodexReview(options: CodexReviewOptions): Promise<strin
         addCost,
         costLabel: `review (${angle.key})`,
       });
-      log("system", exitCode === 0 ? `codex reviewer (${angle.title}) finished` : `codex reviewer (${angle.title}) failed (exit ${exitCode})`);
+      log("system", exitCode === 0 ? `codex reviewer (${angle.title}) finished` : `codex reviewer (${angle.title}) ${failureReason(exitCode, timedOut, config)}`);
       return exitCode;
     };
 
@@ -118,7 +118,7 @@ export async function runCodexReview(options: CodexReviewOptions): Promise<strin
     }
 
     const synthesisPrompt = buildReviewSynthesisPrompt({ ticket, reviewDir: REVIEW_DIR, outFile: REVIEW_FILE });
-    const synthesisExit = await runCodexExec({
+    const synthesis = await runCodexExec({
       sandbox,
       config,
       signal,
@@ -129,8 +129,8 @@ export async function runCodexReview(options: CodexReviewOptions): Promise<strin
       costLabel: "review (synthesis)",
     });
     throwIfAborted(signal);
-    if (synthesisExit !== 0) {
-      log("system", `codex review failed: synthesis pass failed (exit ${synthesisExit})`);
+    if (synthesis.exitCode !== 0) {
+      log("system", `codex review failed: synthesis pass ${failureReason(synthesis.exitCode, synthesis.timedOut, config)}`);
       return undefined;
     }
 
@@ -158,6 +158,16 @@ export async function runCodexReview(options: CodexReviewOptions): Promise<strin
   }
 }
 
+/**
+ * How a failed Codex exec is described in the console. A timeout names the
+ * budget it exhausted, since "exit 124" alone tells nobody that the pass was
+ * killed at the per-execution limit.
+ */
+function failureReason(exitCode: number, timedOut: boolean, config: BreviConfig): string {
+  if (timedOut) return `timed out after ${formatDuration(config.sandbox.timeoutMinutes * 60_000)}`;
+  return `failed (exit ${exitCode})`;
+}
+
 interface RunCodexExecOptions {
   sandbox: Sandbox;
   config: BreviConfig;
@@ -176,9 +186,11 @@ interface RunCodexExecOptions {
  * isolates the run; Codex's own CLI-level sandboxing would just be redundant.
  * Usage is read from ccusage over the run's CODEX_HOME session file when
  * available (real pricing), falling back to the stream-estimated figure.
- * Never throws on a non-zero exit, the caller decides what that means.
+ * Never throws on a non-zero exit, the caller decides what that means: the
+ * exit code comes back alongside whether the pass was killed at its timeout,
+ * which the code alone cannot distinguish.
  */
-async function runCodexExec(options: RunCodexExecOptions): Promise<number> {
+async function runCodexExec(options: RunCodexExecOptions): Promise<{ exitCode: number; timedOut: boolean }> {
   const { sandbox, config, signal, codexHome, ccusageCommand, prompt, addCost, costLabel } = options;
   const usage = usageCollector("codex");
   // Reviewer transcripts run three at a time; interleaving their raw output
@@ -245,5 +257,5 @@ async function runCodexExec(options: RunCodexExecOptions): Promise<number> {
   }
   if (entry) await addCost(entry);
 
-  return exec.exitCode;
+  return { exitCode: exec.exitCode, timedOut: exec.timedOut };
 }

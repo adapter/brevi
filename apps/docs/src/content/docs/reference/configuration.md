@@ -67,7 +67,7 @@ A freshly initialised config, with every default filled in:
       "rootfsBaseUrl": "https://images.brevi.dev/rootfs",
       "size": "medium"
     },
-    "timeoutMinutes": 60,
+    "timeoutMinutes": 240,
     "retentionHours": 24
   },
   "connect": {
@@ -190,7 +190,7 @@ Claude runs are a single agent session with delegation: the main loop runs on `o
 
 When `codexReview` is true, the primary agent is Claude, and a Codex credential is configured, an adversarial Codex review runs inside the same sandbox after the implementation pass finishes its coding phase and before the branch is pushed. The review is deliberately a cross-provider check: runs whose `command` is already Codex skip it (a console line notes the skip), so enabling it never multiplies a Codex-primary run's spend. Three Codex reviewers (`codex exec`) run in parallel, each taking one angle: requirements coverage against the ticket, a bug hunt on the diff, and regression risk in the call sites the diff touches. All three judge the uncommitted diff against two sources of truth: the Linear ticket text and the existing codebase. A synthesis pass then verifies, dedupes, and ranks the findings into `.brevi/review.md`, kept with the run's artifacts. Confirmed findings are fed back to the Claude orchestrator for a fix pass before the PR opens.
 
-Without a Codex credential the review is likewise skipped cleanly and the run behaves exactly as before. The review roughly doubles the agent spend of a run; set `codexReview: false` to turn it off. Review executions appear in the run's cost breakdown as "review (requirements)", "review (bugs)", "review (regressions)", "review (synthesis)", and the fix pass as "review fixes".
+Without a Codex credential the review is likewise skipped cleanly and the run behaves exactly as before. The review is best effort throughout: a reviewer or the synthesis pass that fails or exhausts its `sandbox.timeoutMinutes` budget skips part or all of the review, and the run goes straight to finalizing without a fix pass instead of failing. The review roughly doubles the agent spend of a run; set `codexReview: false` to turn it off. Review executions appear in the run's cost breakdown as "review (requirements)", "review (bugs)", "review (regressions)", "review (synthesis)", and the fix pass as "review fixes".
 
 Under the Firecracker provider, the review runs the Codex CLI inside the sandbox, so an existing host on an older rootfs image needs the current image before the review can run: brevi downloads the current prebuilt image automatically (`brevi setup`, or on demand at startup); from-source setups instead rebuild with `packages/sandbox/scripts/build-rootfs.sh`. Under the process provider the host's `codex` binary is used directly.
 
@@ -220,7 +220,7 @@ A wrong memory is worse than no memory, because every later run in that repo is 
 | --- | --- | --- | --- |
 | `provider` | `"auto"` \| `"firecracker"` \| `"process"` | `"auto"` | See [Sandboxes](/guides/sandboxes/). |
 | `concurrency` | integer 1-16 | `1` | How many sandboxed runs execute at once. Each Firecracker microVM reserves its own memory (7.5 GB for the default `medium` size preset, see `firecracker.size`) and one tap device from the pool created by [the network setup script](/guides/sandboxes/) (16 by default), so the host needs enough of both for all of them running simultaneously. Adjustable live from the dashboard; takes effect immediately, no restart needed. |
-| `timeoutMinutes` | integer ≥ 1 | `60` | Hard wall-clock limit applied per agent execution: the implementation pass, each of the parallel Codex reviewers, the synthesis pass, and the fix pass each get their own budget, rather than one limit for the whole run. |
+| `timeoutMinutes` | integer ≥ 1 | `240` | Hard wall-clock limit applied per agent execution: the implementation pass, each of the parallel Codex reviewers, the synthesis pass, and the fix pass each get their own budget, rather than one limit for the whole run. The default 240 minutes gives each execution four hours. |
 | `retentionHours` | number ≥ 0 | `24` | How many hours a finished (completed or failed) run's sandbox disk is kept for interactive resume, either from the dashboard's "Open terminal" button or `brevi attach <runId>`. `0` disables retention. A retained sandbox's compute is stopped; it costs disk only, no memory or CPU. |
 | `firecracker` | object | see below | Only consulted when the Firecracker provider is used. |
 
