@@ -199,7 +199,7 @@ At least one of the four credential fields (`anthropicApiKey`, `claudeCodeOauthT
 
 ## `memory`
 
-What brevi carries from one run to the next. Every run executes in a throwaway sandbox against a fresh checkout, so anything the agent worked out about a repository (which command actually builds it, where a concern lives, which trap cost it twenty minutes) would die with the sandbox and be rediscovered, at full token price, by the next ticket. Memories are the exception: durable facts a run records on its way out, kept on the host under `~/.brevi/memories/`, one JSON file per repo key.
+What brevi carries from one run to the next. Every run executes in a throwaway sandbox against a fresh checkout, so anything the agent worked out about a repository (which command actually builds it, where a concern lives, which trap cost it twenty minutes) would die with the sandbox and be rediscovered, at full token price, by the next ticket. Memories are the exception: durable facts a run records on its way out, kept on the host under `~/.brevi/memories/`, one JSON file per repository.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
@@ -209,7 +209,7 @@ What brevi carries from one run to the next. Every run executes in a throwaway s
 
 A run reads the repo's memories before the agent starts and adds a `## Repository memories` section to the prompt, next to the repository map. On the way out it reads `.brevi/memories.md`, the file the agent is asked to leave behind, and merges what it finds: a fact that is already known is reaffirmed rather than duplicated, and the repo is trimmed back to `maxEntries`. Follow-up runs do both too. The harvest happens before the branch is committed, so a run that ends with `agent made no changes` still contributes what it learned.
 
-Memories are per repo key, never global, and they never reach the sandbox as files: they exist only inside the prompt. Nothing is retrieved semantically; the most recently confirmed entries are injected verbatim until the budget runs out.
+Memories are keyed by the repository's remote (`owner/name`), not by the mapping key that resolved it, so repointing or reusing a `repos` key never hands the next run another repository's facts. They are never global, and they never reach the sandbox as files: they exist only inside the prompt. Nothing is retrieved semantically; the most recently confirmed entries are injected verbatim until the budget runs out.
 
 A wrong memory is worse than no memory, because every later run in that repo is handed it. The Memory page lists everything stored, with the ticket that recorded each fact and how many runs have confirmed it, and drops one (or a whole repo) on click. `memories.md` is also kept with the run's artifacts, so you can see what a given run contributed.
 

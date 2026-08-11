@@ -291,7 +291,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return this.store.readEvents(id);
   }
 
-  /** Everything brevi remembers, keyed by repo key. */
+  /** Everything brevi remembers, keyed by repository ("owner/name"). */
   listMemories(): MemoriesResponse {
     return { repos: this.memories.all() };
   }
@@ -301,17 +301,17 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    * later run in the repo is handed it, so forgetting one is a first-class
    * command rather than a config edit.
    */
-  async forgetMemory(repoKey: string, id: string): Promise<MemoriesResponse> {
-    if (!(await this.memories.forget(repoKey, id))) {
-      throw new OrchestratorError("not-found", `no memory ${id} for repo ${repoKey}`);
+  async forgetMemory(repo: string, id: string): Promise<MemoriesResponse> {
+    if (!(await this.memories.forget(repo, id))) {
+      throw new OrchestratorError("not-found", `no memory ${id} for ${repo}`);
     }
     return this.listMemories();
   }
 
   /** Forget everything about one repo; the next run there starts cold again. */
-  async clearMemories(repoKey: string): Promise<MemoriesResponse> {
-    if (!(await this.memories.clear(repoKey))) {
-      throw new OrchestratorError("not-found", `nothing remembered for repo ${repoKey}`);
+  async clearMemories(repo: string): Promise<MemoriesResponse> {
+    if (!(await this.memories.clear(repo))) {
+      throw new OrchestratorError("not-found", `nothing remembered for ${repo}`);
     }
     return this.listMemories();
   }

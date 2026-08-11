@@ -77,7 +77,7 @@ export function MemorySection({
         <SettingsCard
           title="Repository memories"
           draft={memory}
-          description="Stored under ~/.brevi/memories, one file per repo. Injected into the run prompt before the agent starts, and topped up from what it writes to .brevi/memories.md when it finishes."
+          description="Stored under ~/.brevi/memories, one file per repository. Injected into the run prompt before the agent starts, and topped up from what it writes to .brevi/memories.md when it finishes."
         >
           <SwitchField
             label="Remember"

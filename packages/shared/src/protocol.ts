@@ -67,12 +67,13 @@ import type { PrState, RepoMemory, Run, RunEvent, Ticket } from "./types.js";
  *        atomically. Credential fields are refused here; the response says
  *        whether the change applied live or needs a restart.
  *   GET  /api/memories                   -> MemoriesResponse
- *        Every repo's stored memories, newest first, for the Memory page.
+ *        Stored memories per repository, newest first, for the Memory page.
  *   POST /api/memories/:repo/forget      -> MemoriesResponse
  *        body: ForgetMemoryRequest. Drop one memory that turned out to be
- *        wrong, so it stops being injected into future runs.
+ *        wrong, so it stops being injected into future runs. :repo is the
+ *        URL-encoded remote ("owner/name").
  *   POST /api/memories/:repo/clear       -> MemoriesResponse
- *        Drop everything remembered about one repo.
+ *        Drop everything remembered about one repository.
  *   GET  /api/connect/linear/callback    -> HTML (OAuth redirect target; the
  *        server exchanges the code, saves the token, and broadcasts config)
  *   GET  /api/github/repos               -> GithubRepo[]   (repos visible to the
@@ -297,9 +298,9 @@ export interface SettingsUpdateResponse {
 }
 
 /**
- * What brevi remembers about each configured repo, keyed by repo key and
- * ordered newest first. Repos with nothing remembered yet are omitted, so an
- * empty object means no run has recorded a memory anywhere.
+ * What brevi remembers about each repository, keyed by its remote in
+ * "owner/name" form and ordered newest first. Repositories with nothing
+ * remembered are omitted, so an empty object means nothing is stored anywhere.
  */
 export interface MemoriesResponse {
   repos: Record<string, RepoMemory[]>;

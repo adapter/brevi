@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { MEMORIES_DIR, type RepoMemory } from "@brevi/shared";
@@ -19,6 +19,8 @@ import { isContainedRegularFile } from "./safepath.js";
  * optimization, so nothing here may fail a run or stop the orchestrator
  * booting. Reads skip what they cannot parse and writes swallow their errors.
  */
+
+const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /** Longest a single memory may be. Past this the agent is writing prose, not a fact. */
 const MAX_MEMORY_CHARS = 300;
@@ -95,39 +97,38 @@ function byUsefulness(a: RepoMemory, b: RepoMemory): number {
   return b.hits - a.hits;
 }
 
-/** Shape on disk. The key lives in the file, not in its name (see fileNameFor). */
-interface MemoryFile {
-  repo: string;
-  memories: RepoMemory[];
+/**
+ * Memories are keyed by the repository itself ("owner/name"), never by the
+ * config mapping that pointed at it. A mapping key is editable: repoint
+ * `repos.web.remote` at another repository, or delete the key and later reuse
+ * it, and memories keyed by "web" would hand the first run against the new
+ * repository a set of confident facts about a different one. Keying by the
+ * remote degrades the other way instead: rename the repository on GitHub and
+ * the next run simply starts cold.
+ *
+ * Lowercased because GitHub treats owner and name case-insensitively, so a
+ * mapping spelled `Acme/Web` and a pull request on `acme/web` are the same
+ * repository and must share one store.
+ */
+export function memoryKeyFor(remote: string): string {
+  return remote.trim().toLowerCase();
 }
 
 /**
- * One file per repo key. Repo keys are user-chosen and may contain anything,
- * so the readable part of the name is sanitized down to a slug and the exact
- * key is disambiguated by a hash: two keys that differ only in case ("Web"
- * and "web") must not land on the same file on a case-insensitive filesystem.
- * The slug is cosmetic; the key itself is read back from the file's contents.
+ * One file per repository, named after it. Keys are lowercased "owner/name"
+ * (memoryKeyFor) and repo remotes are validated against `owner/name` by the
+ * config schema, so the only character to escape is the slash and the result
+ * always round-trips.
  */
-function fileNameFor(repoKey: string): string {
-  const slug = repoKey.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 60);
-  return `${slug}-${createHash("sha256").update(repoKey).digest("hex").slice(0, 8)}.json`;
-}
+const fileNameFor = (repo: string): string => `${encodeURIComponent(repo)}.json`;
+const repoFromFileName = (name: string): string => decodeURIComponent(name.slice(0, -".json".length));
 
 /** Coerce one entry read off disk into a usable memory, or null when it is not one. */
-function reviveMemory(raw: unknown): RepoMemory | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const { id, text, createdAt, updatedAt, hits, ident } = raw as Record<string, unknown>;
-  if (typeof id !== "string" || !id || typeof text !== "string" || !text) return null;
-  // A hand-edited or partially written file must not poison the sort with NaN.
-  const stamp = typeof updatedAt === "string" ? updatedAt : typeof createdAt === "string" ? createdAt : "";
-  return {
-    id,
-    text,
-    createdAt: typeof createdAt === "string" ? createdAt : stamp,
-    updatedAt: stamp,
-    hits: typeof hits === "number" && Number.isFinite(hits) && hits > 0 ? Math.floor(hits) : 1,
-    ...(typeof ident === "string" && ident ? { ident } : {}),
-  };
+function reviveMemory(raw: RepoMemory): RepoMemory | null {
+  if (typeof raw?.id !== "string" || !raw.id || typeof raw.text !== "string" || !raw.text) return null;
+  const stamp = typeof raw.updatedAt === "string" ? raw.updatedAt : "";
+  // A hand-edited file must not poison the sort comparator with NaN.
+  return { ...raw, updatedAt: stamp, createdAt: raw.createdAt ?? stamp, hits: Number(raw.hits) || 1 };
 }
 
 export class MemoryStore {
@@ -141,37 +142,41 @@ export class MemoryStore {
   }
 
   /**
-   * Load what is on disk. Anything unreadable is skipped rather than thrown:
-   * this runs during orchestrator startup, and one stray file in the memories
-   * directory must never stop brevi from booting.
+   * Load what is on disk. Nothing here throws: this runs during orchestrator
+   * startup, and neither a stray file in the memories directory nor an
+   * unusable directory (unreadable, or a plain file sitting where it belongs)
+   * may stop brevi from booting. The worst case is starting with an empty
+   * store, which costs some exploration and nothing else.
    */
   async init(): Promise<void> {
-    await mkdir(this.dir, { recursive: true });
-    const entries = await readdir(this.dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      let file: MemoryFile;
-      try {
-        file = JSON.parse(await readFile(join(this.dir, entry.name), "utf8")) as MemoryFile;
-      } catch {
-        continue;
+    try {
+      await mkdir(this.dir, { recursive: true });
+      for (const name of await readdir(this.dir)) {
+        if (!name.endsWith(".json")) continue;
+        try {
+          const parsed = JSON.parse(await readFile(join(this.dir, name), "utf8")) as RepoMemory[];
+          if (!Array.isArray(parsed)) continue;
+          const memories = parsed.map(reviveMemory).filter((m): m is RepoMemory => m !== null);
+          if (memories.length > 0) this.#repos.set(repoFromFileName(name), memories.sort(byUsefulness));
+        } catch {
+          continue; // unreadable, not JSON, or an undecodable name; skip the file
+        }
       }
-      if (typeof file?.repo !== "string" || !file.repo || !Array.isArray(file.memories)) continue;
-      const memories = file.memories.map(reviveMemory).filter((m): m is RepoMemory => m !== null);
-      if (memories.length > 0) this.#repos.set(file.repo, memories.sort(byUsefulness));
+    } catch (error) {
+      console.error(`[brevi] memories unavailable at ${this.dir}: ${message(error)}`);
     }
   }
 
-  /** What is remembered about one repo, newest first. */
-  list(repoKey: string): RepoMemory[] {
-    return this.#repos.get(repoKey) ?? [];
+  /** What is remembered about one repository ("owner/name"), newest first. */
+  list(repo: string): RepoMemory[] {
+    return this.#repos.get(repo) ?? [];
   }
 
   /** Every repo that has something remembered, for the dashboard's Memory page. */
   all(): Record<string, RepoMemory[]> {
     const out: Record<string, RepoMemory[]> = {};
-    for (const [repoKey, memories] of this.#repos) {
-      if (memories.length > 0) out[repoKey] = memories;
+    for (const [repo, memories] of this.#repos) {
+      if (memories.length > 0) out[repo] = memories;
     }
     return out;
   }
@@ -182,13 +187,13 @@ export class MemoryStore {
    * trimmed back to `maxEntries` afterwards.
    */
   async record(
-    repoKey: string,
+    repo: string,
     texts: string[],
     options: { maxEntries: number; ident?: string },
   ): Promise<{ added: number; reaffirmed: number }> {
     if (texts.length === 0) return { added: 0, reaffirmed: 0 };
     const now = new Date().toISOString();
-    const memories = [...this.list(repoKey)];
+    const memories = [...this.list(repo)];
     const byKey = new Map(memories.map((memory) => [dedupeKey(memory.text), memory]));
     let added = 0;
     let reaffirmed = 0;
@@ -219,27 +224,26 @@ export class MemoryStore {
     }
 
     memories.sort(byUsefulness);
-    this.#repos.set(repoKey, memories.slice(0, Math.max(1, options.maxEntries)));
-    await this.#persist(repoKey);
+    this.#repos.set(repo, memories.slice(0, Math.max(1, options.maxEntries)));
+    await this.#persist(repo);
     return { added, reaffirmed };
   }
 
   /** Drop one memory that turned out to be wrong. */
-  async forget(repoKey: string, id: string): Promise<boolean> {
-    const memories = this.#repos.get(repoKey);
+  async forget(repo: string, id: string): Promise<boolean> {
+    const memories = this.#repos.get(repo);
     if (!memories) return false;
     const remaining = memories.filter((memory) => memory.id !== id);
     if (remaining.length === memories.length) return false;
-    this.#repos.set(repoKey, remaining);
-    await this.#persist(repoKey);
+    await this.#delete(repo, remaining, memories);
     return true;
   }
 
   /** Forget everything about one repo. */
-  async clear(repoKey: string): Promise<boolean> {
-    if (!this.#repos.has(repoKey)) return false;
-    this.#repos.delete(repoKey);
-    await this.#persist(repoKey);
+  async clear(repo: string): Promise<boolean> {
+    const memories = this.#repos.get(repo);
+    if (!memories) return false;
+    await this.#delete(repo, undefined, memories);
     return true;
   }
 
@@ -248,34 +252,53 @@ export class MemoryStore {
     await this.#io;
   }
 
-  #persist(repoKey: string): Promise<void> {
-    const memories = this.#repos.get(repoKey);
-    const body =
-      memories && memories.length > 0
-        ? `${JSON.stringify({ repo: repoKey, memories } satisfies MemoryFile, null, 2)}\n`
-        : undefined;
+  /**
+   * Apply a deletion the user asked for, rolling back and rethrowing when the
+   * write fails. Recording is best effort, but a delete that only happened in
+   * memory would report success, leave the file on disk, and hand the memory
+   * back to every run after the next restart.
+   */
+  async #delete(repo: string, next: RepoMemory[] | undefined, previous: RepoMemory[]): Promise<void> {
+    if (next) this.#repos.set(repo, next);
+    else this.#repos.delete(repo);
+    const error = await this.#persist(repo);
+    if (!error) return;
+    // Roll back only what is still ours: a run that finished in the meantime
+    // has written newer state we must not clobber.
+    if (this.#repos.get(repo) === next) this.#repos.set(repo, previous);
+    throw error;
+  }
+
+  /** Resolves to the write's error rather than rejecting; see #enqueue. */
+  #persist(repo: string): Promise<Error | null> {
+    const memories = this.#repos.get(repo);
+    const body = memories?.length ? `${JSON.stringify(memories, null, 2)}\n` : undefined;
     return this.#enqueue(async () => {
-      const path = join(this.dir, fileNameFor(repoKey));
-      if (!body) {
-        await rm(path, { force: true });
-        return;
-      }
-      await mkdir(this.dir, { recursive: true });
-      await writeFile(path, body);
+      const path = join(this.dir, fileNameFor(repo));
+      if (body) await writeFile(path, body);
+      else await rm(path, { force: true });
     });
   }
 
   /**
-   * Unlike RunStore's equivalent, this hands callers the *swallowing* promise:
-   * a run awaits `record` on its way out, after the agent has done all its
-   * work but before the branch is pushed, and a full disk or an unwritable
-   * ~/.brevi must cost the run its memories, never its pull request.
+   * Unlike RunStore's equivalent, this never rejects: it reports the failure
+   * as a value instead. A run awaits `record` on its way out, after the agent
+   * has done all its work but before the branch is pushed, so a full disk or
+   * an unwritable ~/.brevi must cost the run its memories, never its pull
+   * request. Callers that do need to fail (the delete commands) check it.
    */
-  #enqueue(task: () => Promise<void>): Promise<void> {
-    this.#io = this.#io.then(task, task).catch((error: unknown) => {
-      console.error(`[brevi] memory store write failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
-    return this.#io;
+  #enqueue(task: () => Promise<void>): Promise<Error | null> {
+    const next = this.#io.then(task, task).then(
+      () => null,
+      (raw: unknown): Error => {
+        const error = raw instanceof Error ? raw : new Error(String(raw));
+        console.error(`[brevi] memory store write failed: ${error.message}`);
+        return error;
+      },
+    );
+    // Keep the chain itself clean so one failed write cannot reject the next.
+    this.#io = next.then(() => undefined);
+    return next;
   }
 }
 

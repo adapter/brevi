@@ -176,7 +176,7 @@ Repo mappings themselves are edited through `PUT /api/settings` (below), like ev
 
 ### Memories
 
-`GET /api/memories` returns everything brevi remembers about each repo, keyed by repo key, newest first. Repos with nothing stored are omitted.
+`GET /api/memories` returns everything brevi remembers, keyed by repository remote (`owner/name`), newest first. Repositories with nothing stored are omitted.
 
 ```ts
 interface MemoriesResponse {
@@ -193,7 +193,7 @@ interface RepoMemory {
 }
 ```
 
-`POST /api/memories/:repo/forget` with `{ "id": "..." }` drops one memory; `POST /api/memories/:repo/clear` drops all of a repo's. Both return the updated `MemoriesResponse`, and both `404` when there is nothing to drop. Memories are written by runs, never by the API.
+`POST /api/memories/:repo/forget` with `{ "id": "..." }` drops one memory; `POST /api/memories/:repo/clear` drops all of a repository's. `:repo` is the URL-encoded remote. Both return the updated `MemoriesResponse`, `404` when there is nothing to drop, and `500` when the deletion could not be written to disk. Memories are written by runs, never by the API.
 
 ### R2 connector
 

@@ -9,7 +9,7 @@ import { usageCollector } from "./costs.js";
 import { authenticatedRemote, createPullRequest, FALLBACK_COMMIT_IDENTITY, plainRemote, resolveCommitIdentity } from "./github.js";
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
-import { MemoryStore, readRunMemories, selectMemories } from "./memory.js";
+import { MemoryStore, memoryKeyFor, readRunMemories, selectMemories } from "./memory.js";
 import { buildImplementationPrompt, buildReviewFixPrompt, type RepoMap } from "./prompts.js";
 import { provisionCredentials } from "./provision.js";
 import { uploadRunEvidence, type UploadedEvidence } from "./r2.js";
@@ -401,12 +401,14 @@ export async function executeRun(ctx: RunContext): Promise<void> {
 
     const { mainModel, mainEffort, delegate } = agentModelPlan(config);
 
-    // What earlier runs in this repo worked out, so this one does not pay to
-    // rediscover it. The sandbox is fresh every time; the memories are not.
+    // What earlier runs against this repository worked out, so this one does
+    // not pay to rediscover it. The sandbox is fresh every time; the memories
+    // are not. Keyed by the remote, not by the mapping key that resolved it.
+    const memoryKey = memoryKeyFor(repo.remote);
     const recalled = config.memory.enabled
-      ? selectMemories(memories.list(repoKey), config.memory.maxChars)
+      ? selectMemories(memories.list(memoryKey), config.memory.maxChars)
       : [];
-    if (recalled.length > 0) log("system", `recalled ${recalled.length} memories for ${repoKey}`);
+    if (recalled.length > 0) log("system", `recalled ${recalled.length} memories for ${memoryKey}`);
 
     await session.runAgent(
       buildImplementationPrompt(ticket, repo, config.github.prDescription, {
@@ -476,12 +478,12 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     // finalizeImplementation deletes .brevi/ before committing.
     if (config.memory.enabled) {
       const learned = await readRunMemories(pulledDir);
-      const { added, reaffirmed } = await memories.record(repoKey, learned, {
+      const { added, reaffirmed } = await memories.record(memoryKey, learned, {
         maxEntries: config.memory.maxEntries,
         ident: ticket.identifier,
       });
       if (added || reaffirmed) {
-        log("system", `remembered ${added} new and reaffirmed ${reaffirmed} facts about ${repoKey}`);
+        log("system", `remembered ${added} new and reaffirmed ${reaffirmed} facts about ${memoryKey}`);
       }
     }
 
