@@ -246,6 +246,17 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    */
   #fleetEndpoint?: { host: string; port: number };
 
+  /**
+   * What the dashboard listener actually bound, recorded once at startup for
+   * the same reason the fleet endpoint is. `config.server.host` and
+   * `config.server.port` are not a substitute: both are restart-required
+   * fields, so `updateSettings` writes an operator's new value into the live
+   * config immediately while the socket stays bound where it already was.
+   * Pairing off the pending value would print a command naming an address
+   * nothing is listening on, and call it remotely reachable.
+   */
+  #dashboardEndpoint?: { host: string; port: number };
+
   #configPath: string;
   #linear?: LinearService;
   /** The worker fleet: undefined only before start() runs. */
@@ -386,36 +397,40 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     this.#fleetEndpoint = endpoint ?? undefined;
   }
 
+  /** The dashboard listener's real bind address and port; see #dashboardEndpoint. */
+  setDashboardEndpoint(endpoint: { host: string; port: number }): void {
+    this.#dashboardEndpoint = endpoint;
+  }
+
   /**
    * Mint a pairing token and the ready-to-copy `brevi worker` command for it.
-   * `serverUrl` is the dashboard address the caller actually bound, not
-   * `config.server.port`: the configured port only takes effect on restart
-   * and may not be what anything is listening on. The fleet listener is
-   * preferred when one is bound, since that's the channel a worker on another
-   * machine is meant to dial; the dashboard listener is the fallback, which
-   * serves the same worker path for a worker on this machine.
+   * The fleet listener is preferred when one is bound, since that's the
+   * channel a worker on another machine is meant to dial; the dashboard
+   * listener is the fallback, which serves the same worker path for a worker
+   * on this machine.
    */
-  mintPairingToken(serverUrl: string): PairingTokenResponse {
+  mintPairingToken(): PairingTokenResponse {
     if (!this.#workers) throw new OrchestratorError("conflict", "the orchestrator is not running yet");
     const { token, expiresAt } = this.#workers.mintPairingToken();
-    const { host: dialHost, port, remote } = this.#pairingEndpoint(serverUrl);
+    const { host: dialHost, port, remote } = this.#pairingEndpoint();
     const host = `http://${dialHost}:${port}`;
     return { token, expiresAt, command: `brevi worker --host ${host} --token ${token}`, host, remote };
   }
 
   /**
-   * Bind address and port to print in the pairing command, mapped through
-   * dialableHost so the result is something a worker can actually dial (or
-   * honestly marked as not remote-reachable when it can't be).
+   * Bind address and port to print in the pairing command: whichever listener
+   * is really serving the worker channel, mapped through dialableHost so the
+   * result is something a worker can actually dial (or honestly marked as not
+   * remote-reachable when it can't be). Both endpoints are what was bound, not
+   * what the config currently says, so a restart-required change saved but not
+   * yet applied cannot make this advertise an address nothing answers on. The
+   * config is the last resort only for a caller minting before either listener
+   * has come up, which the running server never does.
    */
-  #pairingEndpoint(serverUrl: string): { host: string; port: number; remote: boolean } {
-    if (this.#fleetEndpoint) {
-      const { host, remote } = dialableHost(this.#fleetEndpoint.host);
-      return { host, port: this.#fleetEndpoint.port, remote };
-    }
-    const port = Number(new URL(serverUrl).port) || this.config.server.port;
-    const { host, remote } = dialableHost(this.config.server.host);
-    return { host, port, remote };
+  #pairingEndpoint(): { host: string; port: number; remote: boolean } {
+    const endpoint = this.#fleetEndpoint ?? this.#dashboardEndpoint;
+    const { host, remote } = dialableHost(endpoint?.host ?? this.config.server.host);
+    return { host, port: endpoint?.port ?? this.config.server.port, remote };
   }
 
   async renameWorker(id: string, name: string): Promise<FleetResponse> {

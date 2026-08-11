@@ -167,12 +167,11 @@ function buildApp(
   app.get("/api/workers", (c) => c.json({ workers: orchestrator.listWorkers() }));
 
   app.post("/api/workers/pair", (c) => {
-    // The bound port, not the request's own origin: the command printed here
-    // is meant to be pasted on another machine, and #pairingEndpoint picks
-    // the address a worker can actually dial from what is really listening.
-    const serverUrl = `http://localhost:${boundPort()}`;
+    // Nothing about the request's own origin is used: the command printed
+    // here is meant to be pasted on another machine, so the orchestrator
+    // names it from whichever listener actually bound (see #pairingEndpoint).
     try {
-      return c.json(orchestrator.mintPairingToken(serverUrl));
+      return c.json(orchestrator.mintPairingToken());
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }
@@ -671,6 +670,11 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : config.server.port;
   boundPort = port;
+  // Both halves of what this listener really bound, captured here rather than
+  // read back off the config later: `server.host` and `server.port` are
+  // restart-required, so a saved change reaches the live config while this
+  // socket stays where it is (see Orchestrator#dashboardEndpoint).
+  orchestrator.setDashboardEndpoint({ host: config.server.host, port });
   const sockets = attachWebSockets(server, orchestrator, config);
   const fleetListener = await startFleetListener(orchestrator, config);
 
