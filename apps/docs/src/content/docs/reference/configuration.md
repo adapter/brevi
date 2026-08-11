@@ -17,6 +17,7 @@ Every field on this page is editable from the dashboard's Configuration page, at
 | Repositories | `repos`, `defaultRepo` |
 | Agent | `agent` (models, effort, command, args, Codex review) |
 | Sandbox | `sandbox`, including the Firecracker fields |
+| Memory | `memory`, plus the stored memories themselves |
 | Orchestrator | `trigger`, `pollIntervalSeconds`, `restart` |
 | Server | `server`, `connect` |
 
@@ -55,6 +56,7 @@ A freshly initialised config, with every default filled in:
     "reviewModel": "gpt-5.6-sol",
     "reviewEffort": "high"
   },
+  "memory": { "enabled": true, "maxEntries": 60, "maxChars": 8000 },
   "sandbox": {
     "provider": "auto",
     "concurrency": 1,
@@ -194,6 +196,22 @@ Under the Firecracker provider, the review runs the Codex CLI inside the sandbox
 Live per-model cost sampling during Claude runs likewise needs `ccusage` in the rootfs image under the Firecracker provider: images built before it was added need the same rebuild with `packages/sandbox/scripts/build-rootfs.sh`. Without it, runs still work and cost falls back to today's end-of-run, stream-parsed behavior.
 
 At least one of the four credential fields (`anthropicApiKey`, `claudeCodeOauthToken`, `codexApiKey`, `codexAuthJson`) must be set or every run fails at startup with `no agent credentials configured`. Populate them from the dashboard's Configuration page rather than by hand; the dashboard verifies keys before saving.
+
+## `memory`
+
+What brevi carries from one run to the next. Every run executes in a throwaway sandbox against a fresh checkout, so anything the agent worked out about a repository (which command actually builds it, where a concern lives, which trap cost it twenty minutes) would die with the sandbox and be rediscovered, at full token price, by the next ticket. Memories are the exception: durable facts a run records on its way out, kept on the host under `~/.brevi/memories/`, one JSON file per repo key.
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `true` | Inject stored memories into run prompts and harvest new ones afterwards. Off means every run starts cold. |
+| `maxEntries` | integer 1-500 | `60` | How many memories are kept per repo. Once full, the least recently recorded ones are dropped. |
+| `maxChars` | integer 200-50000 | `8000` | Character budget for the memories block injected into a prompt. Memories past the budget are left out of that run. |
+
+A run reads the repo's memories before the agent starts and adds a `## Repository memories` section to the prompt, next to the repository map. On the way out it reads `.brevi/memories.md`, the file the agent is asked to leave behind, and merges what it finds: a fact that is already known is reaffirmed rather than duplicated, and the repo is trimmed back to `maxEntries`. Follow-up runs do both too. The harvest happens before the branch is committed, so a run that ends with `agent made no changes` still contributes what it learned.
+
+Memories are per repo key, never global, and they never reach the sandbox as files: they exist only inside the prompt. Nothing is retrieved semantically; the most recently confirmed entries are injected verbatim until the budget runs out.
+
+A wrong memory is worse than no memory, because every later run in that repo is handed it. The Memory page lists everything stored, with the ticket that recorded each fact and how many runs have confirmed it, and drops one (or a whole repo) on click. `memories.md` is also kept with the run's artifacts, so you can see what a given run contributed.
 
 ## `sandbox`
 

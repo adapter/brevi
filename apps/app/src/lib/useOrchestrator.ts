@@ -79,6 +79,7 @@ export type ConfigSection =
   | "repositories"
   | "agent"
   | "sandbox"
+  | "memory"
   | "orchestrator"
   | "server";
 
@@ -87,7 +88,7 @@ export type Page = "home" | `config:${ConfigSection}`;
 /** Non-run pages live at fixed paths; anything else is the home/run view. */
 function pageFromPath(pathname: string): Page {
   const match =
-    /^\/config(?:\/(connectors|repositories|agent|sandbox|orchestrator|server))?\/?$/.exec(pathname);
+    /^\/config(?:\/(connectors|repositories|agent|sandbox|memory|orchestrator|server))?\/?$/.exec(pathname);
   if (!match) return "home";
   const section = (match[1] ?? "connectors") as ConfigSection;
   return `config:${section}`;

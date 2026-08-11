@@ -38,11 +38,15 @@ Runs execute serially (one at a time, FIFO) and move through the statuses `queue
 
 **Running.** The configured agent command runs headless inside the sandbox with the generated prompt. Structured `stream-json` output is parsed and forwarded to the dashboard as it arrives, so you watch the run live. A run is killed at `sandbox.timeoutMinutes` (60 by default), and a non-zero agent exit fails the run. For Claude runs, once the coding phase finishes, an adversarial Codex review of the uncommitted diff can run in the same sandbox and drive a fix pass before the branch is pushed; see [Codex review](/reference/configuration/#codex-review).
 
-**Finalizing.** The workspace is pulled back out and artifacts collected: everything under `.brevi/demo/` (nested paths flattened, so `demo/web/home.png` is stored as `web__home.png`), plus `.brevi/summary.md`. Artifacts are kept with the run under `~/.brevi/runs/` and served by the dashboard.
+**Finalizing.** The workspace is pulled back out and artifacts collected: everything under `.brevi/demo/` (nested paths flattened, so `demo/web/home.png` is stored as `web__home.png`), plus `.brevi/summary.md` and `.brevi/memories.md`. Artifacts are kept with the run under `~/.brevi/runs/` and served by the dashboard.
 
 Then brevi removes everything under `.brevi/` (agent outputs stay with the run's artifacts), stages the rest, and fails with `agent made no changes` if the tree is clean. Otherwise it commits `<ID>: <title>`, force-pushes `brevi/<ticket-id>`, and opens a pull request against the repo's default branch. The PR body is the agent's `summary.md`, `Fixes <ID>`, and a brevi footer. Finally brevi comments on the Linear issue with the PR link (a failure here does not fail the run).
 
 When a run completes successfully, brevi also moves the Linear issue to a review state: the team's first `started`-type state whose name mentions "review" (e.g. **In Review**). Best effort: teams without such a state keep the issue where it is.
+
+### Memories
+
+The sandbox is thrown away after every run, so the next ticket in the same repo would otherwise re-explore it from scratch. To stop paying that twice, the agent is asked for one more file: `.brevi/memories.md`, a handful of durable facts about the repository worth knowing next time (the command that really builds it, where a concern lives, a convention that is easy to get wrong). brevi merges them into `~/.brevi/memories/<repo>.json` and injects them into the next run's prompt. See [`memory`](/reference/configuration/#memory) for the settings and how to drop a memory that turned out wrong.
 
 ### Demos
 

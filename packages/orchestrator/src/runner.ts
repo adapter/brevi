@@ -9,6 +9,7 @@ import { usageCollector } from "./costs.js";
 import { authenticatedRemote, createPullRequest, FALLBACK_COMMIT_IDENTITY, plainRemote, resolveCommitIdentity } from "./github.js";
 import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
 import { LinearService } from "./linear.js";
+import { MemoryStore, readRunMemories, selectMemories } from "./memory.js";
 import { buildImplementationPrompt, buildReviewFixPrompt, type RepoMap } from "./prompts.js";
 import { provisionCredentials } from "./provision.js";
 import { uploadRunEvidence, type UploadedEvidence } from "./r2.js";
@@ -25,6 +26,8 @@ export interface RunContext {
   runId: string;
   config: BreviConfig;
   store: RunStore;
+  /** Per-repo memories: read into the prompt before the agent starts, topped up after it finishes. */
+  memories: MemoryStore;
   provider: SandboxProvider;
   /** Required for implementation runs; follow-ups never touch Linear and run without it. */
   linear?: LinearService;
@@ -288,7 +291,7 @@ export function agentModelPlan(config: BreviConfig): { mainModel: string | undef
  * run status. Only truly unexpected store errors can escape.
  */
 export async function executeRun(ctx: RunContext): Promise<void> {
-  const { config, store, provider, linear, signal } = ctx;
+  const { config, store, memories, provider, linear, signal } = ctx;
   // The scheduler only routes implementation runs here while Linear is
   // connected; this guard keeps the narrowing honest if that ever regresses.
   if (!linear) throw new Error("Linear is not connected; implementation runs need it");
@@ -398,8 +401,20 @@ export async function executeRun(ctx: RunContext): Promise<void> {
 
     const { mainModel, mainEffort, delegate } = agentModelPlan(config);
 
+    // What earlier runs in this repo worked out, so this one does not pay to
+    // rediscover it. The sandbox is fresh every time; the memories are not.
+    const recalled = config.memory.enabled
+      ? selectMemories(memories.list(repoKey), config.memory.maxChars)
+      : [];
+    if (recalled.length > 0) log("system", `recalled ${recalled.length} memories for ${repoKey}`);
+
     await session.runAgent(
-      buildImplementationPrompt(ticket, repo, config.github.prDescription, { repoMap, delegate }),
+      buildImplementationPrompt(ticket, repo, config.github.prDescription, {
+        repoMap,
+        delegate,
+        memories: recalled,
+        recordMemories: config.memory.enabled,
+      }),
       mainModel,
       mainEffort,
       "implementation",
@@ -454,6 +469,20 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     const artifacts = await collectArtifacts(store, run.id, pulledDir);
     for (const artifact of artifacts) {
       await store.addArtifact(run.id, artifact);
+    }
+
+    // Harvested here rather than after finalize: what the agent learned about
+    // the repo is worth keeping even when the change itself never lands, and
+    // finalizeImplementation deletes .brevi/ before committing.
+    if (config.memory.enabled) {
+      const learned = await readRunMemories(pulledDir);
+      const { added, reaffirmed } = await memories.record(repoKey, learned, {
+        maxEntries: config.memory.maxEntries,
+        ident: ticket.identifier,
+      });
+      if (added || reaffirmed) {
+        log("system", `remembered ${added} new and reaffirmed ${reaffirmed} facts about ${repoKey}`);
+      }
     }
 
     // Best-effort: uploadRunEvidence never throws, so a wrangler hiccup or a
@@ -779,7 +808,7 @@ async function collectArtifacts(
     // no demo directory
   }
 
-  for (const doc of ["summary.md", "review.md"]) {
+  for (const doc of ["summary.md", "review.md", "memories.md"]) {
     const source = join(pulledDir, ".brevi", doc);
     await add(source, doc);
   }

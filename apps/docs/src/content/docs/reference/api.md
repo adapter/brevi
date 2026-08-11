@@ -174,6 +174,27 @@ Only the fields you send are touched. Each is validated against its provider bef
 
 Repo mappings themselves are edited through `PUT /api/settings` (below), like every other config field.
 
+### Memories
+
+`GET /api/memories` returns everything brevi remembers about each repo, keyed by repo key, newest first. Repos with nothing stored are omitted.
+
+```ts
+interface MemoriesResponse {
+  repos: Record<string, RepoMemory[]>;
+}
+
+interface RepoMemory {
+  id: string;
+  text: string;        // the fact, one line
+  createdAt: string;
+  updatedAt: string;   // last time a run recorded it again
+  hits: number;        // how many runs have recorded it
+  ident?: string;      // ticket that last recorded it
+}
+```
+
+`POST /api/memories/:repo/forget` with `{ "id": "..." }` drops one memory; `POST /api/memories/:repo/clear` drops all of a repo's. Both return the updated `MemoriesResponse`, and both `404` when there is nothing to drop. Memories are written by runs, never by the API.
+
 ### R2 connector
 
 There is no stored credential for R2: `GET /api/connect/r2` probes the host's `wrangler` CLI live on every call.
