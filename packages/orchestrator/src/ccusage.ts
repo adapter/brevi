@@ -125,8 +125,14 @@ export function parseCcusageSessions(stdout: string): CcusageSession[] {
       // ccusage calls it "cacheCreationTokens"; our schema calls the same figure cacheWriteTokens.
       if (typeof raw.cacheCreationTokens === "number") row.cacheWriteTokens = raw.cacheCreationTokens;
       if (typeof raw.cacheReadTokens === "number") row.cacheReadTokens = raw.cacheReadTokens;
+      // ccusage reports 0, not absence, for a model missing from its pricing
+      // data, and it runs --offline here so that data is whatever the installed
+      // ccusage bundled: a model released after it always prices at zero. Taking
+      // that zero as a real cost makes it authoritative in buildCostEntry and
+      // beats the pricing-table estimate, so only a positive figure counts as
+      // known. Same guard the Codex session parser below applies.
       const costRaw = raw.cost ?? raw.costUSD ?? raw.totalCost;
-      if (typeof costRaw === "number") row.costUsd = round6(costRaw);
+      if (typeof costRaw === "number" && costRaw > 0) row.costUsd = round6(costRaw);
       rows.push(row);
     }
     if (rows.length === 0) continue; // no usable model rows: not worth keeping the session

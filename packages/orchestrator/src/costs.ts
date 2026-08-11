@@ -214,6 +214,25 @@ export function buildCostEntry(options: {
     if (better) bestRow = row;
   }
 
+  // Fill per-row cost gaps from the pricing table. A provider can price some of
+  // an execution's models and not others (ccusage prices only what its bundled
+  // data covers), and the roll-up below reports whatever the rows carry, so an
+  // unpriced row would silently drop its share of the execution's cost. Gaps
+  // only: a reported figure still wins wherever there is one. When no row was
+  // priced at all this does nothing, leaving the whole-entry estimate below as
+  // the single fallback path it has always been.
+  let estimatedRow = false;
+  if (rowCostUsd !== undefined) {
+    for (const row of rows) {
+      if (row.costUsd !== undefined) continue;
+      const cost = estimateCost(row, row.model);
+      if (cost === undefined) continue;
+      row.costUsd = cost;
+      rowCostUsd += cost;
+      estimatedRow = true;
+    }
+  }
+
   const usage = totalUsage ?? summed;
   const resolvedModel = model ?? bestRow?.model ?? fallbackModel;
 
@@ -239,8 +258,9 @@ export function buildCostEntry(options: {
   if (reportedCostUsd !== undefined) {
     entry.costUsd = round6(reportedCostUsd);
     // Nothing is actually billed per token on a subscription login; the
-    // reported figure is still a modeled cost, not a real charge.
-    if (subscription) entry.estimated = true;
+    // reported figure is still a modeled cost, not a real charge. A figure
+    // that is part reported and part priced from the table is modeled too.
+    if (subscription || estimatedRow) entry.estimated = true;
   } else {
     // No source reported a cost, or none did this time (crash, usage limit):
     // fall back to the pricing table, pricing each model's share at its own
