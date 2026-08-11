@@ -435,14 +435,13 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     // time out, or be cancelled without losing the implementation: it is on
     // the branch and on a draft PR. Finalizing force-pushes the fixes onto the
     // same branch and marks that PR ready for review.
-    await sandbox.pullDirectory(sandbox.workspacePath, pulledDir);
-    const draftPrUrl = await checkpointImplementation({ ticket, repo, branch, pulledDir, config, linear, log });
+    const draftPrUrl = await checkpointImplementation({ ticket, repo, branch, pulledDir, sandbox, config, linear, log });
     if (draftPrUrl) {
       await store.update(run.id, { prUrl: draftPrUrl, prState: "draft" });
     }
     // pullDirectory merges into its destination, so a stale copy here would
     // resurrect files the review fix pass deletes. Finalizing pulls afresh.
-    await rm(pulledDir, { recursive: true, force: true });
+    await rm(pulledDir, { recursive: true, force: true }).catch(() => undefined);
     throwIfAborted(signal);
 
     // Adversarial review is best-effort and grounded only in the ticket plus
@@ -905,23 +904,25 @@ async function commitAndPush(options: {
  * nothing to push (finalizing raises "agent made no changes" for that) or when
  * the checkpoint itself failed.
  *
- * Best-effort by design: finalizing pushes and opens the PR regardless, so a
- * checkpoint failure costs the safety net, not the run. The body carries no
- * demo section yet, since evidence is uploaded during finalizing; finalizing
- * rewrites the body with it.
+ * Best-effort by design, pull included: finalizing pulls, pushes and opens the
+ * PR regardless, so a checkpoint failure costs the safety net, not the run.
+ * The body carries no demo section yet, since evidence is uploaded during
+ * finalizing; finalizing rewrites the body with it.
  */
 async function checkpointImplementation(options: {
   ticket: Ticket;
   repo: RepoConfig;
   branch: string;
   pulledDir: string;
+  sandbox: Sandbox;
   config: BreviConfig;
   linear: LinearService;
   log: (stream: "stdout" | "stderr" | "system", text: string) => void;
 }): Promise<string | null> {
-  const { ticket, repo, branch, pulledDir, config, linear, log } = options;
+  const { ticket, repo, branch, pulledDir, sandbox, config, linear, log } = options;
   const token = config.github.token;
   try {
+    await sandbox.pullDirectory(sandbox.workspacePath, pulledDir);
     const summary = await readSummary(pulledDir, ticket);
     const pushedAt = await commitAndPush({ ticket, repo, branch, pulledDir, token, log });
     if (!pushedAt) {
