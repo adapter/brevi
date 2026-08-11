@@ -38,7 +38,12 @@ import {
   type SettingsUpdateResponse,
   type Ticket,
 } from "@brevi/shared";
-import { createSandboxProvider, type Sandbox, type SandboxProvider } from "@brevi/sandbox";
+import {
+  createSandboxProvider,
+  ROOTFS_VERSION,
+  type Sandbox,
+  type SandboxProvider,
+} from "@brevi/sandbox";
 import { saveConfig, serializeConfig } from "./config.js";
 import {
   discoverAnthropicCredential,
@@ -184,6 +189,12 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   readonly memories: MemoryStore;
 
   #configPath: string;
+  /**
+   * The @brevi/cli release version, used to key prebuilt rootfs downloads.
+   * The "0.0.0" fallback only resolves from-source/custom images: the
+   * versioned prebuilt path needs a real CLI release.
+   */
+  #cliVersion: string;
   #linear?: LinearService;
   #provider?: SandboxProvider;
   #tickets: Ticket[] = [];
@@ -262,12 +273,14 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     store: RunStore = new RunStore(),
     configPath?: string,
     memories: MemoryStore = new MemoryStore(),
+    cliVersion?: string,
   ) {
     super();
     this.config = config;
     this.store = store;
     this.memories = memories;
     this.#configPath = configPath ?? CONFIG_PATH;
+    this.#cliVersion = cliVersion ?? "0.0.0";
     if (config.linear.apiKey) this.#linear = new LinearService(config, this.#linearAuth);
   }
 
@@ -324,6 +337,14 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       requested: this.config.sandbox.provider,
       firecracker: this.config.sandbox.firecracker,
       concurrency: this.config.sandbox.concurrency,
+      // console is teed to ~/.brevi/logs/orchestrator.log, so a rootfs download's progress
+      // lines land there too.
+      log: (line) => console.log(line),
+      cliVersion: this.#cliVersion,
+      // The orchestrator is the dispatching host, so it pins the guest contract its runs
+      // assume: a worker build older than this one refuses the work with an "update the
+      // worker" error instead of running it on an older guest.
+      requiredRootfsVersion: ROOTFS_VERSION,
     });
     await this.#provider.ensureAvailable();
     // Runs left with a retained sandbox from a previous process pick their

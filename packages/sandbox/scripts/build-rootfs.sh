@@ -7,15 +7,21 @@
 #   - playwright's Chromium at /opt/ms-playwright (agents demo UIs without a per-run download)
 #   - the coding agent CLIs (@anthropic-ai/claude-code for implementation, @openai/codex for the adversarial review step)
 #   - ccusage, for live per-model cost capture from the Claude Code transcripts during a run
-#   - openssh-server plus the public half of ~/.brevi/images/id_ed25519 in
-#     /root/.ssh/authorized_keys (this is brevi's exec channel)
+#   - openssh-server; /root/.ssh/authorized_keys starts out holding the public half of
+#     ~/.brevi/images/id_ed25519 (empty with --no-ssh-key), and is overwritten at boot
+#     from the brevi.authorized_keys= kernel arg when the host passes one (this is
+#     brevi's exec channel; it lets one prebuilt image serve every machine)
 #   - a ~40 line /sbin/init that mounts the pseudo filesystems, configures eth0 from
-#     the kernel `ip=` argument, and execs sshd. No systemd: boot is ~1s.
+#     the kernel `ip=` argument, injects brevi.authorized_keys=, and execs sshd. No
+#     systemd: boot is ~1s.
 #
 # Requires: Linux, root (loop mount + mkfs.ext4), docker, ssh-keygen.
 #
 # Usage:
-#   sudo packages/sandbox/scripts/build-rootfs.sh [--size-mb 2048] [--with-kernel] [--brevi-home PATH]
+#   sudo packages/sandbox/scripts/build-rootfs.sh [--size-mb 2048] [--with-kernel] [--brevi-home PATH] [--no-ssh-key]
+#
+# --no-ssh-key skips keypair generation and bakes an empty authorized_keys file instead;
+# CI uses this for published images, which trust no key until a host injects one at boot.
 #
 # The kernel is NOT built here. Grab a known-good uncompressed vmlinux from the
 # Firecracker CI bucket (what their quickstart uses) with --with-kernel, or manually:
@@ -30,13 +36,15 @@ NODE_VERSION="22.14.0"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/x86_64/vmlinux-6.1.102"
 IMAGE_TAG="brevi-rootfs:latest"
 BREVI_HOME_OVERRIDE=""
+NO_SSH_KEY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --size-mb) SIZE_MB="$2"; shift 2 ;;
     --with-kernel) WITH_KERNEL=1; shift ;;
     --brevi-home) BREVI_HOME_OVERRIDE="$2"; shift 2 ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    --no-ssh-key) NO_SSH_KEY=1; shift ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -54,9 +62,9 @@ IMAGES_DIR="$BREVI_HOME/images"
 ROOTFS="$IMAGES_DIR/rootfs.ext4"
 KEY="$IMAGES_DIR/id_ed25519"
 MANIFEST="$ROOTFS.manifest.json"
-# Must match ROOTFS_MANIFEST_VERSION in packages/sandbox/src/firecracker/provider.ts; bump
-# both together whenever the rootfs contract changes (a new required guest tool etc.).
-MANIFEST_VERSION=1
+# Must match ROOTFS_VERSION in packages/sandbox/src/firecracker/rootfs.ts; bump both
+# together whenever the rootfs contract changes (a new required guest tool etc.).
+MANIFEST_VERSION=2
 
 mkdir -p "$IMAGES_DIR"
 
@@ -75,9 +83,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 1. Keypair. Generated once and reused; regenerating it invalidates existing images.
+# 1. Keypair. Generated once and reused; regenerating it invalidates existing from-source
+# images built with it baked in. Skipped entirely with --no-ssh-key: published images bake
+# in no key and trust whatever the host injects at boot instead (see brevi.authorized_keys=
+# in the init script below).
 key_tmp=""
-if [[ ! -f "$KEY" ]]; then
+if [[ "$NO_SSH_KEY" -eq 0 ]] && [[ ! -f "$KEY" ]]; then
   echo "==> generating $KEY"
   rm -f "$KEY.tmp" "$KEY.tmp.pub"
   ssh-keygen -t ed25519 -N '' -C "brevi-sandbox" -f "$KEY.tmp" >/dev/null
@@ -87,7 +98,11 @@ fi
 # 2. Guest userland, built with docker so apt caching and layering do the heavy lifting.
 echo "==> building $IMAGE_TAG"
 build_dir="$(mktemp -d)"
-cp "${key_tmp:-$KEY}.pub" "$build_dir/authorized_keys"
+if [[ "$NO_SSH_KEY" -eq 1 ]]; then
+  : > "$build_dir/authorized_keys"
+else
+  cp "${key_tmp:-$KEY}.pub" "$build_dir/authorized_keys"
+fi
 
 cat > "$build_dir/init" <<'INIT'
 #!/bin/sh
@@ -121,7 +136,10 @@ mask2cidr() {
 }
 
 for arg in $(cat /proc/cmdline); do
-  case "$arg" in ip=*) ipcfg="${arg#ip=}" ;; esac
+  case "$arg" in
+    ip=*) ipcfg="${arg#ip=}" ;;
+    brevi.authorized_keys=*) authorized_keys_b64="${arg#brevi.authorized_keys=}" ;;
+  esac
 done
 
 if [ -n "${ipcfg:-}" ]; then
@@ -134,6 +152,16 @@ if [ -n "${ipcfg:-}" ]; then
   ip addr add "${client}/$(mask2cidr "$netmask")" dev "$device"
   ip link set "$device" up
   [ -n "$gateway" ] && ip route replace default via "$gateway" dev "$device"
+fi
+
+# The host passes its own public key at boot instead of it being baked into the image, so
+# one prebuilt image can serve every machine (falls back to whatever authorized_keys the
+# image was built with, baked or empty, when the host passes none).
+if [ -n "${authorized_keys_b64:-}" ]; then
+  mkdir -p /root/.ssh
+  chmod 700 /root/.ssh
+  echo "$authorized_keys_b64" | base64 -d > /root/.ssh/authorized_keys
+  chmod 600 /root/.ssh/authorized_keys
 fi
 
 # -D: foreground (stays PID 1). -e: log to stderr, which is the serial console and
@@ -240,7 +268,7 @@ cat <<EOF
 Done.
   rootfs:   $ROOTFS
   manifest: $MANIFEST
-  key:      $KEY
+  key:      $([[ "$NO_SSH_KEY" -eq 1 ]] && echo "none baked in (--no-ssh-key); injected at boot via brevi.authorized_keys=" || echo "$KEY")
   kernel:   $IMAGES_DIR/vmlinux $([[ -f "$IMAGES_DIR/vmlinux" ]] && echo "(present)" || echo "(MISSING - see --with-kernel)")
 
 Next: sudo packages/sandbox/scripts/setup-network.sh --taps 16 --user "$owner"

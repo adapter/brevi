@@ -7,6 +7,7 @@ import type { Command } from "commander";
 import pc from "picocolors";
 import { checkCliDependencies } from "../lib/dependencies.js";
 import { errorMessage, exitOnCancel, formatZodIssues, isZodLikeError } from "../lib/util.js";
+import { readPackageVersion } from "../lib/version.js";
 import { runSetup } from "./setup.js";
 
 type SandboxProvider = "auto" | "firecracker" | "process";
@@ -117,7 +118,7 @@ async function offerFirecrackerSetup(saved: BreviConfig): Promise<void> {
   if (process.platform !== "linux" || saved.sandbox.provider === "process") return;
   if (!process.stdin.isTTY || !process.stdout.isTTY) return;
 
-  const problems = await collectFirecrackerProblems(saved.sandbox.firecracker);
+  const problems = await collectFirecrackerProblems(saved.sandbox.firecracker, readPackageVersion());
   if (problems.length === 0) return;
 
   const setupNow = exitOnCancel(

@@ -8,11 +8,14 @@ import { loadConfig, saveConfig } from "@brevi/orchestrator";
 import {
   collectFirecrackerNetworkProblems,
   collectFirecrackerProblems,
-  collectRootfsProblems,
+  ensureSshKeypair,
   fileExists,
+  installRootfs,
   isReadWritable,
+  locateRootfs,
   resolveBinary,
   resolveFirecrackerBinary,
+  rootfsArch,
   SSH_KEY_PATH,
 } from "@brevi/sandbox";
 import {
@@ -29,6 +32,7 @@ import type { Command } from "commander";
 import pc from "picocolors";
 import { downloadToFile } from "../lib/download.js";
 import { errorMessage, exitOnCancel } from "../lib/util.js";
+import { readPackageVersion } from "../lib/version.js";
 
 const FIRECRACKER_VERSION = "v1.10.1";
 const KERNEL_NAME = "vmlinux-6.1.102";
@@ -53,8 +57,16 @@ const TOOL_PACKAGES = [
   { tool: "ssh", aptPackage: "openssh-client" },
   { tool: "tar", aptPackage: "tar" },
   { tool: "iptables", aptPackage: "iptables" },
-  { tool: "docker", aptPackage: "docker.io" },
 ];
+
+/**
+ * Docker is deliberately not in TOOL_PACKAGES: the prebuilt rootfs needs none, so
+ * installing it up front would push a ~500 MB dependency on hosts that will never
+ * build from source, and bundling it into the tools prompt would make declining
+ * Docker also decline the tools brevi genuinely requires. It is offered on demand,
+ * only once the user has chosen the from-source build.
+ */
+const DOCKER_PACKAGE = { tool: "docker", aptPackage: "docker.io" };
 
 export function registerSetupCommand(program: Command): void {
   program
@@ -115,7 +127,7 @@ export async function runSetup({ standalone = true }: RunSetupOptions = {}): Pro
   const kvmReloginGroup = await ensureKvmAccess();
   ({ firecracker, config } = await ensureFirecrackerBinary(firecracker, config, arch));
   await ensureKernel(firecracker, arch);
-  await ensureRootfs(firecracker, missingTools);
+  await ensureRootfsImage(firecracker);
   await ensureNetwork(config, missingTools);
 
   return verify(firecracker, config, kvmReloginGroup, standalone);
@@ -143,14 +155,13 @@ function firecrackerArch(): FirecrackerArch | undefined {
 async function checkHostTools(): Promise<Set<string>> {
   let missing = await missingHostTools();
   if (missing.length === 0) {
-    log.success("Host tools: ip, ssh, tar, iptables, and docker are all installed.");
+    log.success("Host tools: ip, ssh, tar, and iptables are all installed.");
     return new Set();
   }
 
   const describe = (): string[] => {
     const names = missing.map((entry) => entry.tool);
     const lines = [`Missing host tools: ${names.join(", ")}.`];
-    if (names.includes("docker")) lines.push("docker is only needed to build the rootfs image.");
     if (names.includes("iptables")) lines.push("iptables is only needed for microVM networking.");
     return lines;
   };
@@ -188,6 +199,51 @@ async function checkHostTools(): Promise<Set<string>> {
   if (missing.length === 0) log.success("Host tools installed.");
   else log.warn(`Still missing after the install: ${missing.map((entry) => entry.tool).join(", ")}.`);
   return new Set(missing.map((entry) => entry.tool));
+}
+
+/**
+ * Docker for the from-source rootfs build, resolved at the point of use. Returns
+ * false when the build cannot proceed, having already explained why.
+ */
+async function ensureDocker(): Promise<boolean> {
+  if ((await resolveBinary(DOCKER_PACKAGE.tool)) !== undefined) return true;
+
+  if ((await resolveBinary("apt-get")) === undefined) {
+    log.warn(
+      [
+        "Building the rootfs from source needs docker, which is not installed.",
+        "Install it with your package manager, e.g.:",
+        `  ${pc.cyan(`sudo apt install ${DOCKER_PACKAGE.aptPackage}`)}`,
+        "then re-run brevi setup for this step.",
+      ].join("\n"),
+    );
+    return false;
+  }
+
+  const install = exitOnCancel(
+    await confirm({
+      message: `Building from source needs docker. Install ${DOCKER_PACKAGE.aptPackage} with apt now? (uses sudo)`,
+      initialValue: true,
+    }),
+  );
+  if (!install) {
+    log.warn("Skipped; the from-source build cannot run without docker.");
+    return false;
+  }
+
+  const code = await runSudo(["apt-get", "install", "-y", DOCKER_PACKAGE.aptPackage]);
+  if (code !== 0) {
+    log.error(
+      `apt-get exited with code ${code}; try ${pc.cyan("sudo apt-get update")} first, then re-run brevi setup.`,
+    );
+    return false;
+  }
+  if ((await resolveBinary(DOCKER_PACKAGE.tool)) === undefined) {
+    log.warn("docker is still not on PATH after the install; re-run brevi setup for this step.");
+    return false;
+  }
+  log.success("Installed docker.");
+  return true;
 }
 
 async function missingHostTools(): Promise<typeof TOOL_PACKAGES> {
@@ -372,47 +428,89 @@ async function ensureKernel(
   s.stop(`Downloaded kernel to ${kernelImage}`);
 }
 
-async function ensureRootfs(
-  firecracker: FirecrackerConfig,
-  missingTools: Set<string>,
-): Promise<void> {
-  // An image that exists but is empty, corrupt, or missing a current build
-  // manifest needs a rebuild just like a missing one, or setup would keep
-  // reporting it present while the preflight keeps failing it.
-  const rootfs = resolveFirecrackerImages(firecracker).rootfs;
-  const rootfsProblems = (await fileExists(rootfs))
-    ? await collectRootfsProblems(rootfs)
-    : [`rootfs image ${rootfs} is missing`];
-  if (rootfsProblems.length === 0 && (await fileExists(SSH_KEY_PATH))) {
-    log.success(`Rootfs image and ssh key: ${rootfs}`);
+async function ensureRootfsImage(firecracker: FirecrackerConfig): Promise<void> {
+  // Key handling happens here, up front, regardless of which rootfs path (or none) is
+  // found below; the preflight at the end reports a still-missing key as a problem.
+  try {
+    if (await ensureSshKeypair()) {
+      log.info(
+        `Generated an ssh keypair at ${SSH_KEY_PATH} (v2 images take the public key at boot, nothing is baked in).`,
+      );
+    }
+  } catch (err) {
+    log.error(errorMessage(err));
+  }
+
+  // locateRootfs reports a present-but-unusable image (empty, corrupt, stale manifest)
+  // as a problem rather than a hit, so setup cannot keep calling a rootfs fine while
+  // the preflight keeps failing it.
+  const cliVersion = readPackageVersion();
+  const located = await locateRootfs(firecracker, { cliVersion });
+  if (located.path !== undefined) {
+    const suffix = located.source === "cache" ? " (downloaded, cached per version)" : "";
+    log.success(`Rootfs image: ${located.path}${suffix}`);
     return;
   }
-  if ((await fileExists(rootfs)) && rootfsProblems.length > 0) {
-    log.warn(`The existing rootfs needs a rebuild: ${rootfsProblems.join("; ")}`);
-  }
-  if (rootfs !== DEFAULT_ROOTFS) {
+  log.warn(located.problems.join("; "));
+
+  // An explicitly configured path is the user's to supply: brevi never downloads over
+  // it, and build-rootfs.sh only ever writes the managed default.
+  if (firecracker.rootfs !== "") {
     log.warn(
-      `build-rootfs.sh only writes the default path ${DEFAULT_ROOTFS}; the configured rootfs ${rootfs} must be built manually.`,
+      `sandbox.firecracker.rootfs is set to ${firecracker.rootfs}, so brevi neither downloads nor builds over it; provide that image yourself, or clear the setting to use the managed one at ${DEFAULT_ROOTFS}.`,
     );
     return;
   }
-  if (missingTools.has("docker")) {
-    log.warn(
-      "Building the rootfs image needs docker; install it and re-run brevi setup for this step.",
+
+  // Offer the download first: no docker required, and it is the fast path for
+  // almost every host. The from-source build below is the fallback.
+  if (rootfsArch() === undefined) {
+    log.warn(`No prebuilt rootfs image is published for ${process.arch}.`);
+  } else {
+    const download = exitOnCancel(
+      await confirm({
+        message: `Download the prebuilt rootfs image for brevi ${cliVersion} (~1.5 GB, sha256-verified, no Docker needed)?`,
+        initialValue: true,
+      }),
     );
-    return;
+    if (download) {
+      const s = spinner();
+      s.start(`Downloading rootfs for brevi ${cliVersion}`);
+      let lastMib = -1;
+      try {
+        const path = await installRootfs({
+          cliVersion,
+          baseUrl: firecracker.rootfsBaseUrl,
+          onProgress: (bytes, totalBytes) => {
+            const mib = Math.floor(bytes / (1024 * 1024));
+            if (mib !== lastMib) {
+              lastMib = mib;
+              const total = totalBytes !== undefined ? ` of ${Math.floor(totalBytes / (1024 * 1024))}` : "";
+              s.message(`Downloading rootfs for brevi ${cliVersion} (${mib}${total} MiB)`);
+            }
+          },
+        });
+        s.stop(`Installed rootfs image to ${path}`);
+        return;
+      } catch (err) {
+        s.error(`Could not download the rootfs image: ${errorMessage(err)}`);
+        log.warn("Retry brevi setup to try the download again, or build the image from source below.");
+      }
+    }
   }
+
   const build = exitOnCancel(
     await confirm({
       message:
-        "Build the rootfs image now? It is a ~2 GB docker build that takes several minutes.",
+        "Build the rootfs image from source now? It is a ~2 GB docker build that takes several minutes.",
       initialValue: true,
     }),
   );
   if (!build) {
-    log.warn("Skipped; the firecracker provider cannot boot without a rootfs and ssh key.");
+    log.warn("Skipped; the firecracker provider cannot boot without a rootfs image.");
     return;
   }
+  if (!(await ensureDocker())) return;
 
   const script = shippedScript("build-rootfs.sh");
   if (script === undefined) return;
@@ -480,7 +578,7 @@ async function verify(
 ): Promise<boolean> {
   const taps = Math.max(16, config?.sandbox.concurrency ?? 1);
   const problems = [
-    ...(await collectFirecrackerProblems(firecracker)),
+    ...(await collectFirecrackerProblems(firecracker, readPackageVersion())),
     ...(await collectFirecrackerNetworkProblems(taps)),
   ];
 

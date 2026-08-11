@@ -1,0 +1,182 @@
+# Builds the Firecracker rootfs image and publishes it to Cloudflare R2 as a
+# checksum-verified artifact, so clients download it instead of building it
+# locally with Docker. Publishing is keyed by the @brevi/cli release version,
+# in lockstep: every release publishes rootfs/<cliVersion>/<arch>/, even one
+# where the rootfs contract (ROOTFS_VERSION) did not change. That contract
+# version rides inside the manifest as compatibility metadata, which clients
+# validate on download. packages/sandbox/scripts/build-rootfs.sh remains
+# fully supported as the from-source path (development, air-gapped hosts);
+# this workflow just runs that same script and ships its output.
+#
+# Triggers:
+#   - push to main touching packages/cli/package.json: the "Release packages"
+#     PR merge (release.yml) lands as a human-initiated push, which triggers
+#     workflows; tags the changesets action pushes with GITHUB_TOKEN cannot
+#     trigger workflows, so the version-bump commit on main is the reliable
+#     release signal. This keeps the published image in lockstep with the
+#     @brevi/cli release.
+#   - push of an "@brevi/cli@*" tag, which covers a manually pushed tag.
+#   - workflow_dispatch, with a `force` input to rebuild and overwrite a
+#     version that is already published.
+#
+# Required repository secrets (same names ci.yml already documents):
+#   CLOUDFLARE_API_TOKEN:  needs R2 write access to the brevi-images bucket,
+#                          in addition to whatever else it's already scoped for
+#   CLOUDFLARE_ACCOUNT_ID: the Cloudflare account the bucket lives in
+#
+# One-time manual setup (not done by this workflow): the brevi-images R2
+# bucket must exist, and images.brevi.dev must be attached to it as a custom
+# domain, in the Cloudflare dashboard.
+name: Rootfs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/cli/package.json
+    tags:
+      - "@brevi/cli@*"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild and overwrite an already-published version
+        type: boolean
+        default: false
+
+# Default to no permissions; the job declares exactly what it needs.
+permissions: {}
+
+# One publish at a time per ref: two overlapping runs racing to upload the
+# same version is worse than queuing.
+concurrency:
+  group: rootfs-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Build and publish (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read # checkout
+    strategy:
+      fail-fast: false
+      # GitHub-hosted on purpose: both docker and root are available out of
+      # the box, and the arm64 runner is free for public repos.
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read rootfs and cli versions
+        id: version
+        run: |
+          rootfs_version="$(grep -oP 'ROOTFS_VERSION = \K[0-9]+' packages/sandbox/src/firecracker/rootfs.ts)"
+          cli_version="$(jq -r .version packages/cli/package.json)"
+          echo "rootfs version: $rootfs_version, cli version: $cli_version"
+          echo "rootfs=$rootfs_version" >> "$GITHUB_OUTPUT"
+          echo "cli=$cli_version" >> "$GITHUB_OUTPUT"
+
+      # A manifest.json response means this cli version/arch already has a
+      # complete published image (manifest is uploaded last, see below), so
+      # there is nothing to do. curl failing, including because
+      # images.brevi.dev isn't set up yet, means proceed.
+      - name: Check whether this version is already published
+        id: check
+        env:
+          FORCE: ${{ github.event.inputs.force }}
+          CLI_VERSION: ${{ steps.version.outputs.cli }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            echo "force=true: rebuilding $CLI_VERSION/$ARCH regardless of what's already published"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif curl -sfI "https://images.brevi.dev/rootfs/$CLI_VERSION/$ARCH/manifest.json" >/dev/null; then
+            echo "$CLI_VERSION/$ARCH is already published; skipping (re-run via workflow_dispatch with force to overwrite)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$CLI_VERSION/$ARCH is not published yet; proceeding"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build rootfs
+        if: steps.check.outputs.skip != 'true'
+        # --no-ssh-key: v2+ images inject the host's key at boot via the
+        # brevi.authorized_keys kernel argument instead of baking one in, so
+        # one published image works on every machine. CI has no host key to
+        # bake in anyway.
+        run: |
+          sudo bash packages/sandbox/scripts/build-rootfs.sh \
+            --brevi-home "$RUNNER_TEMP/brevi" --no-ssh-key
+
+      - name: Compress and checksum
+        if: steps.check.outputs.skip != 'true'
+        id: artifact
+        env:
+          VERSION: ${{ steps.version.outputs.rootfs }}
+          CLI_VERSION: ${{ steps.version.outputs.cli }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          image="$RUNNER_TEMP/brevi/images/rootfs.ext4"
+
+          image_sha256="$(sha256sum "$image" | cut -d' ' -f1)"
+          image_size="$(stat -c %s "$image")"
+
+          # Clients decompress with node:zlib, so gzip here, not zstd.
+          gzip -9 -k "$image"
+          gz="$image.gz"
+          gz_sha256="$(sha256sum "$gz" | cut -d' ' -f1)"
+          gz_size="$(stat -c %s "$gz")"
+
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          jq -n \
+            --argjson rootfsVersion "$VERSION" \
+            --arg arch "$ARCH" \
+            --arg builtAt "$built_at" \
+            --arg cliVersion "$CLI_VERSION" \
+            --arg imageSha256 "$image_sha256" \
+            --argjson imageSize "$image_size" \
+            --arg gzSha256 "$gz_sha256" \
+            --argjson gzSize "$gz_size" \
+            '{
+              rootfsVersion: $rootfsVersion,
+              arch: $arch,
+              builtAt: $builtAt,
+              cliVersion: $cliVersion,
+              image: { name: "rootfs.ext4", sha256: $imageSha256, sizeBytes: $imageSize },
+              compressed: { name: "rootfs.ext4.gz", sha256: $gzSha256, sizeBytes: $gzSize }
+            }' > "$RUNNER_TEMP/manifest.json"
+
+          echo "gz=$gz" >> "$GITHUB_OUTPUT"
+          echo "manifest=$RUNNER_TEMP/manifest.json" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to R2
+        if: steps.check.outputs.skip != 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLI_VERSION: ${{ steps.version.outputs.cli }}
+          ARCH: ${{ matrix.arch }}
+          GZ: ${{ steps.artifact.outputs.gz }}
+          MANIFEST: ${{ steps.artifact.outputs.manifest }}
+        run: |
+          # Pinned to the exact wrangler version apps/api already depends on
+          # (apps/api/package.json / bun.lock): this handles the Cloudflare
+          # token, so it must not float to whatever npx would otherwise
+          # resolve as latest. Bump it deliberately, in step with apps/api.
+          wrangler="npx --yes wrangler@4.118.0"
+
+          # Image first, manifest last: the manifest's presence at this path
+          # is what clients treat as "this cli version is published" (the
+          # skip check above probes exactly this file), so a half-uploaded
+          # version must never be resolvable.
+          $wrangler r2 object put "brevi-images/rootfs/$CLI_VERSION/$ARCH/rootfs.ext4.gz" \
+            --file "$GZ" --content-type application/gzip --remote
+          $wrangler r2 object put "brevi-images/rootfs/$CLI_VERSION/$ARCH/manifest.json" \
+            --file "$MANIFEST" --content-type application/json --remote

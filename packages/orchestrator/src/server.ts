@@ -40,6 +40,8 @@ export interface StartOptions {
    * CLI bundles the dashboard and passes its own path here.
    */
   appDist?: string;
+  /** The @brevi/cli release version, forwarded to the orchestrator for prebuilt rootfs resolution. */
+  cliVersion?: string;
 }
 
 export interface OrchestratorHandle {
@@ -507,7 +509,13 @@ function attachWebSockets(
 export async function startOrchestrator(options: StartOptions = {}): Promise<OrchestratorHandle> {
   attachOrchestratorLogFile();
   const config = options.config ?? (await loadConfig(options.configPath));
-  const orchestrator = new Orchestrator(config, undefined, options.configPath);
+  const orchestrator = new Orchestrator(
+    config,
+    undefined,
+    options.configPath,
+    undefined,
+    options.cliVersion,
+  );
   await orchestrator.start();
 
   // Filled in once the listener binds; the OAuth flows read it through the

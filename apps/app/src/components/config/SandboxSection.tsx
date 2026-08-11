@@ -218,7 +218,15 @@ export function SandboxSection({
               draft={vm}
               wide
               placeholder="~/.brevi/images/rootfs.ext4"
-              help="Ext4 rootfs with node, git, and the coding agent preinstalled. Empty uses the image build-rootfs.sh writes."
+              help="Ext4 rootfs with node, git, and the coding agent preinstalled. Empty lets brevi manage it: a from-source build if one exists, otherwise a verified image downloaded per release. A path here is used as-is and never downloaded over."
+            />
+            <TextField
+              label="Rootfs base URL"
+              path="sandbox.firecracker.rootfsBaseUrl"
+              draft={vm}
+              wide
+              placeholder="https://images.brevi.dev/rootfs"
+              help="Where prebuilt rootfs images are downloaded from. Point it at a mirror for self-hosted or air-gapped setups."
             />
           </Advanced>
         </SettingsCard>

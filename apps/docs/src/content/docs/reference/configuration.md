@@ -64,6 +64,7 @@ A freshly initialised config, with every default filled in:
       "binary": "firecracker",
       "kernelImage": "",
       "rootfs": "",
+      "rootfsBaseUrl": "https://images.brevi.dev/rootfs",
       "size": "medium"
     },
     "timeoutMinutes": 60,
@@ -191,9 +192,9 @@ When `codexReview` is true, the primary agent is Claude, and a Codex credential 
 
 Without a Codex credential the review is likewise skipped cleanly and the run behaves exactly as before. The review roughly doubles the agent spend of a run; set `codexReview: false` to turn it off. Review executions appear in the run's cost breakdown as "review (requirements)", "review (bugs)", "review (regressions)", "review (synthesis)", and the fix pass as "review fixes".
 
-Under the Firecracker provider, the review runs the Codex CLI inside the sandbox, so existing rootfs images need a rebuild with `packages/sandbox/scripts/build-rootfs.sh` before the review can run; under the process provider the host's `codex` binary is used directly.
+Under the Firecracker provider, the review runs the Codex CLI inside the sandbox, so an existing host on an older rootfs image needs the current image before the review can run: brevi downloads the current prebuilt image automatically (`brevi setup`, or on demand at startup); from-source setups instead rebuild with `packages/sandbox/scripts/build-rootfs.sh`. Under the process provider the host's `codex` binary is used directly.
 
-Live per-model cost sampling during Claude runs likewise needs `ccusage` in the rootfs image under the Firecracker provider: images built before it was added need the same rebuild with `packages/sandbox/scripts/build-rootfs.sh`. Without it, runs still work and cost falls back to today's end-of-run, stream-parsed behavior.
+Live per-model cost sampling during Claude runs likewise needs `ccusage` in the rootfs image under the Firecracker provider: hosts on an older image get it the same way, by downloading the current prebuilt image (or rebuilding from source). Without it, runs still work and cost falls back to today's end-of-run, stream-parsed behavior.
 
 At least one of the four credential fields (`anthropicApiKey`, `claudeCodeOauthToken`, `codexApiKey`, `codexAuthJson`) must be set or every run fails at startup with `no agent credentials configured`. Populate them from the dashboard's Configuration page rather than by hand; the dashboard verifies keys before saving.
 
@@ -229,7 +230,8 @@ A wrong memory is worse than no memory, because every later run in that repo is 
 | --- | --- | --- | --- |
 | `binary` | string | `"firecracker"` | Resolved on `PATH` unless it's an absolute path. |
 | `kernelImage` | string | `""` | Uncompressed Linux kernel. Empty resolves to `~/.brevi/images/vmlinux`, the image `brevi setup` downloads. |
-| `rootfs` | string | `""` | Empty resolves to `~/.brevi/images/rootfs.ext4`. Ext4 image with node, git, both agent CLIs (`@anthropic-ai/claude-code`, `@openai/codex`), and `ccusage` preinstalled. `build-rootfs.sh` also writes a `rootfs.ext4.manifest.json` next to the image; an image that's empty, corrupt, or missing a current manifest (built by an older brevi) fails preflight until it's rebuilt. |
+| `rootfs` | string | `""` | Ext4 image with node, git, both agent CLIs (`@anthropic-ai/claude-code`, `@openai/codex`), and `ccusage` preinstalled. Empty means brevi manages it: a from-source build at `~/.brevi/images/rootfs.ext4` (`build-rootfs.sh`) wins, and when there's no valid image there brevi falls back to the versioned cache under `~/.brevi/cache/rootfs/`, downloading a checksum-verified image on demand. A path set here is used as-is and is never downloaded or built over. An image that's empty, corrupt, or whose manifest version doesn't match brevi's fails preflight until it's rebuilt or redownloaded. |
+| `rootfsBaseUrl` | string | `"https://images.brevi.dev/rootfs"` | Base URL prebuilt rootfs images are downloaded from. Point it at a mirror for self-hosted or air-gapped setups. |
 | `size` | `"small"` \| `"medium"` \| `"large"` | `"medium"` | VM size preset: `small` (1 vCPU, 3.75 GB), `medium` (2 vCPU, 7.5 GB), `large` (4 vCPU, 15 GB). Selectable live from the dashboard's Sandbox page (Configuration > Sandbox) when the active provider is Firecracker; a change applies to newly booted VMs only, running VMs are untouched. |
 | `vcpus` | integer ≥ 1 | unset | Explicit vCPU override. Wins over `size` when set; existing config files with an explicit value keep their exact behavior. Picking a preset in the dashboard clears it. |
 | `memMib` | integer ≥ 512 | unset | Explicit memory override, in MiB. Wins over `size` when set; existing config files with an explicit value keep their exact behavior. Picking a preset in the dashboard clears it. |

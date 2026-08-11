@@ -91,6 +91,21 @@ export interface SandboxProvider {
 export interface ProviderSelection {
   requested: "auto" | SandboxProviderName;
   firecracker: FirecrackerConfig;
+  /**
+   * The @brevi/cli release version; prebuilt rootfs images are published, downloaded, and
+   * cached per release, so this keys both the download URL and the cache directory.
+   */
+  cliVersion: string;
+  /**
+   * The rootfs contract version the dispatching host requires of whatever machine runs
+   * its work. When it is newer than this build's ROOTFS_VERSION, provider selection
+   * refuses with an "update the worker" error instead of downgrading, so an outdated
+   * worker never accepts work whose guest contract it cannot satisfy. Omitted (local,
+   * single-machine use) means this build's own version.
+   */
+  requiredRootfsVersion?: number;
   /** How many sandboxes may run at once; used to size the network preflight. Defaults to 1. */
   concurrency?: number;
+  /** Progress/diagnostic lines during provider selection, e.g. a rootfs image download. */
+  log?: (line: string) => void;
 }

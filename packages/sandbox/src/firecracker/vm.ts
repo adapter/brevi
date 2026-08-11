@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -13,6 +13,8 @@ import { resolveFirecrackerBinary } from "../host.js";
 import { FirecrackerApi } from "./api.js";
 import { allocateNetwork, deleteTapDevice, ensureTapDevice, releaseNetwork } from "./network.js";
 import type { VmNetwork } from "./network.js";
+import { ROOTFS_VERSION } from "./rootfs.js";
+import { SSH_KEY_PATH } from "./ssh.js";
 
 const SOCKET_WAIT_MS = 10_000;
 const SOCKET_POLL_MS = 50;
@@ -24,6 +26,11 @@ export interface MicroVmOptions {
   /** Per-sandbox directory holding the rootfs copy, API socket, and log. */
   rootDir: string;
   config: FirecrackerConfig;
+  /**
+   * Image to boot, when a preflight (createSandboxProvider) already resolved one via
+   * locateRootfs/ensureRootfs (a downloaded cache image, say); falls back to config.rootfs.
+   */
+  rootfsImage?: string;
   /** Boot from an existing rootfs.ext4 in rootDir (a retained sandbox disk) instead of copying the base image. */
   reuseRootfs?: boolean;
 }
@@ -72,8 +79,13 @@ export async function bootMicroVm(options: MicroVmOptions): Promise<MicroVm> {
   const rootfsPath = join(options.rootDir, "rootfs.ext4");
   if (options.reuseRootfs) {
     if (!existsSync(rootfsPath)) throw new Error(`no retained rootfs at ${rootfsPath}`);
+    assertRetainedRootfsCompatible(rootfsPath, await readSandboxRootfsVersion(options.rootDir));
   } else {
-    await copyRootfs(resolveFirecrackerImages(options.config).rootfs, rootfsPath);
+    await copyRootfs(
+      options.rootfsImage ?? resolveFirecrackerImages(options.config).rootfs,
+      rootfsPath,
+    );
+    await recordSandboxRootfsVersion(options.rootDir);
   }
 
   const network = allocateNetwork();
@@ -99,7 +111,8 @@ export async function bootMicroVm(options: MicroVmOptions): Promise<MicroVm> {
     });
 
     await waitForSocket(socketPath, subprocess, logPath);
-    await configure(socketPath, options.config, rootfsPath, network);
+    const authorizedKeys = await readAuthorizedKeysArg();
+    await configure(socketPath, options.config, rootfsPath, network, authorizedKeys);
 
     return new MicroVm({ network, logPath, process: subprocess, socketPath, ownsTapDevice });
   } catch (error) {
@@ -108,6 +121,50 @@ export async function bootMicroVm(options: MicroVmOptions): Promise<MicroVm> {
     releaseNetwork(network);
     throw error;
   }
+}
+
+/** File beside a sandbox's rootfs copy recording the rootfs contract version it was created from. */
+const ROOTFS_VERSION_FILE = "rootfs.version";
+
+/**
+ * Written when a sandbox's disk is created, so a retained disk can be checked against the
+ * running build's rootfs contract before a rehydrate boots it. Exported for tests.
+ */
+export async function recordSandboxRootfsVersion(rootDir: string): Promise<void> {
+  await writeFile(join(rootDir, ROOTFS_VERSION_FILE), `${ROOTFS_VERSION}\n`);
+}
+
+/** The contract version a retained sandbox disk was created from; undefined when unrecorded. Exported for tests. */
+export async function readSandboxRootfsVersion(rootDir: string): Promise<number | undefined> {
+  try {
+    const version = Number((await readFile(join(rootDir, ROOTFS_VERSION_FILE), "utf8")).trim());
+    return Number.isInteger(version) ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The retained-disk half of the rootfs version handshake: a disk created from another
+ * contract version (or before versions were recorded) must be refused with an actionable
+ * error, not booted into an ssh timeout or run under guarantees it does not carry.
+ * Exported for tests.
+ */
+export function assertRetainedRootfsCompatible(rootfsPath: string, created: number | undefined): void {
+  if (created === ROOTFS_VERSION) return;
+  if (created === undefined) {
+    throw new Error(
+      `retained sandbox disk ${rootfsPath} records no rootfs version (it was created by an older brevi) and cannot be resumed under rootfs v${ROOTFS_VERSION}; discard the retained sandbox and start a fresh run`,
+    );
+  }
+  if (created < ROOTFS_VERSION) {
+    throw new Error(
+      `retained sandbox disk ${rootfsPath} was created from rootfs v${created}, but this brevi requires v${ROOTFS_VERSION}; it cannot be resumed: discard the retained sandbox and start a fresh run`,
+    );
+  }
+  throw new Error(
+    `retained sandbox disk ${rootfsPath} was created from rootfs v${created}, newer than this brevi understands (v${ROOTFS_VERSION}); update brevi on this machine (brevi update) or discard the retained sandbox`,
+  );
 }
 
 /**
@@ -125,6 +182,7 @@ async function configure(
   config: FirecrackerConfig,
   rootfsPath: string,
   network: VmNetwork,
+  authorizedKeys: string | undefined,
 ): Promise<void> {
   const api = new FirecrackerApi(socketPath);
   try {
@@ -135,7 +193,7 @@ async function configure(
     await api.put("/machine-config", { vcpu_count: vcpus, mem_size_mib: memMib });
     await api.put("/boot-source", {
       kernel_image_path: resolveFirecrackerImages(config).kernelImage,
-      boot_args: bootArgs(network),
+      boot_args: bootArgs(network, authorizedKeys),
     });
     await api.put("/drives/rootfs", {
       drive_id: "rootfs",
@@ -154,10 +212,26 @@ async function configure(
   }
 }
 
+/**
+ * Reads the host's ssh public key for boot-time injection into the guest's
+ * authorized_keys (see the init script in scripts/build-rootfs.sh), base64-encoded so it
+ * survives as a single kernel boot-arg token. Undefined when unreadable: a from-source
+ * image still boots and accepts its own baked-in key.
+ */
+async function readAuthorizedKeysArg(): Promise<string | undefined> {
+  try {
+    const pubkey = await readFile(`${SSH_KEY_PATH}.pub`, "utf8");
+    return Buffer.from(pubkey, "utf8").toString("base64");
+  } catch {
+    return undefined;
+  }
+}
+
 /** Kernel `ip=` takes client:server:gateway:netmask:hostname:device:autoconf. */
-function bootArgs(network: VmNetwork): string {
+function bootArgs(network: VmNetwork, authorizedKeys: string | undefined): string {
   const ipConfig = `${network.guestIp}::${network.hostIp}:${network.netmask}::eth0:off`;
-  return `console=ttyS0 reboot=k panic=1 pci=off ip=${ipConfig}`;
+  const base = `console=ttyS0 reboot=k panic=1 pci=off ip=${ipConfig}`;
+  return authorizedKeys === undefined ? base : `${base} brevi.authorized_keys=${authorizedKeys}`;
 }
 
 async function waitForSocket(

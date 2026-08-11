@@ -434,6 +434,7 @@ async function checkSandboxSection(config: BreviConfig): Promise<Section> {
     const problems = await collectFirecrackerPreflightProblems(
       config.sandbox.firecracker,
       config.sandbox.concurrency,
+      readPackageVersion(),
     );
     if (problems.length === 0) {
       checks.push({
