@@ -39,7 +39,7 @@ function describeExit(code: number | null, signal: NodeJS.Signals | null): strin
 }
 
 export class OrchestratorSupervisor {
-  private readonly options: SupervisorOptions;
+  private options: SupervisorOptions;
   private _state: SupervisorState = { kind: "stopped" };
 
   private child: ChildProcess | null = null;
@@ -88,6 +88,17 @@ export class OrchestratorSupervisor {
   /** Recent orchestrator output, newest last, for the log view. */
   recentLogs(): string[] {
     return [...this.logs];
+  }
+
+  /**
+   * Repoint at a different orchestrator address. `server.port`/`server.host`
+   * are editable from the dashboard and take effect when the orchestrator
+   * restarts, so the address this supervisor probes has to move with them:
+   * left on the old one it would health-check a socket nothing is bound to,
+   * kill the perfectly healthy child as unhealthy, and do it again.
+   */
+  setUrl(url: string): void {
+    this.options = { ...this.options, url };
   }
 
   async start(): Promise<void> {

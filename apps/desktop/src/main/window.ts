@@ -5,6 +5,8 @@ export interface MissionControlOptions {
   baseUrl: string;
   /** Absolute path of the local status page (src/renderer/status.html, resolved by the caller). */
   statusPage: string;
+  /** True for a launch the login item started, which belongs in the menu bar rather than on screen. */
+  startHidden?: boolean;
 }
 
 /**
@@ -20,9 +22,23 @@ export class MissionControl {
   // path) would otherwise fail on every showStatus() call; report it once so
   // it's a visible diagnostic instead of a silent loop of blank windows.
   #reportedLoadFailure = false;
+  /**
+   * Whether a freshly created window reveals itself once it can paint. False
+   * for a launch the login item started: that launch is meant to land in the
+   * menu bar, but the window is still created and loaded in the background so
+   * a later tray click reveals a ready one. An explicit show() sets it, so
+   * the user asking for the window always wins.
+   */
+  #autoShow: boolean;
 
   constructor(options: MissionControlOptions) {
     this.#options = options;
+    this.#autoShow = !options.startHidden;
+  }
+
+  /** Repoint at a different orchestrator address; the next load uses it. */
+  setBaseUrl(baseUrl: string): void {
+    this.#options = { ...this.#options, baseUrl };
   }
 
   get isVisible(): boolean {
@@ -31,6 +47,7 @@ export class MissionControl {
 
   /** Create or focus the window, navigating to `path` under the orchestrator when given. */
   show(path?: string): void {
+    this.#autoShow = true;
     const window = this.#ensureWindow();
     if (path) this.loadDashboard(path);
     if (window.isMinimized()) window.restore();
@@ -100,7 +117,9 @@ export class MissionControl {
       },
     });
 
-    window.once("ready-to-show", () => window.show());
+    window.once("ready-to-show", () => {
+      if (this.#autoShow) window.show();
+    });
 
     window.on("close", (event) => {
       if (this.#quitting) return;

@@ -2,13 +2,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, dialog, shell } from "electron";
 import type { HealthResponse } from "@brevi/shared";
+import { loadConfig } from "@brevi/orchestrator/config";
 import { ensureConfig } from "./config.js";
 import { FleetMonitor } from "./fleet.js";
 import { orchestratorUrl, probeHealth } from "./health.js";
 import { notifyRunFinished } from "./notifications.js";
 import { ORCHESTRATOR_LOG_PATH, resolveCliEntry } from "./paths.js";
 import { countRuns, menuRuns } from "./summary.js";
-import { launchAtLoginEnabled, setLaunchAtLogin } from "./autostart.js";
+import { launchAtLoginEnabled, openedAtLogin, setLaunchAtLogin } from "./autostart.js";
 import { OrchestratorSupervisor, type SupervisorState } from "./supervisor.js";
 import { FleetTray, type TrayView } from "./tray.js";
 import { MissionControl } from "./window.js";
@@ -52,12 +53,19 @@ async function main(): Promise<void> {
   if (!result) return;
   const { config, firstLaunch } = result;
 
-  const baseUrl = orchestratorUrl(config.server);
+  // Mutable: server.host and server.port are editable from the dashboard and
+  // apply on restart, so every component holding an address has to be moved
+  // with them (see restartOrchestrator).
+  let baseUrl = orchestratorUrl(config.server);
   const statusPage = join(here, "status.html");
 
-  missionControl = new MissionControl({ baseUrl, statusPage });
+  // A login launch belongs in the menu bar. The window is still created and
+  // pointed at the status page so a later tray click reveals a ready one,
+  // it just never puts itself on screen.
+  const hiddenLaunch = openedAtLogin();
+  missionControl = new MissionControl({ baseUrl, statusPage, startHidden: hiddenLaunch });
   missionControl.showStatus("loading");
-  missionControl.show();
+  if (!hiddenLaunch) missionControl.show();
 
   let launchAtLogin = launchAtLoginEnabled();
   let health: HealthResponse | null = null;
@@ -69,7 +77,7 @@ async function main(): Promise<void> {
   tray = new FleetTray({
     onOpen: (path) => openWindow(path),
     onOpenExternal: () => void shell.openExternal(baseUrl),
-    onRestartOrchestrator: () => void supervisor?.restart(),
+    onRestartOrchestrator: () => void restartOrchestrator(),
     onToggleLaunchAtLogin: (enabled) => {
       setLaunchAtLogin(enabled);
       launchAtLogin = enabled;
@@ -91,6 +99,30 @@ async function main(): Promise<void> {
     onChange: () => refreshTray(),
     onRunFinished: (run) => notifyRunFinished(run, (path) => openWindow(path)),
   });
+
+  /**
+   * Restart the orchestrator, picking up an edited server.host/server.port on
+   * the way. The child re-reads the config when it boots, so a supervisor
+   * still probing the old address would health-check a socket nothing is
+   * bound to and kill the healthy child as unhealthy, over and over. Re-read
+   * the config here and move every component holding an address before the
+   * restart, not after.
+   */
+  async function restartOrchestrator(): Promise<void> {
+    const current = await loadConfig().catch(() => null);
+    const nextUrl = current ? orchestratorUrl(current.server) : baseUrl;
+    if (nextUrl !== baseUrl) {
+      baseUrl = nextUrl;
+      supervisor?.setUrl(baseUrl);
+      fleet?.setUrl(baseUrl);
+      missionControl?.setBaseUrl(baseUrl);
+      // The window is pointed at the old address; put it back on the status
+      // page so the reload lands on the new one once the orchestrator answers.
+      dashboardLoaded = false;
+      missionControl?.showStatus("loading");
+    }
+    await supervisor?.restart();
+  }
 
   /**
    * Tray and notification clicks. Before the orchestrator answers, the window

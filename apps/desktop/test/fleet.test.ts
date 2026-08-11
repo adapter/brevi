@@ -319,4 +319,26 @@ describe("FleetMonitor", () => {
     await send(harness, client, helloMessage([run("r3", "completed")]));
     expect(harness.notified).toHaveLength(1);
   });
+
+  test("setUrl moves the connection, and the new endpoint's first hello notifies for nothing", async () => {
+    const first = await startServer();
+    const harness = trackHarness(createHarness(`http://127.0.0.1:${first.port}`));
+    harness.monitor.start();
+    const firstClient = await connectClient(first.server, harness);
+
+    await send(harness, firstClient, helloMessage([run("old", "running")]));
+
+    // server.port changed and the orchestrator restarted on a new address.
+    const second = await startServer();
+    harness.monitor.setUrl(`http://127.0.0.1:${second.port}`);
+    const secondClient = await connectClient(second.server, harness);
+
+    // The runs behind the new address are a first hello, not a reconnect
+    // snapshot of the old one: treating them as a diff would report the run
+    // left behind on the old endpoint as freshly finished.
+    const state = await send(harness, secondClient, helloMessage([run("old", "failed")]));
+
+    expect(state.runs.map((r) => r.id)).toEqual(["old"]);
+    expect(harness.notified).toEqual([]);
+  }, 15000);
 });

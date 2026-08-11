@@ -9,6 +9,13 @@ import { app } from "electron";
 const LINUX_AUTOSTART_DIR = join(homedir(), ".config", "autostart");
 const LINUX_AUTOSTART_PATH = join(LINUX_AUTOSTART_DIR, "brevi.desktop");
 
+/**
+ * Passed by the Linux autostart entry so a login launch is recognisable.
+ * macOS reports one through the login item's own state; XDG autostart has no
+ * equivalent, so the flag we wrote into Exec= is the signal.
+ */
+const LINUX_AUTOSTART_FLAG = "--opened-at-login";
+
 /** The executable to relaunch: the AppImage itself when running from one, otherwise Electron's own binary. */
 function launcherPath(): string {
   return process.env.APPIMAGE ?? process.execPath;
@@ -23,7 +30,7 @@ function desktopEntry(): string {
     "[Desktop Entry]",
     "Type=Application",
     "Name=brevi",
-    `Exec=${quoteIfNeeded(launcherPath())}`,
+    `Exec=${quoteIfNeeded(launcherPath())} ${LINUX_AUTOSTART_FLAG}`,
     "X-GNOME-Autostart-enabled=true",
     "",
   ].join("\n");
@@ -36,6 +43,25 @@ export function launchAtLoginEnabled(): boolean {
     if (process.platform === "linux") return existsSync(LINUX_AUTOSTART_PATH);
   } catch {
     // Fall through to false.
+  }
+  return false;
+}
+
+/**
+ * True when the login item started this launch rather than the user. Such a
+ * launch is registered with openAsHidden on macOS and is meant to land in the
+ * menu bar, so the window must not put itself on screen.
+ */
+export function openedAtLogin(): boolean {
+  try {
+    if (process.platform === "darwin") {
+      const settings = app.getLoginItemSettings();
+      return settings.wasOpenedAtLogin || settings.wasOpenedAsHidden;
+    }
+    if (process.platform === "linux") return process.argv.includes(LINUX_AUTOSTART_FLAG);
+  } catch {
+    // Fall through to false: a launch we cannot classify is treated as the
+    // user's own, since showing an unwanted window beats hiding a wanted one.
   }
   return false;
 }

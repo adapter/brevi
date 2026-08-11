@@ -87,6 +87,21 @@ export class FleetMonitor {
     this.#open();
   }
 
+  /**
+   * Repoint at a different orchestrator address, reconnecting when it changed.
+   * The next hello is a first hello: the runs behind the old address are not a
+   * reconnect snapshot of this one, and diffing against them would replay
+   * their completions as fresh notifications.
+   */
+  setUrl(url: string): void {
+    if (this.#options.url === url) return;
+    const wasRunning = !this.#stopped;
+    this.stop();
+    this.#options = { ...this.#options, url };
+    this.#firstHello = true;
+    if (wasRunning) this.start();
+  }
+
   stop(): void {
     this.#stopped = true;
     if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
