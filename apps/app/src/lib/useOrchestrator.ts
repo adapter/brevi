@@ -8,7 +8,7 @@ import type {
   RunEvent,
   ServerMessage,
   Ticket,
-  WorkerSummary,
+  WorkerView,
 } from "@brevi/shared";
 import { api, wsUrl } from "./api";
 
@@ -21,10 +21,10 @@ interface State {
   conn: Connection;
   runs: Run[];
   tickets: Ticket[];
-  workers: WorkerSummary[];
   config: BreviConfig | null;
   linearStatus: LinearStatus | null;
   health: HealthResponse | null;
+  workers: WorkerView[];
   events: Record<string, RunEvent[] | undefined>;
   loadedRuns: Record<string, true | undefined>;
   busy: Record<string, true | undefined>;
@@ -43,15 +43,15 @@ type Action =
       tickets: Ticket[];
       config: BreviConfig;
       linearStatus: LinearStatus;
-      workers: WorkerSummary[];
+      workers: WorkerView[];
     }
   | { t: "config"; config: BreviConfig }
   | { t: "linear-status"; linearStatus: LinearStatus }
   | { t: "tickets"; tickets: Ticket[] }
-  | { t: "workers"; workers: WorkerSummary[] }
+  | { t: "workers"; workers: WorkerView[] }
   | { t: "run"; run: Run }
   | { t: "event"; event: RunEvent }
-  | { t: "seed"; runs?: Run[]; tickets?: Ticket[]; health?: HealthResponse }
+  | { t: "seed"; runs?: Run[]; tickets?: Ticket[]; health?: HealthResponse; workers?: WorkerView[] }
   | { t: "history"; runId: string; events: RunEvent[] }
   | { t: "busy"; key: string; on: boolean }
   | { t: "notice"; notice: string | null }
@@ -62,10 +62,10 @@ const initial: State = {
   conn: "connecting",
   runs: [],
   tickets: [],
-  workers: [],
   config: null,
   linearStatus: null,
   health: null,
+  workers: [],
   events: {},
   loadedRuns: {},
   busy: {},
@@ -90,6 +90,7 @@ export type ConfigSection =
   | "repositories"
   | "agent"
   | "sandbox"
+  | "workers"
   | "memory"
   | "orchestrator"
   | "server";
@@ -100,7 +101,9 @@ export type Page = "home" | "setup" | `config:${ConfigSection}`;
 function pageFromPath(pathname: string): Page {
   if (/^\/setup\/?$/.test(pathname)) return "setup";
   const match =
-    /^\/config(?:\/(connectors|repositories|agent|sandbox|memory|orchestrator|server))?\/?$/.exec(pathname);
+    /^\/config(?:\/(connectors|repositories|agent|sandbox|workers|memory|orchestrator|server))?\/?$/.exec(
+      pathname,
+    );
   if (!match) return "home";
   const section = (match[1] ?? "connectors") as ConfigSection;
   return `config:${section}`;
@@ -164,6 +167,7 @@ function reducer(state: State, action: Action): State {
         runs,
         tickets: action.tickets ?? state.tickets,
         health: action.health ?? state.health,
+        workers: action.workers ?? state.workers,
         loaded: state.loaded || action.runs !== undefined || action.tickets !== undefined,
       };
     }
@@ -311,12 +315,15 @@ export function useOrchestrator() {
 
   // --- REST fallback ---------------------------------------------------------
   const refresh = useCallback(async () => {
-    const [runs, tickets, health] = await Promise.all([
+    const [runs, tickets, health, fleet] = await Promise.all([
       api.runs().catch(() => undefined),
       api.tickets().catch(() => undefined),
       api.health().catch(() => undefined),
+      api.workers().catch(() => undefined),
     ]);
-    if (runs || tickets || health) dispatch({ t: "seed", runs, tickets, health });
+    if (runs || tickets || health || fleet) {
+      dispatch({ t: "seed", runs, tickets, health, workers: fleet?.workers });
+    }
   }, []);
 
   useEffect(() => {
@@ -461,6 +468,12 @@ export function useOrchestrator() {
     [],
   );
 
+  /** Adopt the fleet returned by a worker mutation, ahead of the next socket message. */
+  const applyWorkers = useCallback(
+    (workers: WorkerView[]) => dispatch({ t: "workers", workers }),
+    [],
+  );
+
   const selectedRun = useMemo(
     () => state.runs.find((r) => r.id === state.selectedRunId),
     [state.runs, state.selectedRunId],
@@ -478,6 +491,7 @@ export function useOrchestrator() {
     followUpRun,
     dismissNotice,
     applyConfig,
+    applyWorkers,
   };
 }
 

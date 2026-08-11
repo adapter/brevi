@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import {
+  CONFIG_DEFAULTS,
   FIRECRACKER_SIZES,
   WORKSPACES_DIR,
   type BreviConfig,
@@ -17,6 +18,7 @@ import {
   type RunStatus,
   type WorkerCapabilities,
   type WorkerMessage,
+  type WorkerState,
 } from "@brevi/shared";
 import { createSandboxProvider, isReadWritable, type SandboxProvider } from "@brevi/sandbox";
 import { loadConfig } from "@brevi/orchestrator";
@@ -24,7 +26,7 @@ import { isTerminal, LinearService } from "@brevi/orchestrator/internal";
 import { createAttachSessions, type AttachSessions } from "./attach.js";
 import { connectToHost, type WorkerConnection } from "./connection.js";
 import { executeFollowUp } from "./followup.js";
-import { workerId as loadWorkerId } from "./identity.js";
+import { clearEnrollment, enrollmentFor, saveEnrollment } from "./identity.js";
 import { RunReporter } from "./reporter.js";
 import { executeRun, type RunContext } from "./runner.js";
 
@@ -46,9 +48,15 @@ const VERSION = ((): string => {
 export interface WorkerOptions {
   /** The host's base url, e.g. "http://localhost:4400". */
   hostUrl: string;
-  /** Pairing token the host's fleet.token config expects. */
-  token: string;
-  /** Shown on the host's dashboard; defaults to this machine's hostname. */
+  /**
+   * A single-use pairing token, minted on the host's Workers page. Only
+   * needed to enroll: the first time this machine connects to that host, or
+   * to enroll it again after its credential was revoked. Once redeemed, the
+   * durable credential in `~/.brevi/worker.json` authenticates every later
+   * connect, so the daemon normally runs without a token at all.
+   */
+  token?: string;
+  /** The name to enroll under; defaults to this machine's hostname. The host keeps its own name for this worker afterwards, so a rename happens on the dashboard. */
   name?: string;
   /** Overrides the local config's sandbox.concurrency for how many dispatched runs this worker executes at once. */
   concurrency?: number;
@@ -126,15 +134,28 @@ function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T | "timeout"
 }
 
 /**
- * Runs the worker daemon in the foreground: connects to the host, executes
+ * Runs the worker daemon in the foreground: enrolls with the host (or
+ * reconnects with the credential an earlier enrollment left behind), executes
  * whatever it dispatches, and mirrors every run mutation back over the
- * socket. Resolves once a SIGINT/SIGTERM shuts it down cleanly; the caller
- * (packages/cli's `brevi worker` command) just awaits it.
+ * socket. Resolves once a SIGINT/SIGTERM shuts it down cleanly and rejects
+ * when the host revoked this machine's enrollment; the caller (packages/cli's
+ * `brevi worker` command) just awaits it.
  */
 export async function runWorker(options: WorkerOptions): Promise<void> {
   const name = options.name ?? hostname();
-  const config = await loadConfig(options.configPath);
+  // A machine that only ever runs `brevi worker` has no reason to have run
+  // `brevi init`, so an absent (or unreadable) config is not fatal here the
+  // way it is for every other command: fall back to the schema's own
+  // defaults, which is a process-provider worker with concurrency 1.
+  const config = await loadConfig(options.configPath).catch((error: unknown) => {
+    console.log(`[brevi] no usable local config (${errorMessage(error)}); continuing with defaults`);
+    return CONFIG_DEFAULTS;
+  });
   const concurrency = options.concurrency ?? config.sandbox.concurrency;
+  // The credential an earlier enrollment on this host left behind, if any.
+  // Scoped to the host: a credential another brevi instance issued is not
+  // something this one would honour, so it counts as not being enrolled.
+  const enrollment = await enrollmentFor(options.hostUrl);
 
   console.log(`[brevi] resolving the ${config.sandbox.provider} sandbox provider...`);
   const provider: SandboxProvider = await createSandboxProvider({
@@ -162,8 +183,6 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   console.log(
     `[brevi] provider ${provider.name} (kvm ${capabilities.kvm ? "yes" : "no"}, ${process.platform}/${process.arch}), concurrency ${concurrency}`,
   );
-
-  const id = await loadWorkerId();
 
   /** Runs this process has executed since it started; the only source attach.ts has for a run's agentSessionId and retained-disk bookkeeping. */
   const knownRuns = new Map<string, Run>();
@@ -204,6 +223,13 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   // point on, so the set of runs this worker is still finishing only ever
   // shrinks during shutdown.
   let shuttingDown = false;
+  // The operator's state for this worker, as the host reports it (on every
+  // registration, on every heartbeat-ack, and pushed when it changes).
+  // Draining refuses new dispatches while the runs already in flight finish
+  // and report normally, so a machine being decommissioned empties itself.
+  let draining = false;
+  /** Whether the host has reported this worker's state at least once, so the first report is not mistaken for a transition. */
+  let stateReported = false;
 
   // A restart forgets every retained disk it can no longer identify (see
   // knownRuns above): nothing points at them anymore from this process's
@@ -220,6 +246,10 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     const { lease, kind, run, config: dispatchedConfig, prompts } = dispatch;
     if (shuttingDown) {
       connection.send({ type: "dispatch-rejected", leaseId: lease.id, runId: run.id, reason: "worker is shutting down" });
+      return;
+    }
+    if (draining) {
+      connection.send({ type: "dispatch-rejected", leaseId: lease.id, runId: run.id, reason: "worker is draining" });
       return;
     }
     if (activeRuns.size >= concurrency) {
@@ -349,14 +379,129 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     unacknowledgedCompletions.delete(message.leaseId);
   };
 
+  /**
+   * Settles once this daemon has stopped: resolved by a clean SIGINT/SIGTERM
+   * shutdown, rejected when the host revoked this worker's enrollment, since
+   * a revoked worker exiting is a failure the caller should surface (nothing
+   * it reports would be accepted any more).
+   */
+  let resolveStopped: () => void = () => {};
+  let rejectStopped: (error: Error) => void = () => {};
+  const stopped = new Promise<void>((resolve, reject) => {
+    resolveStopped = resolve;
+    rejectStopped = reject;
+  });
+
+  /**
+   * The one graceful stop, shared by the signal handlers and by a revoke.
+   * Its ordering is load-bearing (see the numbered comment inside): the same
+   * sequence has to run whichever of the two started it, because a revoked
+   * worker still has sandboxes and agent child processes to tear down.
+   */
+  const shutdown = (failure?: Error): void => {
+    shuttingDown = true;
+    void (async () => {
+      // Ordering matters here, in this order, because it is the difference
+      // between a clean stop and orphaned microVMs:
+      //   1. stop accepting dispatches (done above, via shuttingDown)
+      //   2. abort every active run, so its sandbox and agent child
+      //      process are actually told to stop instead of being abandoned
+      //   3. await those executions, bounded by a deadline, so their
+      //      terminal reporting (patches plus run-complete) is produced
+      //      and hits the connection's outbound queue
+      //   4. wait for that queue to actually drain to the socket
+      //   5. only now close attach sessions and the connection
+      // Closing the socket before step 4 would drop a run's final
+      // run-complete on the floor forever (the host has no idea the run
+      // ended); destroying sandboxes before step 2 or skipping the wait in
+      // step 3 leaves Firecracker VMs (or process-provider children)
+      // running with nothing left to report their exit.
+      for (const active of activeRuns.values()) active.abort.abort();
+      const deadline = Date.now() + SHUTDOWN_DEADLINE_MS;
+      const executions = [...activeRuns.values()].map((active) => active.execution);
+      const settled = await withDeadline(Promise.allSettled(executions), deadline - Date.now());
+      if (settled === "timeout") {
+        console.error(
+          `[brevi] shutdown deadline (${SHUTDOWN_DEADLINE_MS}ms) reached with ${activeRuns.size} run(s) still finishing; giving up on a clean stop`,
+        );
+      }
+      const drained = await connection.drain(Math.max(0, deadline - Date.now()));
+      if (!drained) {
+        console.error(
+          `[brevi] outbound connection did not drain before the shutdown deadline (${connection.pendingCount()} message(s) still queued); some final reporting may not have reached the host`,
+        );
+      }
+      attachSessions.closeAll();
+      connection.close();
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      if (failure) rejectStopped(failure);
+      else resolveStopped();
+    })();
+  };
+
+  const onSignal = (signal: NodeJS.Signals): void => {
+    if (shuttingDown) {
+      // An operator hitting Ctrl-C twice wants out now, not a status
+      // update; a hung sandbox teardown must never be able to trap them.
+      console.log(`[brevi] received ${signal} again; exiting immediately`);
+      process.exit(1);
+    }
+    console.log(`[brevi] received ${signal}, shutting down...`);
+    shutdown();
+  };
+  const onSigint = (): void => onSignal("SIGINT");
+  const onSigterm = (): void => onSignal("SIGTERM");
+
   connection = connectToHost({
     hostUrl: options.hostUrl,
     token: options.token,
-    workerId: id,
+    enrollment,
     name,
     capabilities,
     activeLeases: () => [...claimedLeases.values()],
     unacknowledged: () => [...unacknowledgedCompletions.values()],
+    // The pairing token was just redeemed for this credential, and this is
+    // the only copy of it that exists: everything the connection does next
+    // waits on this write landing.
+    onEnrolled: (record) => saveEnrollment(record),
+    onState: (state: WorkerState) => {
+      const next = state === "draining";
+      // The state arrives on every registration and heartbeat-ack too, so only
+      // an actual change is worth a line. The first report is not a change: it
+      // is what the host already thought of this worker, and it only deserves
+      // a line when it is "draining", which would otherwise silently explain
+      // why nothing is ever dispatched here.
+      const first = !stateReported;
+      stateReported = true;
+      if (!first && next === draining) return;
+      draining = next;
+      if (first) {
+        if (next) console.log("[brevi] the host has this worker draining: it accepts no new dispatches until re-enabled");
+        return;
+      }
+      console.log(
+        next
+          ? "[brevi] the host set this worker to draining: finishing the runs in flight, accepting no new dispatches"
+          : "[brevi] the host set this worker back to active: accepting dispatches again",
+      );
+    },
+    onRevoked: (reason) => {
+      if (shuttingDown) return;
+      void (async () => {
+        // The credential is dead on the host, so keeping it would only mean
+        // being refused on every later start. Forget it first, then stop the
+        // same way a SIGTERM would, so in-flight sandboxes still come down.
+        await clearEnrollment().catch((error: unknown) => {
+          console.error(`[brevi] could not remove the stored credential: ${errorMessage(error)}`);
+        });
+        shutdown(
+          new Error(
+            `this worker's enrollment was revoked by the host (${reason}). Enroll this machine again with a fresh pairing token from Configuration > Workers.`,
+          ),
+        );
+      })();
+    },
   });
 
   attachSessions = createAttachSessions({
@@ -380,7 +525,9 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
         void handleDiscard(message);
         return;
       case "heartbeat-ack":
-        return; // liveness only; nothing to react to
+        return; // liveness (and this worker's state, applied in connection.ts); nothing else to react to
+      case "worker-state":
+        return; // applied in connection.ts, via onState
       case "attach-open":
         void attachSessions.open(message);
         return;
@@ -393,67 +540,22 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
       case "attach-close":
         attachSessions.close(message.attachId);
         return;
-      // registered/rejected are handled inside connection.ts itself.
+      // registered/rejected/revoked are handled inside connection.ts itself.
       default:
         return;
     }
   });
 
-  console.log(`[brevi] connecting to ${options.hostUrl} as worker "${name}"...`);
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
 
-  await new Promise<void>((resolve) => {
-    const shutdown = (signal: NodeJS.Signals): void => {
-      if (shuttingDown) {
-        // An operator hitting Ctrl-C twice wants out now, not a status
-        // update; a hung sandbox teardown must never be able to trap them.
-        console.log(`[brevi] received ${signal} again; exiting immediately`);
-        process.exit(1);
-      }
-      shuttingDown = true;
-      console.log(`[brevi] received ${signal}, shutting down...`);
-      void (async () => {
-        // Ordering matters here, in this order, because it is the difference
-        // between a clean stop and orphaned microVMs:
-        //   1. stop accepting dispatches (done above, via shuttingDown)
-        //   2. abort every active run, so its sandbox and agent child
-        //      process are actually told to stop instead of being abandoned
-        //   3. await those executions, bounded by a deadline, so their
-        //      terminal reporting (patches plus run-complete) is produced
-        //      and hits the connection's outbound queue
-        //   4. wait for that queue to actually drain to the socket
-        //   5. only now close attach sessions and the connection
-        // Closing the socket before step 4 would drop a run's final
-        // run-complete on the floor forever (the host has no idea the run
-        // ended); destroying sandboxes before step 2 or skipping the wait in
-        // step 3 leaves Firecracker VMs (or process-provider children)
-        // running with nothing left to report their exit.
-        for (const active of activeRuns.values()) active.abort.abort();
-        const deadline = Date.now() + SHUTDOWN_DEADLINE_MS;
-        const executions = [...activeRuns.values()].map((active) => active.execution);
-        const settled = await withDeadline(Promise.allSettled(executions), deadline - Date.now());
-        if (settled === "timeout") {
-          console.error(
-            `[brevi] shutdown deadline (${SHUTDOWN_DEADLINE_MS}ms) reached with ${activeRuns.size} run(s) still finishing; giving up on a clean stop`,
-          );
-        }
-        const drained = await connection.drain(Math.max(0, deadline - Date.now()));
-        if (!drained) {
-          console.error(
-            `[brevi] outbound connection did not drain before the shutdown deadline (${connection.pendingCount()} message(s) still queued); some final reporting may not have reached the host`,
-          );
-        }
-        attachSessions.closeAll();
-        connection.close();
-        process.off("SIGINT", onSigint);
-        process.off("SIGTERM", onSigterm);
-        resolve();
-      })();
-    };
-    const onSigint = (): void => shutdown("SIGINT");
-    const onSigterm = (): void => shutdown("SIGTERM");
-    process.on("SIGINT", onSigint);
-    process.on("SIGTERM", onSigterm);
-  });
+  console.log(
+    enrollment
+      ? `[brevi] connecting to ${options.hostUrl} as worker "${name}"...`
+      : `[brevi] enrolling with ${options.hostUrl} as worker "${name}"...`,
+  );
+
+  await stopped;
 }
 
 /**

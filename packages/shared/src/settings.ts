@@ -25,10 +25,10 @@ export const CONFIG_DEFAULTS: BreviConfig = configSchema.parse({});
  * round-trip over a live secret. `linear.tokenExpiresAt` is not itself secret,
  * it is refused because the OAuth flow maintains it.
  *
- * `connect.linearClientSecret` and `fleet.token` are deliberately absent: they
- * are write-only form fields, guarded by MASKED_SECRET below rather than
- * frozen. Both are masked in every read all the same, so neither can be read
- * back out of the unauthenticated config channels.
+ * `connect.linearClientSecret` is deliberately absent: it is a write-only form
+ * field, guarded by MASKED_SECRET below rather than frozen. It is masked in
+ * every read all the same, so it cannot be read back out of the
+ * unauthenticated config channels.
  */
 export const SETTINGS_SECRET_PATHS = [
   "linear.apiKey",
@@ -45,12 +45,19 @@ export const SETTINGS_SECRET_PATHS = [
 export const MASKED_SECRET = "***";
 
 /**
- * Fields the process binds once at startup: the HTTP listener's address, and
- * the sandbox provider, which is created (and preflighted) during `start()`.
+ * Fields the process binds once at startup: the dashboard listener's address
+ * and port, the fleet (worker channel) listener's address and port, and the
+ * sandbox provider, which is created (and preflighted) during `start()`.
  * Everything else in the config is read per run or per poll, so it reaches the
  * next run without a restart.
  */
-export const SETTINGS_RESTART_PATHS = ["server.port", "server.host", "sandbox.provider"];
+export const SETTINGS_RESTART_PATHS = [
+  "server.port",
+  "server.host",
+  "fleet.host",
+  "fleet.port",
+  "sandbox.provider",
+];
 
 /** Whether a saved patch took effect immediately or waits for a restart. */
 export type SettingsApplied = "live" | "restart";

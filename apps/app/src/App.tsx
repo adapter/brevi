@@ -21,10 +21,10 @@ export default function App() {
     conn,
     runs,
     tickets,
-    workers,
     config,
     linearStatus,
     health,
+    workers,
     events,
     busy,
     notice,
@@ -40,6 +40,7 @@ export default function App() {
     followUpRun,
     dismissNotice,
     applyConfig,
+    applyWorkers,
   } = useOrchestrator();
 
   const anyActive = useMemo(() => runs.some((r) => isActive(r.status)), [runs]);
@@ -159,6 +160,7 @@ export default function App() {
               section={page.slice("config:".length) as ConfigSection}
               onSection={openConfig}
               onConfig={applyConfig}
+              onWorkers={applyWorkers}
             />
           )}
         </div>

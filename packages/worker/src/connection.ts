@@ -5,11 +5,16 @@ import {
   WORKER_PROTOCOL_VERSION,
   WORKER_WS_PATH,
   type HostMessage,
+  type RegisteredMessage,
   type RegisterMessage,
   type RunLease,
+  type WorkerAuth,
   type WorkerCapabilities,
+  type WorkerDenyReason,
   type WorkerMessage,
+  type WorkerState,
 } from "@brevi/shared";
+import { clearEnrollment, type WorkerEnrollment } from "./identity.js";
 
 /** First reconnect delay; doubles on every failed attempt up to WORKER_BACKOFF_MAX_MS. */
 const WORKER_BACKOFF_INITIAL_MS = 1_000;
@@ -20,8 +25,14 @@ const OUTBOUND_QUEUE_LIMIT = 10_000;
 export interface WorkerConnectionOptions {
   /** The host's base url (http(s)://...); ws(s):// and WORKER_WS_PATH are derived from it. */
   hostUrl: string;
-  token: string;
-  workerId: string;
+  /**
+   * A single-use pairing token (`brevi worker --token`), minted on the host's
+   * Workers page. Only needed to enroll: for the first connection from this
+   * machine, or to re-enroll one whose credential the host no longer honours.
+   */
+  token?: string;
+  /** What an earlier enrollment on this host left behind; absent until this machine has redeemed a pairing token. */
+  enrollment?: WorkerEnrollment;
   name: string;
   capabilities: WorkerCapabilities;
   /** Evaluated fresh on every register and heartbeat: the leases this worker still believes it owns. */
@@ -35,6 +46,17 @@ export interface WorkerConnectionOptions {
    * already settled, and acks a lease it no longer knows about.
    */
   unacknowledged?: () => WorkerMessage[];
+  /**
+   * A durable credential just arrived, meaning enrollment succeeded: persist
+   * it. Awaited before this connection does anything else with the frame that
+   * carried it, because it is the only copy that will ever exist (the host
+   * keeps a hash) and the pairing token that bought it is already spent.
+   */
+  onEnrolled?: (record: WorkerEnrollment) => void | Promise<void>;
+  /** The operator's state for this worker: from `registered`, from every heartbeat-ack, and pushed the moment a drain or an enable happens. */
+  onState?: (state: WorkerState) => void;
+  /** This enrollment was killed on the host. The credential is dead, so there is nothing to reconnect with and the daemon stops for good. */
+  onRevoked?: (reason: string) => void;
 }
 
 export interface WorkerConnection {
@@ -52,6 +74,10 @@ function toWsUrl(hostUrl: string): string {
   const url = new URL(WORKER_WS_PATH, hostUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Up to 30% extra on top of the base delay, so a fleet reconnecting together doesn't hammer the host in lockstep. */
@@ -76,13 +102,40 @@ function withJitter(baseMs: number): number {
  * is bounded: once full, the oldest `run-event` frame is dropped first
  * (cheapest to lose; a status/patch/complete frame still gets through), and
  * that is noted on the console once, not on every drop.
+ *
+ * Every connection also carries an auth envelope, and this is where a
+ * machine's enrollment happens: a supplied pairing token is redeemed once for
+ * a durable credential (delivered on the `registered` frame that answers it),
+ * and every connection after that presents the credential instead. Which of
+ * the two is used is decided per attempt, so a token the host refuses can
+ * fall back to a stored credential on the next one.
  */
 export function connectToHost(options: WorkerConnectionOptions): WorkerConnection {
-  const { hostUrl, token, workerId, name, capabilities, activeLeases, unacknowledged } = options;
+  const { hostUrl, name, capabilities, activeLeases, unacknowledged } = options;
   const wsUrl = toWsUrl(hostUrl);
+
+  // A supplied token wins over a stored credential on the first attempt, even
+  // when both exist: an operator who pastes a freshly minted --token is doing
+  // so because they believe the stored one no longer works, and that is how a
+  // machine whose enrollment was revoked re-enrolls in a single command. It is
+  // dropped once it has been redeemed (or refused), so a reconnect never
+  // replays a token that is by then spent.
+  let pairingToken = options.token;
+  let enrollment = options.enrollment;
+  if (!pairingToken && !enrollment) {
+    // Nothing to authenticate with at all: retrying forever would only produce
+    // rejections, so this is fatal before a socket is ever opened.
+    throw new Error(
+      `This machine is not enrolled with ${hostUrl} and no --token was given. Mint a pairing token on that host (Configuration > Workers, "Add a worker") and pass it with --token.`,
+    );
+  }
+  // The id the host assigned this worker, adopted from `registered`; a worker
+  // never picks its own (see identity.ts).
+  let workerId = enrollment?.workerId;
 
   let socket: WebSocket | undefined;
   let closed = false;
+  let revoked = false;
   let registered = false;
   let backoffMs = WORKER_BACKOFF_INITIAL_MS;
   let heartbeatTimer: NodeJS.Timeout | undefined;
@@ -152,6 +205,118 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
     reconnectTimer.unref?.();
   };
 
+  /** What this attempt presents itself with; undefined only if both the token and the credential are gone, which connectToHost's guard above rules out. */
+  const authFor = (): WorkerAuth | undefined => {
+    if (pairingToken) return { kind: "pairing", token: pairingToken };
+    if (enrollment) return { kind: "credential", workerId: enrollment.workerId, secret: enrollment.credential };
+    return undefined;
+  };
+
+  /** Refuses to retry: a rejection of this kind cannot fix itself, so the process manager (or the operator) decides what happens next rather than a backoff loop hiding it. */
+  const fatal = (reason: string): never => {
+    console.error(`[brevi] ${reason}`);
+    closed = true;
+    stopHeartbeat();
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    socket?.close();
+    return process.exit(1);
+  };
+
+  /**
+   * A successful registration, and the one place enrollment can complete: a
+   * `credential` on this frame means the pairing token was just redeemed for
+   * it, and this is the only copy of it that will ever exist (the host keeps
+   * a hash). Storing it therefore happens before anything else this frame
+   * triggers, which is what the async body is for: the token is spent either
+   * way, so a crash in between would cost the operator a new one.
+   */
+  const onRegistered = async (message: RegisteredMessage): Promise<void> => {
+    if (message.credential) {
+      const record: WorkerEnrollment = { workerId: message.workerId, credential: message.credential, host: hostUrl };
+      enrollment = record;
+      try {
+        await options.onEnrolled?.(record);
+        console.log(`[brevi] enrolled with ${hostUrl} as worker "${message.name}" (${message.workerId})`);
+      } catch (error) {
+        // Not fatal: this connection is authenticated and can execute runs
+        // fine. Only the next start is affected, so it is worth saying now
+        // rather than discovering it at the next boot.
+        console.error(
+          `[brevi] could not store this worker's credential: ${errorMessage(error)}. This session keeps working, but the next start will need a fresh pairing token.`,
+        );
+      }
+    }
+    // The id is the host's to assign, always: whatever it enrolled this
+    // worker under is what this connection is, not what the worker guessed.
+    workerId = message.workerId;
+    // Redeemed, so a reconnect must not replay it; a token is single-use and
+    // presenting a spent one would be refused.
+    pairingToken = undefined;
+    registered = true;
+    loggedDisconnect = false;
+    loggedDrop = false;
+    loggedUnregistered = false;
+    backoffMs = WORKER_BACKOFF_INITIAL_MS;
+    console.log(
+      `[brevi] registered with ${hostUrl} as worker "${message.name}" (${workerId}, host ${message.hostVersion})`,
+    );
+    startHeartbeat();
+    // Requeued behind anything already waiting, so a replayed completion
+    // still trails the frames that were reported before it. A frame still
+    // sitting in the queue was never handed to a socket and needs no
+    // replay: enqueueing it again would flush both copies before either
+    // could be acknowledged, and the host would complete the lease twice.
+    for (const pending of unacknowledged?.() ?? []) {
+      if (!queue.includes(pending)) enqueue(pending);
+    }
+    flush();
+    options.onState?.(message.state);
+  };
+
+  /**
+   * The host refused this registration. What happens next is decided by
+   * `code`, never by the prose in `reason`: a pairing token worth falling
+   * back from is a different situation from an enrollment that is gone.
+   */
+  const onRejected = (code: WorkerDenyReason, reason: string): void => {
+    stopHeartbeat();
+    if (code === "invalid-token" || code === "expired-token") {
+      if (enrollment) {
+        // The token is stale, mistyped, or already redeemed, but this machine
+        // still holds a credential from an earlier enrollment here. Drop the
+        // token and let the reconnect that this rejection's close schedules
+        // present the credential instead of quitting with a dead token.
+        console.error(
+          `[brevi] the host did not accept the pairing token (${reason}); reconnecting with this machine's stored credential instead`,
+        );
+        pairingToken = undefined;
+        return;
+      }
+      fatal(
+        `the host did not accept the pairing token: ${reason}. Mint a fresh one on the host (Configuration > Workers) and pass it with --token.`,
+      );
+      return;
+    }
+    if (code === "unauthorized") {
+      // The credential this machine holds is dead: every later start would
+      // fail in exactly this way, so forget it rather than keep a rejection
+      // loop alive, and say what actually fixes it.
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      void clearEnrollment()
+        .catch((error: unknown) => console.error(`[brevi] could not remove the stored credential: ${errorMessage(error)}`))
+        .finally(() =>
+          fatal(
+            `this worker's enrollment is no longer valid: ${reason}. Enroll this machine again with a fresh pairing token (Configuration > Workers on the host).`,
+          ),
+        );
+      return;
+    }
+    // "protocol" and "malformed": a version or a frame the host will not
+    // accept from this build, which retrying cannot change.
+    fatal(`the host rejected this worker: ${reason}`);
+  };
+
   const connect = (): void => {
     if (closed) return;
     const ws = new WebSocket(wsUrl);
@@ -160,12 +325,23 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
 
     ws.on("open", () => {
       opened = true;
+      // Decided per attempt, not once: the enrollment state can have changed
+      // since the last one (a token redeemed into a credential, a token the
+      // host refused while a usable credential is still on disk).
+      const auth = authFor();
+      if (!auth) {
+        // Unreachable by construction (connectToHost throws when it starts
+        // with neither, and a token is only dropped when a credential can take
+        // over), but reconnecting forever with nothing to present would be
+        // pure noise if it ever happened.
+        fatal(`nothing left to authenticate with against ${hostUrl}; enroll again with a fresh pairing token`);
+        return;
+      }
       const register: RegisterMessage = {
         type: "register",
         protocolVersion: WORKER_PROTOCOL_VERSION,
-        workerId,
+        auth,
         name,
-        token,
         capabilities,
         activeLeases: activeLeases(),
       };
@@ -183,35 +359,29 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
       if (!message) return;
 
       if (message.type === "registered") {
-        registered = true;
-        loggedDisconnect = false;
-        loggedDrop = false;
-        loggedUnregistered = false;
-        backoffMs = WORKER_BACKOFF_INITIAL_MS;
-        console.log(`[brevi] registered with ${hostUrl} as worker "${name}" (host ${message.hostVersion})`);
-        startHeartbeat();
-        // Requeued behind anything already waiting, so a replayed completion
-        // still trails the frames that were reported before it. A frame still
-        // sitting in the queue was never handed to a socket and needs no
-        // replay: enqueueing it again would flush both copies before either
-        // could be acknowledged, and the host would complete the lease twice.
-        for (const message of unacknowledged?.() ?? []) {
-          if (!queue.includes(message)) enqueue(message);
-        }
-        flush();
+        void onRegistered(message);
         return;
       }
       if (message.type === "rejected") {
-        // A bad pairing token (or a protocol mismatch) will not fix itself
-        // by retrying: fail loudly and let the process manager (or the
-        // operator) decide what to do, rather than backing off forever.
-        console.error(`[brevi] the host rejected this worker: ${message.reason}`);
+        onRejected(message.code, message.reason);
+        return;
+      }
+      if (message.type === "revoked") {
+        // The credential behind this connection is gone on the host, so
+        // reconnecting with it would only be refused: stop for good, and let
+        // the daemon shut down whatever it is still running.
+        console.error(`[brevi] the host revoked this worker's enrollment: ${message.reason}`);
+        revoked = true;
         closed = true;
         stopHeartbeat();
         if (reconnectTimer) clearTimeout(reconnectTimer);
-        ws.close();
-        process.exit(1);
+        options.onRevoked?.(message.reason);
+        return;
       }
+      // Both carry the operator's state for this worker: the ack so a drain
+      // still reaches a worker that missed the push, the push so it takes
+      // effect at once rather than at the next heartbeat.
+      if (message.type === "heartbeat-ack" || message.type === "worker-state") options.onState?.(message.state);
       handler(message);
     });
 
@@ -264,7 +434,10 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
       // only sends once registered); the caller decides what to do with a
       // `false` return rather than this waiting forever.
       const deadline = Date.now() + Math.max(0, timeoutMs);
-      while (queue.length > 0 && Date.now() < deadline) {
+      // A revoked worker has nothing left to flush to: the host closed the
+      // socket and would refuse anything this worker still sends, so waiting
+      // the deadline out would only delay the shutdown by the full timeout.
+      while (queue.length > 0 && !revoked && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       return queue.length === 0;

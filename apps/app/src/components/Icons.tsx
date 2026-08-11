@@ -217,6 +217,14 @@ export const Eye = (p: IconProps) => (
   </Svg>
 );
 
+/** Pencil: rename affordance. */
+export const Edit = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M11.1 2.7a1.6 1.6 0 0 1 2.2 2.2L5.5 12.7l-3 .8.8-3z" />
+    <path d="M9.6 4.2 11.8 6.4" />
+  </Svg>
+);
+
 export const Gear = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="8" cy="8" r="2.1" />

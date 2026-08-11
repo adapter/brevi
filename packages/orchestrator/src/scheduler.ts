@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { watch, type FSWatcher } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { networkInterfaces } from "node:os";
 import { basename, dirname } from "node:path";
 import type { WebSocket } from "ws";
 import {
@@ -24,11 +24,12 @@ import {
   type CredentialsUpdateResponse,
   type DevicePollResponse,
   type DispatchPrompts,
-  type FleetPairingResponse,
+  type FleetResponse,
   type GithubRepo,
   type LinearProject,
   type LinearStatus,
   type MemoriesResponse,
+  type PairingTokenResponse,
   type PrState,
   type PrStatusResponse,
   type ConfigPatch,
@@ -39,7 +40,8 @@ import {
   type RunEvent,
   type SettingsUpdateResponse,
   type Ticket,
-  type WorkerSummary,
+  type WorkerState,
+  type WorkerView,
   urlHost,
 } from "@brevi/shared";
 import { saveConfig, serializeConfig } from "./config.js";
@@ -68,6 +70,7 @@ import {
   validateGithubToken,
   validateLinearApiKey,
 } from "./credentials.js";
+import { FleetStore, sanitizeWorkerName } from "./fleet.js";
 import { fetchPrStatus, fetchPullRequestState, listRepos } from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
 import { isLinearAuthError, LinearService, type LinearAuthHooks } from "./linear.js";
@@ -98,7 +101,7 @@ interface OrchestratorEvents {
   tickets: [Ticket[]];
   config: [BreviConfig];
   "linear-status": [LinearStatus];
-  workers: [WorkerSummary[]];
+  workers: [WorkerView[]];
 }
 
 /**
@@ -124,6 +127,48 @@ const PR_POLL_RECENT_RUNS = 20;
 const REAP_RETRY_MS = 60_000;
 /** How long config.json has to stay untouched before a hand edit is reloaded. */
 const CONFIG_RELOAD_DEBOUNCE_MS = 250;
+
+/**
+ * The host's first non-internal IPv4, for the pairing command printed when
+ * the listener that will receive the worker's connection binds a wildcard
+ * address ("0.0.0.0", "::", ...): a worker on another machine can't dial that
+ * address directly and reach anything, so a concrete LAN address is guessed
+ * instead. Best-effort; a machine with no such interface (unusual, but
+ * possible in a container) falls back to localhost, same as if this returned
+ * nothing.
+ */
+function guessLanAddress(): string | null {
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === "IPv4" && !entry.internal) return entry.address;
+    }
+  }
+  return null;
+}
+
+/** Bind addresses that mean "every interface"; see dialableHost. */
+const WILDCARD_BIND_ADDRESSES = ["0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"];
+
+/**
+ * Map a listener's bind address to the host worth printing in the pairing
+ * command, and whether that host is actually reachable from another machine.
+ * A wildcard bind accepts connections from the network, but a worker can't
+ * dial the wildcard address itself, so a LAN address is guessed and, when
+ * found, is genuinely reachable. A loopback-only bind accepts nothing but
+ * this machine, so "localhost" is printed and marked unreachable rather than
+ * inventing an address nothing will answer on. Anything else (a real
+ * hostname or IP the operator set) is already dialable and used as-is;
+ * urlHost is reused here for that case and for the loopback mapping so the
+ * bracket-a-bare-IPv6-literal rule lives in one place.
+ */
+function dialableHost(bindHost: string): { host: string; remote: boolean } {
+  if (WILDCARD_BIND_ADDRESSES.includes(bindHost)) {
+    const lan = guessLanAddress();
+    return lan ? { host: lan, remote: true } : { host: "localhost", remote: false };
+  }
+  const mapped = urlHost(bindHost);
+  return { host: mapped, remote: mapped !== "localhost" };
+}
 
 /**
  * Copy `source` onto `target` field by field, recursing into plain objects
@@ -189,6 +234,17 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   readonly config: BreviConfig;
   /** What brevi has learned about each repo, carried across sandboxes. */
   readonly memories: MemoryStore;
+  /** Who is enrolled as a worker of this host, and the credentials that prove it. */
+  readonly fleet: FleetStore;
+
+  /**
+   * What the worker channel's own listener actually bound (see
+   * startFleetListener in server.ts), or undefined when config.fleet.host is
+   * empty and no such listener exists. Set once at startup via
+   * setFleetEndpoint; mintPairingToken prefers it over the dashboard listener
+   * because it's the address a worker is meant to dial.
+   */
+  #fleetEndpoint?: { host: string; port: number };
 
   #configPath: string;
   #linear?: LinearService;
@@ -261,11 +317,13 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     store: RunStore = new RunStore(),
     configPath?: string,
     memories: MemoryStore = new MemoryStore(),
+    fleet: FleetStore = new FleetStore(),
   ) {
     super();
     this.config = config;
     this.store = store;
     this.memories = memories;
+    this.fleet = fleet;
     this.#configPath = configPath ?? CONFIG_PATH;
     if (config.linear.apiKey) this.#linear = new LinearService(config, this.#linearAuth);
   }
@@ -274,10 +332,17 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    * What the fleet actually runs on, for the dashboard's health chip: the
    * single provider every connected worker reports, "mixed" when they
    * disagree, "none" when nothing is connected. The host itself never picks
-   * a provider, each worker resolves its own.
+   * a provider, each worker resolves its own. Only connected workers count,
+   * since this describes what the fleet can run right now, not what an
+   * enrolled machine reported the last time it was up.
    */
   get providerName(): string {
-    const providers = new Set((this.#workers?.list() ?? []).map((worker) => worker.provider));
+    const providers = new Set(
+      (this.#workers?.list() ?? [])
+        .filter((worker) => worker.connection === "online")
+        .map((worker) => worker.capabilities?.provider)
+        .filter((provider): provider is NonNullable<typeof provider> => provider !== undefined),
+    );
     if (providers.size === 0) return "none";
     if (providers.size > 1) return "mixed";
     return [...providers][0]!;
@@ -291,8 +356,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return this.store.list();
   }
 
-  /** Every connected worker, for the dashboard's fleet panel. */
-  listWorkers(): WorkerSummary[] {
+  /** Every enrolled worker, merged with its live connection state, for the Workers page. */
+  listWorkers(): WorkerView[] {
     return this.#workers?.list() ?? [];
   }
 
@@ -302,12 +367,74 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    * register with (there is no registry yet), so it is terminated outright
    * rather than buffered for later.
    */
-  acceptWorkerSocket(socket: WebSocket): void {
+  acceptWorkerSocket(socket: WebSocket, address?: string): void {
     if (!this.#workers) {
       socket.terminate();
       return;
     }
-    this.#workers.accept(socket);
+    this.#workers.accept(socket, address);
+  }
+
+  /**
+   * Tell the orchestrator what the worker channel's own listener actually
+   * bound (or that none did), so mintPairingToken can name an address that is
+   * genuinely listening. Called once by startOrchestrator after the listener
+   * binds (with the real bound port, the way the dashboard port already
+   * works).
+   */
+  setFleetEndpoint(endpoint: { host: string; port: number } | null): void {
+    this.#fleetEndpoint = endpoint ?? undefined;
+  }
+
+  /**
+   * Mint a pairing token and the ready-to-copy `brevi worker` command for it.
+   * `serverUrl` is the dashboard address the caller actually bound, not
+   * `config.server.port`: the configured port only takes effect on restart
+   * and may not be what anything is listening on. The fleet listener is
+   * preferred when one is bound, since that's the channel a worker on another
+   * machine is meant to dial; the dashboard listener is the fallback, which
+   * serves the same worker path for a worker on this machine.
+   */
+  mintPairingToken(serverUrl: string): PairingTokenResponse {
+    if (!this.#workers) throw new OrchestratorError("conflict", "the orchestrator is not running yet");
+    const { token, expiresAt } = this.#workers.mintPairingToken();
+    const { host: dialHost, port, remote } = this.#pairingEndpoint(serverUrl);
+    const host = `http://${dialHost}:${port}`;
+    return { token, expiresAt, command: `brevi worker --host ${host} --token ${token}`, host, remote };
+  }
+
+  /**
+   * Bind address and port to print in the pairing command, mapped through
+   * dialableHost so the result is something a worker can actually dial (or
+   * honestly marked as not remote-reachable when it can't be).
+   */
+  #pairingEndpoint(serverUrl: string): { host: string; port: number; remote: boolean } {
+    if (this.#fleetEndpoint) {
+      const { host, remote } = dialableHost(this.#fleetEndpoint.host);
+      return { host, port: this.#fleetEndpoint.port, remote };
+    }
+    const port = Number(new URL(serverUrl).port) || this.config.server.port;
+    const { host, remote } = dialableHost(this.config.server.host);
+    return { host, port, remote };
+  }
+
+  async renameWorker(id: string, name: string): Promise<FleetResponse> {
+    const clean = sanitizeWorkerName(name);
+    if (!clean) throw new OrchestratorError("invalid", "worker name must not be empty");
+    if (!(await this.#workers?.rename(id, clean))) throw new OrchestratorError("not-found", `no worker ${id}`);
+    return { workers: this.listWorkers() };
+  }
+
+  /** Drain finishes in-flight runs and accepts nothing new; enable puts a drained worker back in rotation. */
+  async setWorkerState(id: string, state: WorkerState): Promise<FleetResponse> {
+    if (!(await this.#workers?.setState(id, state))) throw new OrchestratorError("not-found", `no worker ${id}`);
+    return { workers: this.listWorkers() };
+  }
+
+  /** Revoke: the credential dies and the worker is disconnected at once. */
+  async revokeWorker(id: string): Promise<FleetResponse> {
+    if (!(await this.#workers?.revoke(id))) throw new OrchestratorError("not-found", `no worker ${id}`);
+    return { workers: this.listWorkers() };
   }
 
   /**
@@ -318,20 +445,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    */
   openRunAttach(runId: string, options: AttachSessionOptions): AttachSession | undefined {
     return this.#workers?.openAttach(runId, options);
-  }
-
-  /**
-   * The pairing token in the clear, plus the ready-to-paste `brevi worker`
-   * command using it. Only ever called from the loopback-only pairing
-   * route: the token is masked everywhere else config reaches the network
-   * (see redactConfig), since holding it is enough to register as a worker
-   * and receive every credential a dispatched run carries.
-   */
-  fleetPairing(hostUrl: string): FleetPairingResponse {
-    return {
-      token: this.config.fleet.token,
-      command: `brevi worker --host ${hostUrl} --token ${this.config.fleet.token}`,
-    };
   }
 
   getRun(id: string): Run | undefined {
@@ -375,22 +488,16 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   async start(): Promise<void> {
     await this.store.init();
     await this.memories.init();
+    // Enrollment is durable state, not config: which machines may execute
+    // this host's runs is loaded from ~/.brevi/fleet.json before the registry
+    // that authenticates against it exists.
+    await this.fleet.init();
 
-    // A pairing token is how a worker proves it's allowed to execute this
-    // host's runs; generate one on first boot rather than shipping a default
-    // every install would share.
-    if (!this.config.fleet.token) {
-      this.config.fleet.token = randomUUID();
-      await this.#persistConfig();
-      console.log(
-        `[brevi] generated a fleet pairing token; connect a worker with:\n` +
-          `  brevi worker --host http://${urlHost(this.config.server.host)}:${this.config.server.port} --token ${this.config.fleet.token}`,
-      );
-    }
     this.#workers = new WorkerRegistry({
       config: this.config,
       store: this.store,
       memories: this.memories,
+      fleet: this.fleet,
       onRunSettled: (runId) => this.#onRunSettled(runId),
       onRunRejected: (runId, reason, kind) => this.#onRunRejected(runId, reason, kind),
     });
@@ -887,13 +994,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     // would silently overwrite a live secret with three asterisks.
     if (readConfigPath(patch, "connect.linearClientSecret") === MASKED_SECRET) {
       throw new OrchestratorError("invalid", "connect.linearClientSecret: replace it or leave it alone");
-    }
-    // fleet.token is masked in every redacted config the dashboard reads (see
-    // redactConfig), so it has the exact same round-trip hazard: a settings
-    // form that never touched the pairing token must not be able to stamp
-    // the mask over the live one.
-    if (readConfigPath(patch, "fleet.token") === MASKED_SECRET) {
-      throw new OrchestratorError("invalid", "fleet.token: replace it or leave it alone");
     }
 
     return this.#transact(async () => {

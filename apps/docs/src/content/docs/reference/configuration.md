@@ -16,14 +16,15 @@ Every field on this page is editable from the dashboard's Configuration page, at
 | Connectors | Connect/Disconnect per provider, `linear.teamKeys`, `github.prDescription`, `r2` |
 | Repositories | `repos`, `defaultRepo` |
 | Agent | `agent` (models, effort, command, args, Codex review) |
-| Sandbox | `sandbox`, including the Firecracker fields, and `fleet` |
+| Sandbox | `sandbox`, including the Firecracker fields |
+| Workers | `fleet`, plus the enrolled workers themselves |
 | Memory | `memory`, plus the stored memories themselves |
 | Orchestrator | `trigger`, `pollIntervalSeconds`, `restart` |
 | Server | `server`, `connect` |
 
 Each card is saved explicitly, and a save sends only the fields on that card: nothing else in the file is rewritten, so two tabs (or a tab and your editor) cannot clobber each other. Fields with a non-empty default show it as placeholder text and offer a reset once the value differs from it. Invalid input is rejected with the same message the schema would produce, and the file on disk is never left invalid: it is validated in full, then replaced atomically (and left readable only by you).
 
-Almost everything applies to the next run without a restart. Three fields are read once at startup and are marked with a **restart** badge in the UI: `server.port`, `server.host`, and `sandbox.provider`.
+Almost everything applies to the next run without a restart. Five fields are read once at startup and are marked with a **restart** badge in the UI: `server.port`, `server.host`, `fleet.host`, `fleet.port`, and `sandbox.provider`.
 
 Two groups of fields are deliberately not editable there:
 
@@ -71,7 +72,8 @@ A freshly initialised config, with every default filled in:
     "retentionHours": 24
   },
   "fleet": {
-    "token": "",
+    "host": "",
+    "port": 4410,
     "heartbeatTimeoutSeconds": 45,
     "reconnectGraceSeconds": 120
   },
@@ -249,13 +251,18 @@ A config file from before size presets that sets only one of `vcpus`/`memMib` (a
 
 The fleet is the pool of `brevi worker` daemons that dial into this host and execute runs. The host itself is a pure scheduler: it holds the run store, polls Linear, and opens PRs, but every run's sandbox lives on a connected worker, never on the host process itself.
 
+Which machines are enrolled is not configured here. Workers are runtime state, kept in `~/.brevi/fleet.json` (mode `0600`), and their credentials are minted rather than written by hand: a machine enrolls by redeeming a single-use pairing token from the dashboard's Workers page, and the host stores only the sha256 of the durable credential that token buys. This section holds nothing secret; see [Workers](/reference/api/#workers) for enrolling, renaming, draining and revoking them.
+
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `token` | string | `""` | Shared pairing token workers present with `brevi worker --host <url> --token <token>`. Generated on first start when empty. |
+| `host` | string | `""` | Bind address for the worker channel's own listener. Empty (the default) means that listener is off, so only a worker on this same machine can enroll, over the dashboard listener's own `/ws/worker` upgrade. Set it, e.g. `"0.0.0.0"`, to let workers on other machines reach the channel. Read once at startup: **restart** required. |
+| `port` | integer 1-65535 | `4410` | That listener's port, deliberately separate from `server.port`. Read once at startup: **restart** required. |
 | `heartbeatTimeoutSeconds` | integer 30-600 | `45` | Seconds a connected worker may go silent before the host drops it and fails its in-flight runs. Workers heartbeat every 15 seconds, so the floor is two intervals: a timeout close to one interval lets ordinary jitter drop a healthy worker. |
 | `reconnectGraceSeconds` | integer 10-3600 | `120` | How long a worker that dropped mid-run has to reconnect and resume reporting before its runs are failed. |
 
-`fleet.token` is a secret like any other: masked in every API read, including the unauthenticated `GET /api/config` and the dashboard's WebSocket, because whoever holds it can register as a worker and receive dispatches carrying every credential a run needs. The dashboard's Fleet card is write-only for it, the same treatment `connect.linearClientSecret` gets. The token is readable in the clear only from the machine running brevi: directly in `~/.brevi/config.json`, or via `GET /api/fleet/pairing`, which answers only loopback callers (the machine's own dashboard) with the token and a ready-to-paste `brevi worker` command.
+The worker channel gets its own listener because the dashboard's does more than serve workers: `server.host` also carries the unauthenticated dashboard and management API, so exposing it to the network would let any reachable peer mint a pairing token and enroll a worker of its own. The worker channel authenticates (a single-use pairing token, then a durable per-worker credential), so it can safely bind wider without widening that API. The `fleet.host` listener serves nothing but `/ws/worker`; every other request on it gets a `404`. When it fails to bind (port in use, address unavailable), brevi logs it and keeps running without it, and workers on this machine can still enroll through the dashboard's own listener.
+
+The listener binds once at startup, so `host` and `port` need a restart; the two timing fields apply live. All four are editable from the dashboard's Workers page (Configuration > Workers), which is also where a pairing token is minted and the ready-to-copy `brevi worker` command is shown. See [Running on another machine](/guides/sandboxes/#running-on-another-machine) for enrolling a worker end to end.
 
 ## `connect`
 

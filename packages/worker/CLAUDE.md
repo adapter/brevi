@@ -5,16 +5,19 @@ The `brevi worker` daemon. Holds today's execution stack behind the dispatch pro
 ## Layout (src/)
 
 - `daemon.ts`: `runWorker()`, the entry point. Loads local config, resolves the sandbox provider, connects, and routes every host message (dispatch, cancel, discard, attach-*) to the right handler until SIGINT/SIGTERM
-- `connection.ts`: the outbound WebSocket client: register, heartbeat, exponential backoff with jitter on a drop, and a bounded outbound queue that flushes in order after the next successful registration
+- `connection.ts`: the outbound WebSocket client: enrollment (which auth envelope each attempt presents), register, heartbeat, exponential backoff with jitter on a drop, and a bounded outbound queue that flushes in order after the next successful registration
 - `reporter.ts`: `RunReporter`, a `RunSink` that mirrors every run mutation to the host as `run-patch`/`run-event`/`run-artifact` messages instead of writing to a local store
 - `sink.ts`: `RunSink`, the seam `runner.ts`/`followup.ts` were written against instead of the host's `RunStore` directly (see the doc comment there for why)
 - `attach.ts`: worker-side interactive sessions (`brevi attach`, the dashboard's web terminal): rehydrates a finished run's retained sandbox, reprovisions credentials, and bridges its PTY to the host over attach-* messages
-- `identity.ts`: a stable per-machine worker id (`~/.brevi/worker-id`), so a reconnect is recognised as the same worker
+- `identity.ts`: this machine's enrollment record (`~/.brevi/worker.json`, mode 0600): the id the host assigned it, the durable credential it earned, and the host that issued them
 - `runner.ts` / `followup.ts`: one run end to end (moved from `@brevi/orchestrator`, largely unchanged; see internal.ts in that package for what they still borrow from the host side)
 - `prompts.ts`, `limits.ts`-adjacent bits, `costs.ts`, `ccusage.ts`, `provision.ts`, `resume.ts`, `review.ts`: the rest of the execution stack, also moved from `@brevi/orchestrator`
 
 ## Gotchas
 
+- A worker does not invent its own id: `--token` carries a single-use pairing token, the host redeems it once and answers `registered` with the assigned id plus a durable credential, and `identity.ts` stores that in `~/.brevi/worker.json`. Every later connect presents the credential instead. A supplied token is always tried first, even when a credential is stored (that is how a revoked machine re-enrolls in one command), and falls back to the stored credential when the host answers `invalid-token`/`expired-token`. Branch on `rejected.code`, never on its prose.
+- Drain and revoke arrive over the channel, not from local config: `worker-state` (and every `heartbeat-ack`) carries the operator's state, so `draining` rejects new dispatches with `"worker is draining"` while runs already in flight finish and report normally, and `revoked` deletes the stored credential, runs the same graceful shutdown a SIGTERM does, and exits non-zero rather than reconnecting into a rejection loop.
+- The daemon survives a machine with no `~/.brevi/config.json` at all (a worker never has to run `brevi init`): `loadConfig` failing falls back to `CONFIG_DEFAULTS`, i.e. the process provider at concurrency 1. Sandbox settings still come only from the worker's own config, never from the dispatch.
 - The dependency with `@brevi/orchestrator` runs one way: this package imports node-side helpers (GitHub, Linear, R2, usage-limit and memory helpers) from `@brevi/orchestrator/internal`, but the orchestrator never imports `@brevi/worker` or `@brevi/sandbox`. `grep -rn "@brevi/sandbox" packages/orchestrator` must stay empty, which CI enforces.
 - `runner.ts`/`followup.ts` know nothing about sockets or leases: they only see a `RunSink`, the dispatch's prompt policy, and a couple of memory-recall callbacks on `RunContext`. All the wire-protocol plumbing lives in `reporter.ts` and `daemon.ts`, so the run pipeline itself reads the same whether it once ran on the host or now runs here.
 - A patch handed to `RunSink` stays domain-shaped: naming a field with an explicit `undefined` clears it, and `RunReporter` is what translates that into the wire's `null` (`sandbox` included, one level deeper). Nothing outside `reporter.ts` should know the `null` convention exists.

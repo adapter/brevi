@@ -14,8 +14,6 @@ There is no authentication: by default the server is loopback-only and anything 
 | `GET` | `/api/health` | `HealthResponse` |
 | `GET` | `/api/config` | Redacted `BreviConfig` |
 | `GET` | `/api/tickets` | `Ticket[]`: the current eligible queue |
-| `GET` | `/api/workers` | `WorkerSummary[]`: the connected worker fleet |
-| `GET` | `/api/fleet/pairing` | `FleetPairingResponse`, loopback callers only |
 | `GET` | `/api/runs` | `Run[]`, newest first |
 | `GET` | `/api/runs/:id` | `Run` |
 | `GET` | `/api/runs/:id/events` | `RunEvent[]`: full history |
@@ -28,7 +26,13 @@ There is no authentication: by default the server is loopback-only and anything 
 | `POST` | `/api/runs/:id/resume` | `ResumeRunResponse` |
 | `POST` | `/api/runs/:id/release` | `Run` |
 | `WS` | `/ws/runs/:id/attach` | Web-terminal bridge into the retained sandbox |
-| `WS` | `/ws/worker` | Where `brevi worker` daemons register and receive dispatches |
+| `WS` | `/ws/worker` | The worker channel: where `brevi worker` daemons enroll, register, and receive dispatches |
+| `GET` | `/api/workers` | `FleetResponse`: every enrolled worker |
+| `POST` | `/api/workers/pair` | `PairingTokenResponse` |
+| `POST` | `/api/workers/:id/rename` | `FleetResponse` |
+| `POST` | `/api/workers/:id/drain` | `FleetResponse` |
+| `POST` | `/api/workers/:id/enable` | `FleetResponse` |
+| `DELETE` | `/api/workers/:id` | `FleetResponse`: revoke the worker's enrollment |
 | `PUT` | `/api/settings/credentials` | `CredentialsUpdateResponse` |
 | `POST` | `/api/connect/:provider` | `ConnectResponse` |
 | `POST` | `/api/connect/github/poll` | `DevicePollResponse` |
@@ -134,13 +138,108 @@ type AttachClientMessage =
 
 Multiple clients (web terminals, `brevi attach` sessions) share one booted sandbox; it stops again when the last one disconnects.
 
-### Worker fleet
+### Workers
 
-Runs execute on `brevi worker` daemons, not on the host: the orchestrator is a pure scheduler. Each worker dials `WS /ws/worker` outbound and never accepts inbound connections, so a worker behind NAT needs no port open. The wire protocol is defined as zod schemas in `packages/shared/src/worker.ts` and is versioned (`WORKER_PROTOCOL_VERSION`); a worker on a different version is rejected on registration.
+Runs execute on `brevi worker` daemons, not on the host: the orchestrator is a pure scheduler and never boots a sandbox itself. A machine becomes one of this host's workers by redeeming a single-use pairing token, which buys it a durable per-worker credential; these endpoints are that fleet's management surface, and the dashboard's Workers page (Configuration > Workers, `/config/workers`) is built on them.
 
-A connection goes: `register` (pairing token, capabilities, and the leases the worker still believes it owns) answered by `registered` or `rejected`, then `heartbeat` on an interval, `dispatch` for each run the host hands over, a stream of `run-patch` / `run-event` / `run-artifact` / `run-memories` frames as the run executes, and finally `run-complete` carrying the whole terminal state, which the host answers with `run-complete-ack`. The worker keeps claiming a lease until that acknowledgement arrives, so a run that finished while the socket was down replays its completion on the next connection instead of being recorded as a disconnect failure. `cancel` and `discard` travel the other way, as does `attach-open` and the rest of the interactive-session relay behind the web terminal.
+`GET /api/workers` returns every enrolled worker, connected or not, oldest enrollment first:
 
-`GET /api/workers` returns what the dashboard shows for the fleet: one `WorkerSummary` per connected worker (provider, KVM, active runs against `maxConcurrency`, version, when it connected and when it was last seen).
+```ts
+interface FleetResponse {
+  workers: WorkerView[];
+}
+
+interface WorkerView {
+  id: string;               // assigned by the host at enrollment, e.g. "wk-3f9a1c22b0"
+  name: string;
+  state: "active" | "draining";
+  connection: "online" | "offline";
+  capabilities?: WorkerCapabilities;  // absent for a worker that has never connected
+  activeRuns: number;    // leases this worker holds right now
+  enrolledAt: string;
+  connectedAt?: string;  // when the current connection was established, absent while offline
+  lastSeenAt?: string;   // last register or heartbeat, absent until the first connect
+  address?: string;      // remote address of the live channel, when connected
+}
+
+interface WorkerCapabilities {
+  os: string;            // process.platform, e.g. "linux" or "darwin"
+  arch: string;          // process.arch, e.g. "x64" or "arm64"
+  provider: "firecracker" | "process";
+  kvm: boolean;          // /dev/kvm present and usable
+  maxConcurrency: number;  // dispatched runs this worker executes at once, 1 to 64
+  vmSizes: ("small" | "medium" | "large")[];  // empty for a process worker
+  version: string;       // brevi version running on the worker
+}
+```
+
+No credential material ever appears here: the host stores only the sha256 of each worker's credential (in `~/.brevi/fleet.json`, mode `0600`), and even that never leaves the process.
+
+`POST /api/workers/pair` mints a single-use pairing token and the ready-to-copy command that redeems it, good for `PAIRING_TOKEN_TTL_MINUTES` (15) minutes unless redeemed first:
+
+```json
+{
+  "token": "bwp_…",
+  "expiresAt": "2026-08-11T15:15:00.000Z",
+  "command": "brevi worker --host http://192.168.1.5:4410 --token bwp_…",
+  "host": "http://192.168.1.5:4410",
+  "remote": true
+}
+```
+
+`token` is returned exactly once, by this call; the host keeps only what it needs to redeem it, so a token not copied out of this response is unrecoverable. Nothing shows up in `GET /api/workers` until a machine runs the command and registers over `/ws/worker` (below). The address in `command` is the listener a worker should dial: the dedicated fleet listener when `fleet.host` is set, otherwise the dashboard's own.
+
+`remote` says whether `host` is genuinely reachable from another machine: a wildcard bind (`fleet.host` or `server.host` set to `"0.0.0.0"`) resolves to a guessed LAN address and reports `true`; a loopback-only bind prints `"http://localhost:<port>"` and reports `false` rather than inventing a LAN address nothing answers on. The dashboard uses it to warn when the printed command will only ever work on this machine.
+
+`POST /api/workers/:id/rename` with `{ "name": "..." }` (trimmed, control characters stripped, capped at 60 characters; empty is `400`), `POST /api/workers/:id/drain` (finish in-flight runs, accept nothing new; the state is persisted and survives reconnects), `POST /api/workers/:id/enable` (put a drained worker back in rotation), and `DELETE /api/workers/:id` (revoke: the credential dies and the worker is disconnected at once, unable to reconnect with what it holds) all return the updated `FleetResponse`, or `404` for an id that is not enrolled.
+
+### Worker channel
+
+`WS /ws/worker` is the channel `brevi worker` (see [CLI](/reference/cli/#brevi-worker)) connects to. Each worker dials it outbound and never accepts inbound connections, so a worker behind NAT needs no port open. The wire protocol is defined as zod schemas in `packages/shared/src/worker.ts` and is versioned (`WORKER_PROTOCOL_VERSION`, currently `2`); a worker on a different version is rejected on registration.
+
+It is served in two places: always by the dashboard's own listener (`server.host` / `server.port`), so a worker on this same machine can always enroll, and additionally by a dedicated listener bound to `fleet.host` / `fleet.port` (see [Configuration](/reference/configuration/#fleet)) when `fleet.host` is set. That second listener exists so a worker on another machine can reach `/ws/worker` without exposing the unauthenticated management API above, which stays on `server.host` regardless; the dedicated listener serves nothing else, and every other request on it gets a `404`.
+
+The first frame on every connection is `register`, which carries the protocol version, the worker's capabilities, the leases it still believes it owns, and an auth envelope:
+
+```ts
+// worker -> host
+type RegisterMessage = {
+  type: "register";
+  protocolVersion: number;
+  auth:
+    | { kind: "pairing"; token: string }                        // enrolling
+    | { kind: "credential"; workerId: string; secret: string };  // every connect after
+  name: string;                 // preferred display name, honoured only when enrolling
+  capabilities: WorkerCapabilities;
+  activeLeases: RunLease[];     // so in-flight run reporting resumes after a drop
+};
+
+// host -> worker
+type RegisteredMessage = {
+  type: "registered";
+  protocolVersion: number;
+  heartbeatIntervalMs: number;
+  hostVersion: string;
+  workerId: string;             // the host assigns it; a worker never picks its own
+  name: string;                 // the fleet's name for this worker, which a rename may have changed
+  state: "active" | "draining";
+  credential?: string;          // only on the connection that redeemed a pairing token
+};
+
+type RejectedMessage = {
+  type: "rejected";
+  code: "invalid-token" | "expired-token" | "unauthorized" | "protocol" | "malformed";
+  reason: string;
+};
+```
+
+A `pairing` envelope redeems the token once and enrolls the machine; the `registered` answer carries the assigned `workerId` and the durable `credential`, which the worker stores at `~/.brevi/worker.json` (mode `0600`, the only fleet secret on its disk) and presents as `{ kind: "credential" }` on every later connect. A pairing token is single-use and dies on redemption or at its expiry, and the host keeps only its hash in memory, never on disk. `rejected` is answered with a `code` so the worker can branch without parsing prose: `invalid-token` / `expired-token` let a worker that also holds a credential retry with it, `unauthorized` means the enrollment is gone for good and the worker deletes its stored credential, and `protocol` / `malformed` are build or frame problems retrying cannot fix. The host closes the socket right after sending it. A connection whose first frame is not a valid `register` within 10 seconds is rejected and dropped the same way.
+
+After registration the worker sends `heartbeat` every 15 seconds (`WORKER_HEARTBEAT_MS`) with the leases it still claims, and the host answers `heartbeat-ack` carrying the worker's current state, so a drain reaches a worker even if it missed the push. Silence longer than `fleet.heartbeatTimeoutSeconds` (45 by default) drops the connection; a worker that drops mid-run has `fleet.reconnectGraceSeconds` (120 by default) to come back and resume reporting before its runs are failed.
+
+Runs travel the same channel: `dispatch` for each run the host hands over (answered with `dispatch-accepted` or `dispatch-rejected`), a stream of `run-patch` / `run-event` / `run-artifact` / `run-memories` frames as the run executes, and finally `run-complete` carrying the whole terminal state, which the host answers with `run-complete-ack`. The worker keeps claiming a lease until that acknowledgement arrives, so a run that finished while the socket was down replays its completion on the next connection instead of being recorded as a disconnect failure. `cancel` and `discard` travel the other way, as do `attach-open` and the rest of the interactive-session relay behind the web terminal. A dispatch carries the credentials that one run needs (GitHub, agent, Linear) inline over this authenticated connection, provisioned into that run's sandbox and gone with it, so a worker is never configured with a connector secret of its own. Enrollment copies none either, which is what makes revoking a worker enough to cut off its access.
+
+Two more host-to-worker frames belong to the fleet rather than to a run: `worker-state` is pushed the moment an operator drains or re-enables a worker, so a drain takes effect at once rather than at the next heartbeat, and `revoked` tells a worker its enrollment is gone, on which it deletes its stored credential, shuts its runs down gracefully, and exits instead of reconnecting into a rejection loop.
 
 ### Credentials
 
@@ -263,7 +362,7 @@ The patch is merged onto the config on disk, the **whole** result is validated a
 
 Two rules span fields and are checked after the schema: `defaultRepo` has to name a configured repo key, and a non-empty `r2.publicBaseUrl` has to parse as an `http(s)` URL.
 
-Credential fields are refused here with `400`: `linear.apiKey`, `linear.refreshToken`, `linear.tokenExpiresAt`, `github.token`, and the four `agent.*` keys. Most of them are masked in every read, so accepting them would let a form round-trip the mask over a live secret; `linear.tokenExpiresAt` is not itself masked and is refused because the OAuth flow maintains it. They are written by the Connect flows and `PUT /api/settings/credentials`, which verify each key with its provider. `connect.linearClientSecret` and `fleet.token` are write-only rather than refused: they can be set, but the literal mask value is rejected. `fleet.token` is masked in every read for the same reason the credentials are: whoever holds the pairing token can register as a worker and be dispatched runs, which hands them every credential those runs need. Read it back with `GET /api/fleet/pairing`, which answers loopback callers only, or from `~/.brevi/config.json` on the machine running brevi.
+Credential fields are refused here with `400`: `linear.apiKey`, `linear.refreshToken`, `linear.tokenExpiresAt`, `github.token`, and the four `agent.*` keys. Most of them are masked in every read, so accepting them would let a form round-trip the mask over a live secret; `linear.tokenExpiresAt` is not itself masked and is refused because the OAuth flow maintains it. They are written by the Connect flows and `PUT /api/settings/credentials`, which verify each key with its provider. `connect.linearClientSecret` is write-only rather than refused: it can be set, but the literal mask value is rejected. The `fleet` section holds no secret at all: worker credentials are minted, not configured, and only their hashes are stored (see [Workers](#workers)).
 
 The check compares credential values on the merged result, not paths in the patch, so deleting a whole section (`{"linear": null}`, which would let the schema defaults refill it with empty strings) is refused the same way as setting the field directly.
 
@@ -283,11 +382,11 @@ type ServerMessage =
       tickets: Ticket[];
       config: BreviConfig;
       linearStatus: LinearStatus;
-      workers: WorkerSummary[];
+      workers: WorkerView[];
     }
   | { type: "config"; config: BreviConfig }
   | { type: "tickets"; tickets: Ticket[] }
-  | { type: "workers"; workers: WorkerSummary[] }
+  | { type: "workers"; workers: WorkerView[] }
   | { type: "run-updated"; run: Run }
   | { type: "run-event"; event: RunEvent }
   | { type: "linear-status"; linearStatus: LinearStatus };
@@ -302,7 +401,7 @@ type ClientMessage =
   | { type: "unsubscribe"; runId: string };
 ```
 
-Every `config` payload is redacted. By default a client receives `run-event` messages for **all** runs; once it subscribes to at least one run id it receives events only for its subscriptions. `linear-status` is pushed whenever the Linear connector's state changes, e.g. an OAuth token refresh failing, so the dashboard can show a Reconnect prompt without polling for it. `auth-error` means the stored credential is dead and polling is paused until a reconnect; `refresh-failing` means the expired token can't be refreshed for a transient reason (network, rate limit), polling is paused, and brevi retries by itself until a refresh succeeds.
+Every `config` payload is redacted. By default a client receives `run-event` messages for **all** runs; once it subscribes to at least one run id it receives events only for its subscriptions. `linear-status` is pushed whenever the Linear connector's state changes, e.g. an OAuth token refresh failing, so the dashboard can show a Reconnect prompt without polling for it. `auth-error` means the stored credential is dead and polling is paused until a reconnect; `refresh-failing` means the expired token can't be refreshed for a transient reason (network, rate limit), polling is paused, and brevi retries by itself until a refresh succeeds. `workers` (in `hello`, and pushed again on its own as a `workers` message) is the same `WorkerView[]` `GET /api/workers` returns, so the Workers page never has to poll: an enrollment, a renamed or drained worker, a heartbeat's fresh capabilities, a connect or a drop, and a revocation all arrive this way.
 
 `RunEvent` is one of a status change, a log line (`stdout` / `stderr` / `system`), an `agent` event forwarded from the agent's `stream-json` output, an artifact reference, a `cost` entry recording one agent execution's LLM usage, or a `limit` event recording the agent usage limit that ended an execution. Events are also persisted as JSONL, which is what `GET /api/runs/:id/events` replays.
 

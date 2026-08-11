@@ -4,12 +4,14 @@ import type {
   CredentialsUpdateRequest,
   CredentialsUpdateResponse,
   DevicePollResponse,
+  FleetResponse,
   ForgetMemoryRequest,
   GithubRepo,
   MemoriesResponse,
   HealthResponse,
   LinearProject,
   ConfigPatch,
+  PairingTokenResponse,
   PrStatusResponse,
   R2ConnectResponse,
   R2Status,
@@ -17,6 +19,7 @@ import type {
   RunEvent,
   SettingsUpdateResponse,
   Ticket,
+  WorkerRenameRequest,
 } from "@brevi/shared";
 
 /** Thin REST client. Everything is same-origin; Vite proxies /api to the orchestrator. */
@@ -90,6 +93,21 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ patch }),
     }),
+  workers: () => json<FleetResponse>("/api/workers"),
+  /** Mint a single-use pairing token and the `brevi worker` command that redeems it. */
+  pairWorker: () => json<PairingTokenResponse>("/api/workers/pair", { method: "POST" }),
+  renameWorker: (id: string, name: string) =>
+    json<FleetResponse>(`/api/workers/${encodeURIComponent(id)}/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name } satisfies WorkerRenameRequest),
+    }),
+  drainWorker: (id: string) =>
+    json<FleetResponse>(`/api/workers/${encodeURIComponent(id)}/drain`, { method: "POST" }),
+  enableWorker: (id: string) =>
+    json<FleetResponse>(`/api/workers/${encodeURIComponent(id)}/enable`, { method: "POST" }),
+  revokeWorker: (id: string) =>
+    json<FleetResponse>(`/api/workers/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
 export function artifactUrl(runId: string, name: string): string {

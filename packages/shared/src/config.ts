@@ -10,6 +10,7 @@ import { z } from "zod";
 
 export const DEFAULT_PORT = 4400;
 export const DEFAULT_HOST = "127.0.0.1";
+export const DEFAULT_FLEET_PORT = 4410;
 
 export const repoConfigSchema = z.object({
   /** Git remote in "owner/name" form. */
@@ -253,12 +254,29 @@ export const configSchema = z.object({
    * and execute runs. The host itself is a pure scheduler, it holds the run
    * store, polls Linear, and opens PRs, but every run's sandbox lives on a
    * connected worker, never on the host process. See worker.ts for the wire
-   * protocol workers speak once paired.
+   * protocol workers speak once enrolled, and fleet.ts for enrollment itself.
+   *
+   * Which machines are enrolled is not configured here: workers are runtime
+   * state, so they live in `~/.brevi/fleet.json` (see FleetStore), and their
+   * credentials are minted rather than written by hand.
    */
   fleet: z
     .object({
-      /** Shared pairing token workers present with `brevi worker --token`. Generated on first start when empty. */
-      token: z.string().default(""),
+      /**
+       * Bind address for the worker channel's own listener, separate from the
+       * dashboard's `server` listener on purpose: the dashboard serves the
+       * unauthenticated management API (pairing, rename, drain, enable,
+       * revoke), so exposing it to the network would let any reachable peer
+       * mint a pairing token and enroll its own worker. The worker channel is
+       * authenticated (a single-use pairing token, then a durable per-worker
+       * credential), so it can safely bind wider without widening that API.
+       *
+       * Empty (the default) means this listener is off, so only this machine
+       * can enroll a worker, over the dashboard's own WORKER_WS_PATH upgrade.
+       */
+      host: z.string().default(""),
+      /** That listener's port; deliberately separate from `server.port`. */
+      port: z.number().int().min(1).max(65535).default(DEFAULT_FLEET_PORT),
       /**
        * Seconds a connected worker may go silent before the host drops it and
        * fails its in-flight runs. Workers heartbeat every 15s
@@ -347,12 +365,7 @@ export function redactConfig(config: BreviConfig): BreviConfig {
       codexAuthJson: mask(config.agent.codexAuthJson),
     },
     connect: { ...config.connect, linearClientSecret: mask(config.connect.linearClientSecret) },
-    // The pairing token is a credential, not a setting: whoever holds it can
-    // register as a worker and be dispatched runs, which hands them every
-    // credential those runs need. /api/config and the dashboard socket are
-    // unauthenticated, so it is masked there like any other secret; the
-    // loopback-only /api/fleet/pairing endpoint is what reveals it to someone
-    // sitting at this machine.
-    fleet: { ...config.fleet, token: mask(config.fleet.token) },
+    // `fleet` holds no secret to mask: enrollment credentials are minted, not
+    // configured, and live in ~/.brevi/fleet.json as hashes (see FleetStore).
   };
 }

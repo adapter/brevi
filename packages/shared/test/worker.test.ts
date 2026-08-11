@@ -7,6 +7,7 @@ import {
   runEventSchema,
   runPatchSchema,
   WORKER_MAX_CONCURRENCY,
+  WORKER_PROTOCOL_VERSION,
   type HostMessage,
   type WorkerMessage,
 } from "../src/worker.js";
@@ -112,10 +113,9 @@ describe("registration", () => {
   it("round-trips a worker's capabilities and the leases it still claims", () => {
     const decoded = roundTripToHost({
       type: "register",
-      protocolVersion: 1,
-      workerId: "worker-1",
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      auth: { kind: "pairing", token: "bwp_pairing" },
       name: "builder",
-      token: "pairing",
       capabilities: {
         os: "linux",
         arch: "x64",
@@ -131,15 +131,60 @@ describe("registration", () => {
     if (decoded.type !== "register") return;
     expect(decoded.capabilities.vmSizes).toEqual(["small", "medium", "large"]);
     expect(decoded.activeLeases).toHaveLength(1);
+    // Identity comes from the auth envelope, never from a field the worker
+    // fills in for itself: the register frame has no workerId of its own.
+    expect(decoded.auth).toEqual({ kind: "pairing", token: "bwp_pairing" });
+  });
+
+  it("round-trips a returning worker's durable credential", () => {
+    const decoded = roundTripToHost({
+      type: "register",
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      auth: { kind: "credential", workerId: "wk-abc123", secret: "bwc_secret" },
+      name: "builder",
+      capabilities: {
+        os: "darwin",
+        arch: "arm64",
+        provider: "process",
+        kvm: false,
+        maxConcurrency: 1,
+        vmSizes: [],
+        version: "0.5.0",
+      },
+      activeLeases: [],
+    });
+    expect(decoded.type).toBe("register");
+    if (decoded.type !== "register") return;
+    expect(decoded.auth).toEqual({ kind: "credential", workerId: "wk-abc123", secret: "bwc_secret" });
+  });
+
+  it("refuses an auth envelope that is neither kind", () => {
+    const base = {
+      type: "register",
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      name: "builder",
+      capabilities: {
+        os: "linux",
+        arch: "x64",
+        provider: "process" as const,
+        kvm: false,
+        maxConcurrency: 1,
+        vmSizes: [],
+        version: "0.5.0",
+      },
+      activeLeases: [],
+    };
+    expect(parseWorkerMessage({ ...base, auth: { kind: "none" } })).toBeUndefined();
+    expect(parseWorkerMessage({ ...base, auth: { kind: "pairing", token: "" } })).toBeUndefined();
+    expect(parseWorkerMessage({ ...base, auth: { kind: "credential", workerId: "wk-1" } })).toBeUndefined();
   });
 
   it("rejects a concurrency the CLI must refuse too", () => {
     const registration = {
       type: "register",
-      protocolVersion: 1,
-      workerId: "worker-1",
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      auth: { kind: "pairing" as const, token: "bwp_pairing" },
       name: "builder",
-      token: "pairing",
       capabilities: {
         os: "linux",
         arch: "x64",
@@ -334,11 +379,22 @@ describe("the rest of the contract", () => {
   }
 
   const hostMessages: HostMessage[] = [
-    { type: "registered", protocolVersion: 1, heartbeatIntervalMs: 15_000, hostVersion: "0.5.0", workerId: "worker-1" },
-    { type: "rejected", reason: "invalid pairing token" },
+    {
+      type: "registered",
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      heartbeatIntervalMs: 15_000,
+      hostVersion: "0.5.0",
+      workerId: "wk-abc123",
+      name: "builder",
+      state: "active",
+      credential: "bwc_secret",
+    },
+    { type: "rejected", code: "invalid-token", reason: "the pairing token was not accepted" },
     { type: "cancel", leaseId: "lease-1", runId: run.id },
     { type: "discard", runId: run.id },
-    { type: "heartbeat-ack", ts: "2026-08-11T10:00:15.000Z" },
+    { type: "heartbeat-ack", ts: "2026-08-11T10:00:15.000Z", state: "draining" },
+    { type: "worker-state", state: "draining" },
+    { type: "revoked", reason: "This worker's enrollment was revoked." },
     { type: "attach-open", attachId: "attach-1", runId: run.id, config, cols: 120, rows: 40 },
     { type: "attach-input", attachId: "attach-1", data: "ls\n" },
     { type: "attach-resize", attachId: "attach-1", cols: 100, rows: 30 },
