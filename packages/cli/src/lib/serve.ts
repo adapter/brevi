@@ -3,9 +3,10 @@ import { networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, startOrchestrator } from "@brevi/orchestrator";
+import { readPidFile, removePidFile, writePidFile, type ServerOwner } from "@brevi/orchestrator/pid";
+import { isHealthResponse, urlHost } from "@brevi/shared";
 import open from "open";
 import pc from "picocolors";
-import { removePidFile, writePidFile } from "./pid.js";
 import { updateNotice } from "./update.js";
 import { errorMessage } from "./util.js";
 import { readPackageVersion } from "./version.js";
@@ -50,6 +51,45 @@ export interface RunServerOptions {
   openBrowser: boolean;
 }
 
+const HEALTH_TIMEOUT_MS = 2000;
+
+/**
+ * Ownership to record in the pid file, from BREVI_SUPERVISOR_PID. This is
+ * process provenance passed by the parent that spawned us, not persistent
+ * configuration, the same category as the desktop app's BREVI_DESKTOP_CLI_ENTRY
+ * development escape hatch: when the desktop app's supervisor spawns this
+ * process it sets its own pid here, so the server can record who owns it.
+ * Absent or malformed (a plain terminal `brevi start`) means "cli".
+ */
+function ownershipFromEnv(): { owner: ServerOwner; supervisorPid: number | null } {
+  const raw = process.env.BREVI_SUPERVISOR_PID;
+  const supervisorPid = raw ? Number(raw) : NaN;
+  if (Number.isInteger(supervisorPid) && supervisorPid > 0) {
+    return { owner: "desktop", supervisorPid };
+  }
+  return { owner: "cli", supervisorPid: null };
+}
+
+/**
+ * True when a brevi orchestrator already answers on the configured port. The
+ * health payload is checked, not just the connection, so an unrelated service
+ * on that port is never mistaken for brevi.
+ */
+async function orchestratorAlreadyRunning(url: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${url}/api/health`, { signal: controller.signal });
+    if (!res.ok) return false;
+    const body: unknown = await res.json();
+    return isHealthResponse(body);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Shared implementation behind the bare `brevi` invocation and `brevi start`. */
 export async function runServer({ openBrowser }: RunServerOptions): Promise<void> {
   const config = await loadConfig().catch((err: unknown) => {
@@ -57,6 +97,20 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
     console.error(pc.dim("  Run `npx @brevi/cli init` to create one."));
     process.exit(1);
   });
+
+  // The desktop app, or another terminal, may already be running an
+  // orchestrator against this same ~/.brevi. Starting a second one would only
+  // fail to bind the port, so attach to it the way the app does.
+  const runningUrl = `http://${urlHost(config.server.host)}:${config.server.port}`;
+  if (await orchestratorAlreadyRunning(runningUrl)) {
+    const pid = readPidFile();
+    console.log(
+      pc.green(`✔ brevi is already running at ${pc.bold(pc.cyan(runningUrl))}${pid === null ? "" : ` (pid ${pid})`}`),
+    );
+    console.log(pc.dim("  Attached to that instance instead of starting a second one."));
+    if (openBrowser) await open(runningUrl).catch(() => undefined);
+    return;
+  }
 
   const handle = await startOrchestrator({
     config,
@@ -68,7 +122,7 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
 
   // Record our pid so `brevi stop` can find this process. Removed on exit;
   // a stale file left by a hard kill is detected and cleaned up by `stop`.
-  writePidFile();
+  writePidFile(ownershipFromEnv());
   process.on("exit", removePidFile);
 
   const urls = [handle.url, ...lanUrls(config.server.host, handle.port)];

@@ -19,6 +19,14 @@
     "./internal": {
       "types": "./dist/internal.d.ts",
       "default": "./dist/internal.js"
+    },
+    "./pid": {
+      "types": "./dist/pid.d.ts",
+      "default": "./dist/pid.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.js"
     }
   },
   "files": [

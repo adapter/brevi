@@ -94,10 +94,11 @@ export type ConfigSection =
   | "orchestrator"
   | "server";
 
-export type Page = "home" | `config:${ConfigSection}`;
+export type Page = "home" | "setup" | `config:${ConfigSection}`;
 
 /** Non-run pages live at fixed paths; anything else is the home/run view. */
 function pageFromPath(pathname: string): Page {
+  if (/^\/setup\/?$/.test(pathname)) return "setup";
   const match =
     /^\/config(?:\/(connectors|repositories|agent|sandbox|memory|orchestrator|server))?\/?$/.exec(pathname);
   if (!match) return "home";

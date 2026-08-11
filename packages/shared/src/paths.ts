@@ -20,6 +20,12 @@ export const WORKSPACES_DIR = join(BREVI_HOME, "workspaces");
 export const MEMORIES_DIR = join(BREVI_HOME, "memories");
 /** Stable per-machine worker id (a randomUUID), created on first `brevi worker` run. */
 export const WORKER_ID_PATH = join(BREVI_HOME, "worker-id");
+/** Directory for log files, e.g. the orchestrator's tee target. */
+export const LOGS_DIR = join(BREVI_HOME, "logs");
+/** Persistent orchestrator log, tailed by `brevi doctor` as diagnosis evidence. */
+export const ORCHESTRATOR_LOG_PATH = join(LOGS_DIR, "orchestrator.log");
+/** Written by whichever process runs the server, so the CLI and the desktop app find each other. */
+export const SERVER_PID_PATH = join(BREVI_HOME, "server.pid");
 
 /** Where `brevi setup` downloads the kernel and `build-rootfs.sh` writes the image. */
 export const DEFAULT_KERNEL_IMAGE = join(IMAGES_DIR, "vmlinux");

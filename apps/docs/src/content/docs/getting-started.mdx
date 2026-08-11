@@ -34,6 +34,24 @@ brevi
 Working on brevi itself? Clone [adapter/brevi](https://github.com/adapter/brevi), then `bun install && bun run build` and use `bun run brevi -- <command>` from the repo root.
 </Aside>
 
+## Desktop app
+
+On macOS and Linux, Mission Control is also available as a desktop app: an Electron shell that starts and supervises the same orchestrator and shows the same dashboard in its own window, so no terminal is needed at any point. It reads and writes the same `~/.brevi/config.json`, run history, and server, so it's interchangeable with the CLI: whichever one starts the orchestrator, the other attaches to it instead of starting a second one.
+
+Download the latest build from [GitHub Releases](https://github.com/adapter/brevi/releases/latest):
+
+- **macOS (Apple silicon)**: `brevi-<version>-mac-arm64.dmg`
+- **macOS (Intel)**: `brevi-<version>-mac-x64.dmg`
+- **Linux**: `brevi-<version>-linux-x64.AppImage` or `brevi-<version>-linux-x64.deb`
+
+<Aside type="note">
+A signed and notarized macOS build opens normally. An unsigned one (the fallback when a release is built without Apple signing credentials) is quarantined by Gatekeeper: right-click the app and choose **Open** the first time instead of double-clicking.
+</Aside>
+
+<Aside type="tip">
+Working on brevi itself, or want to build the desktop app from source? Clone [adapter/brevi](https://github.com/adapter/brevi), then `bun install && bun run build` and `bun run package` in `apps/desktop`.
+</Aside>
+
 ## First run
 
 <Steps>
