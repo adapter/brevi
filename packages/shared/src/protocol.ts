@@ -1,6 +1,7 @@
 import type { BreviConfig } from "./config.js";
 import type { ConfigPatch, SettingsApplied } from "./settings.js";
 import type { PrState, RepoMemory, Run, RunEvent, Ticket } from "./types.js";
+import type { WorkerSummary } from "./worker.js";
 
 /**
  * HTTP API served by the orchestrator (default port 4400):
@@ -8,6 +9,11 @@ import type { PrState, RepoMemory, Run, RunEvent, Ticket } from "./types.js";
  *   GET  /api/health                     -> { ok: true, version: string }
  *   GET  /api/config                     -> redacted BreviConfig
  *   GET  /api/tickets                    -> Ticket[]        (current eligible queue)
+ *   GET  /api/workers                    -> WorkerSummary[] (connected workers)
+ *   GET  /api/fleet/pairing              -> FleetPairingResponse (loopback callers
+ *        only; 403 otherwise, since the token is what authorizes a worker)
+ *        Every run executes on a worker daemon that dialled in over
+ *        WS /ws/worker; with none connected, queued runs simply wait.
  *   GET  /api/runs                       -> Run[]           (newest first)
  *   GET  /api/runs/:id                   -> Run
  *   GET  /api/runs/:id/events            -> RunEvent[]      (full history)
@@ -253,28 +259,36 @@ export interface PrStatusResponse {
   state: PrState;
 }
 
-/** How `brevi attach` opens the interactive session a resume prepared. */
-export type RunAttachInfo =
-  | {
-      /** Process sandbox: run the script directly on the host. */
-      kind: "local";
-      /** Host path of the script that starts the resumed agent session. */
-      scriptPath: string;
-    }
-  | {
-      /** Firecracker sandbox: run the script in the guest over ssh. */
-      kind: "ssh";
-      /** Guest path of the script that starts the resumed agent session. */
-      scriptPath: string;
-      host: string;
-      user: string;
-      /** Host path of the ssh private key. */
-      keyPath: string;
-    };
+/**
+ * Where the interactive session a resume prepared actually runs. A run's
+ * retained sandbox lives on the worker that executed it, never on the
+ * scheduling host, so both `brevi attach` and the dashboard's web terminal
+ * reach it the same way: over `WS /ws/runs/:id/attach`, which the host relays
+ * to that worker's PTY.
+ */
+export interface RunAttachInfo {
+  kind: "worker";
+  workerId: string;
+  /** Human name of the worker, for "attaching to <run> on <worker>" lines. */
+  workerName: string;
+}
 
 export interface ResumeRunResponse {
   run: Run;
   attach: RunAttachInfo;
+}
+
+/**
+ * The fleet pairing token in the clear, plus the ready-to-paste command that
+ * uses it. Served only to loopback callers (see GET /api/fleet/pairing):
+ * whoever holds the token can register as a worker and receive dispatches
+ * carrying every credential a run needs, so it is masked everywhere else,
+ * including the unauthenticated config endpoint and the dashboard socket.
+ */
+export interface FleetPairingResponse {
+  token: string;
+  /** `brevi worker --host <url> --token <token>`, with this host's own url filled in. */
+  command: string;
 }
 
 /**
@@ -328,9 +342,17 @@ export interface LinearStatus {
 
 /** Server -> dashboard WebSocket messages. */
 export type ServerMessage =
-  | { type: "hello"; runs: Run[]; tickets: Ticket[]; config: BreviConfig; linearStatus: LinearStatus }
+  | {
+      type: "hello";
+      runs: Run[];
+      tickets: Ticket[];
+      config: BreviConfig;
+      linearStatus: LinearStatus;
+      workers: WorkerSummary[];
+    }
   | { type: "config"; config: BreviConfig }
   | { type: "tickets"; tickets: Ticket[] }
+  | { type: "workers"; workers: WorkerSummary[] }
   | { type: "run-updated"; run: Run }
   | { type: "run-event"; event: RunEvent }
   | { type: "linear-status"; linearStatus: LinearStatus };

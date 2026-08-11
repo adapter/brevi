@@ -2,39 +2,71 @@ import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { execa, type Result as ExecaResult } from "execa";
-import { BREVI_HOME, formatDuration, WORKSPACES_DIR, type ArtifactRef, type BreviConfig, type LimitInfo, type RepoConfig, type RunResult, type Ticket } from "@brevi/shared";
-import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
-import { ccusageCostEntry, resolveCcusageCommand, startCcusageSampler, type CcusageSampler } from "./ccusage.js";
-import { usageCollector } from "./costs.js";
 import {
+  BREVI_HOME,
+  formatDuration,
+  WORKSPACES_DIR,
+  type ArtifactRef,
+  type BreviConfig,
+  type DispatchPrompts,
+  type LimitInfo,
+  type RepoConfig,
+  type RunResult,
+  type Ticket,
+} from "@brevi/shared";
+import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
+import {
+  AgentLimitError,
+  agentProvider,
   authenticatedRemote,
   createPullRequest,
+  detectLimit,
   FALLBACK_COMMIT_IDENTITY,
+  isAgentFailureEvent,
+  isContainedRegularFile,
+  isSafePathSegment,
+  isTerminal,
+  LinearService,
+  lineSink,
   markPullRequestReady,
+  memoryKeyFor,
   plainRemote,
+  readRunMemories,
   resolveCommitIdentity,
-} from "./github.js";
-import { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resumeTimeFor } from "./limits.js";
-import { LinearService } from "./linear.js";
-import { MemoryStore, memoryKeyFor, readRunMemories, selectMemories } from "./memory.js";
+  resolveWithin,
+  resumeTimeFor,
+  RunCancelledError,
+  throwIfAborted,
+  uploadRunEvidence,
+  type UploadedEvidence,
+} from "@brevi/orchestrator/internal";
+import { ccusageCostEntry, resolveCcusageCommand, startCcusageSampler, type CcusageSampler } from "./ccusage.js";
+import { usageCollector } from "./costs.js";
 import { buildImplementationPrompt, buildReviewFixPrompt, type RepoMap } from "./prompts.js";
 import { provisionCredentials } from "./provision.js";
-import { uploadRunEvidence, type UploadedEvidence } from "./r2.js";
 import { codexReviewEnabled, runCodexReview } from "./review.js";
-import { isContainedRegularFile, isSafePathSegment, resolveWithin } from "./safepath.js";
-import { isTerminal, type RunStore } from "./state.js";
-import { lineSink, RunCancelledError, throwIfAborted } from "./util.js";
+import type { RunSink } from "./sink.js";
 
 export const BREVI_FOOTER = "🤖 Automated by [brevi]";
 
-export { RunCancelledError } from "./util.js";
+export { RunCancelledError } from "@brevi/orchestrator/internal";
 
 export interface RunContext {
   runId: string;
   config: BreviConfig;
-  store: RunStore;
-  /** Per-repo memories: read into the prompt before the agent starts, topped up after it finishes. */
-  memories: MemoryStore;
+  store: RunSink;
+  /** Facts earlier runs recorded about this repo, already selected and budgeted by the host. */
+  recalledMemories: string[];
+  /** Hands what this run learned back to the host, which owns the memory store. */
+  recordMemories: (repo: string, learned: string[]) => Promise<void>;
+  /**
+   * The dispatch's prompt policy (everything but its memories, which travel
+   * as recalledMemories above): the host's call, not this worker's config,
+   * since it owns the PR conventions and the memory store. Named `prompts`
+   * (not flattened) so it never collides with the recordMemories callback
+   * above, which is a different thing with the same word in it.
+   */
+  prompts: Pick<DispatchPrompts, "prDescription" | "recordMemories">;
   provider: SandboxProvider;
   /** Required for implementation runs; follow-ups never touch Linear and run without it. */
   linear?: LinearService;
@@ -43,7 +75,7 @@ export interface RunContext {
 
 export interface AgentSessionOptions {
   runId: string;
-  store: RunStore;
+  store: RunSink;
   config: BreviConfig;
   sandbox: Sandbox;
   signal: AbortSignal;
@@ -300,7 +332,7 @@ export function agentModelPlan(config: BreviConfig): { mainModel: string | undef
  * run status. Only truly unexpected store errors can escape.
  */
 export async function executeRun(ctx: RunContext): Promise<void> {
-  const { config, store, memories, provider, linear, signal } = ctx;
+  const { config, store, recalledMemories, recordMemories, prompts, provider, linear, signal } = ctx;
   // The scheduler only routes implementation runs here while Linear is
   // connected; this guard keeps the narrowing honest if that ever regresses.
   if (!linear) throw new Error("Linear is not connected; implementation runs need it");
@@ -413,18 +445,18 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     // What earlier runs against this repository worked out, so this one does
     // not pay to rediscover it. The sandbox is fresh every time; the memories
     // are not. Keyed by the remote, not by the mapping key that resolved it.
+    // Selection and budgeting already happened on the host; ctx.recalledMemories
+    // is exactly what this run gets.
     const memoryKey = memoryKeyFor(repo.remote);
-    const recalled = config.memory.enabled
-      ? selectMemories(memories.list(memoryKey), config.memory.maxChars)
-      : [];
+    const recalled = config.memory.enabled ? recalledMemories : [];
     if (recalled.length > 0) log("system", `recalled ${recalled.length} memories for ${memoryKey}`);
 
     await session.runAgent(
-      buildImplementationPrompt(ticket, repo, config.github.prDescription, {
+      buildImplementationPrompt(ticket, repo, prompts.prDescription, {
         repoMap,
         delegate,
         memories: recalled,
-        recordMemories: config.memory.enabled,
+        recordMemories: prompts.recordMemories,
       }),
       mainModel,
       mainEffort,
@@ -498,16 +530,12 @@ export async function executeRun(ctx: RunContext): Promise<void> {
 
     // Harvested here rather than after finalize: what the agent learned about
     // the repo is worth keeping even when the change itself never lands, and
-    // finalizeImplementation deletes .brevi/ before committing.
+    // finalizeImplementation deletes .brevi/ before committing. The host owns
+    // the memory store (and logs what it actually recorded); this only hands
+    // the raw candidates back.
     if (config.memory.enabled) {
       const learned = await readRunMemories(pulledDir);
-      const { added, reaffirmed } = await memories.record(memoryKey, learned, {
-        maxEntries: config.memory.maxEntries,
-        ident: ticket.identifier,
-      });
-      if (added || reaffirmed) {
-        log("system", `remembered ${added} new and reaffirmed ${reaffirmed} facts about ${memoryKey}`);
-      }
+      if (learned.length > 0) await recordMemories(memoryKey, learned);
     }
 
     // Best-effort: uploadRunEvidence never throws, so a wrangler hiccup or a
@@ -581,6 +609,9 @@ export async function executeRun(ctx: RunContext): Promise<void> {
         return;
       }
       await store.endAttempt(run.id, { outcome: "limit", limit });
+      // Structured twin of the human-readable log line below, once per
+      // detection: the dashboard renders this instead of parsing the log.
+      store.appendEvent({ runId: run.id, ts: new Date().toISOString(), type: "limit", limit });
       if (config.restart.auto && attempt.number < config.restart.maxAttempts) {
         const resumeAt = resumeTimeFor(limit, config).toISOString();
         await store.setStatus(run.id, "waiting", { resumeAt, limit });
@@ -615,7 +646,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
 export async function finishRunSandbox(options: {
   sandbox: Sandbox | undefined;
   config: BreviConfig;
-  store: RunStore;
+  store: RunSink;
   runId: string;
   tempRoot: string;
   checkoutDir: string;
@@ -633,7 +664,10 @@ export async function finishRunSandbox(options: {
     try {
       await sandbox.release();
       const retainedUntil = new Date(Date.now() + config.sandbox.retentionHours * 3_600_000).toISOString();
-      await store.update(runId, { sandbox: { ...current.sandbox, retainedUntil } });
+      // The wire's sandbox patch is a merge, not a replacement: report only
+      // the field that actually changed, so provider/id (already reported
+      // when the sandbox was created) are left exactly as the host holds them.
+      await store.update(runId, { sandbox: { retainedUntil } });
       log("system", `sandbox retained until ${retainedUntil}; resume with \`brevi attach ${runId}\``);
       // Only the host-side scratch goes; the retained disk lives inside
       // tempRoot (rootfs.ext4 for firecracker, workspace/ for process).
@@ -810,7 +844,7 @@ function classifyArtifact(name: string): ArtifactRef["type"] {
  * run's artifact directory, flattening nested demo paths into safe names.
  */
 async function collectArtifacts(
-  store: RunStore,
+  store: RunSink,
   runId: string,
   pulledDir: string,
 ): Promise<ArtifactRef[]> {

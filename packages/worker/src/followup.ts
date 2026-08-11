@@ -3,26 +3,29 @@ import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { WORKSPACES_DIR } from "@brevi/shared";
 import type { Sandbox } from "@brevi/sandbox";
-import { resolveCcusageCommand } from "./ccusage.js";
 import {
+  AgentLimitError,
+  agentProvider,
   authenticatedRemote,
   FALLBACK_COMMIT_IDENTITY,
+  formatPrFeedback,
   gatherPrFeedback,
   hasActionableFeedback,
-  formatPrFeedback,
+  isContainedRegularFile,
+  isTerminal,
+  memoryKeyFor,
   parsePrUrl,
   plainRemote,
   postPrComment,
+  readRunMemories,
   resolveCommitIdentity,
+  RunCancelledError,
+  throwIfAborted,
   type PrFeedback,
-} from "./github.js";
-import { AgentLimitError, agentProvider } from "./limits.js";
-import { memoryKeyFor, readRunMemories, selectMemories } from "./memory.js";
+} from "@brevi/orchestrator/internal";
+import { resolveCcusageCommand } from "./ccusage.js";
 import { buildFollowUpPrompt } from "./prompts.js";
 import { provisionCredentials } from "./provision.js";
-import { isContainedRegularFile } from "./safepath.js";
-import { isTerminal } from "./state.js";
-import { RunCancelledError, throwIfAborted } from "./util.js";
 import {
   agentModelPlan,
   BREVI_FOOTER,
@@ -54,7 +57,7 @@ type RebaseResult = { status: "clean" } | { status: "conflicted"; detail: string
 export async function executeFollowUp(ctx: RunContext): Promise<void> {
   // Follow-ups leave the ticket's Linear state alone and run even while
   // Linear is disconnected; `linear` from the context is unused here.
-  const { config, store, memories, provider, signal } = ctx;
+  const { config, store, recalledMemories, recordMemories, prompts, provider, signal } = ctx;
   const run = store.get(ctx.runId);
   if (!run) throw new Error(`unknown run ${ctx.runId}`);
   const ticket = run.ticket;
@@ -204,7 +207,13 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
       if (run.sandbox.retainedUntil) {
         await provider.discard(run.id).catch(() => undefined);
         await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
-        await store.update(run.id, { sandbox: { ...run.sandbox, retainedUntil: undefined } });
+        // The wire's sandbox patch is a merge, not a replacement: naming just
+        // retainedUntil (rather than spreading run.sandbox into the patch)
+        // reports only what actually changed, leaving provider/id on the
+        // host exactly as they are. RunReporter translates this explicit
+        // `undefined` into the wire's `null` when it builds the patch (see
+        // toRunPatch), the same way every other field's clear does.
+        await store.update(run.id, { sandbox: { retainedUntil: undefined } });
       }
     }
     await prepareCheckout();
@@ -219,9 +228,12 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
         );
         await sandbox.destroy().catch(() => undefined);
         sandbox = undefined;
-        // Nothing exists now; drop id/retainedUntil so a later read never
-        // treats it as still owning a disk.
-        await store.update(run.id, { sandbox: { provider: provider.name } });
+        // Nothing exists now: retract both the id and the retention, so a
+        // read landing between here and the fresh sandbox a few lines below
+        // never points at a disk that was just destroyed. Naming a field
+        // with an explicit `undefined` is how a sandbox patch clears it (see
+        // RunReporter's toRunPatch, which turns that into the wire's null).
+        await store.update(run.id, { sandbox: { id: undefined, retainedUntil: undefined } });
         // destroy() may have taken tempRoot (the process provider's root IS
         // tempRoot), so the checkout has to be redone.
         await prepareCheckout();
@@ -276,9 +288,7 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
     if (needAgent) {
       await store.setStatus(run.id, "running");
       const { mainModel, mainEffort, delegate } = agentModelPlan(config);
-      const recalled = config.memory.enabled
-        ? selectMemories(memories.list(memoryKey), config.memory.maxChars)
-        : [];
+      const recalled = config.memory.enabled ? recalledMemories : [];
       if (recalled.length > 0) log("system", `recalled ${recalled.length} memories for ${memoryKey}`);
       await session.runAgent(
         buildFollowUpPrompt({
@@ -292,7 +302,7 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
           rebase,
           delegate,
           memories: recalled,
-          recordMemories: config.memory.enabled,
+          recordMemories: prompts.recordMemories,
         }),
         mainModel,
         mainEffort,
@@ -323,15 +333,11 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
     // Read alongside the reply, before .brevi is scrubbed: a follow-up
     // explores the repo too, and what it learned outlives this sandbox. Only
     // when an agent actually ran, so a memories.md that was already in the
-    // checkout is never mistaken for something this session learned.
+    // checkout is never mistaken for something this session learned. The
+    // host owns the memory store; this only hands the raw candidates back.
     if (needAgent && config.memory.enabled) {
-      const { added, reaffirmed } = await memories.record(memoryKey, await readRunMemories(pulledDir), {
-        maxEntries: config.memory.maxEntries,
-        ident: ticket.identifier,
-      });
-      if (added || reaffirmed) {
-        log("system", `remembered ${added} new and reaffirmed ${reaffirmed} facts about ${memoryKey}`);
-      }
+      const learned = await readRunMemories(pulledDir);
+      if (learned.length > 0) await recordMemories(memoryKey, learned);
     }
     await rm(join(pulledDir, ".brevi"), { recursive: true, force: true });
     await git(["add", "-A"], pulledDir, token);

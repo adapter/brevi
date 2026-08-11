@@ -1,22 +1,24 @@
-import { spawn, type IPty } from "@lydell/node-pty";
-import type { AttachClientMessage, AttachServerMessage, RunAttachInfo } from "@brevi/shared";
+import type { AttachClientMessage, AttachServerMessage } from "@brevi/shared";
 import type { WebSocket } from "ws";
+import type { AttachSession } from "./workers.js";
 import type { Orchestrator } from "./scheduler.js";
 
 /**
- * Bridges one dashboard web-terminal socket to a PTY running a run's resume
- * session. The PTY runs on this host in both cases: the process provider's
- * resume script executes directly, a Firecracker sandbox is reached with
- * `ssh -t` (the PTY makes ssh propagate terminal size and resizes). Lifetime
- * mirrors `brevi attach`: resumeRun on connect, releaseRun on disconnect, so
- * the scheduler's client refcount treats web and CLI sessions alike.
+ * Bridges one dashboard web-terminal socket to a run's resume session. The
+ * host never runs a PTY itself any more: a run's retained sandbox lives on
+ * whichever worker executed it, so this is purely a byte relay over
+ * `orchestrator.openRunAttach`, which reaches that worker's session over its
+ * own `/ws/worker` socket. Lifetime still mirrors `brevi attach`: resumeRun's
+ * eligibility checks on connect, releaseRun on disconnect, so the scheduler's
+ * client refcount treats web and CLI sessions alike even though the worker
+ * itself now owns the actual teardown (see Orchestrator.releaseRun).
  */
 export function handleAttachSocket(socket: WebSocket, orchestrator: Orchestrator, runId: string): void {
   const send = (message: AttachServerMessage): void => {
     if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
   };
 
-  let pty: IPty | undefined;
+  let session: AttachSession | undefined;
   let released = false;
   const release = (): void => {
     if (released) return;
@@ -25,57 +27,56 @@ export function handleAttachSocket(socket: WebSocket, orchestrator: Orchestrator
   };
 
   void (async () => {
-    let attach: RunAttachInfo;
     try {
-      ({ attach } = await orchestrator.resumeRun(runId));
+      await orchestrator.resumeRun(runId);
     } catch (error) {
       send({ type: "error", message: error instanceof Error ? error.message : String(error) });
       socket.close();
       return;
     }
     if (socket.readyState !== socket.OPEN) {
-      // The dashboard gave up while the sandbox booted.
+      // The dashboard gave up while the eligibility checks ran.
       release();
       return;
     }
 
-    const [file, args] =
-      attach.kind === "local"
-        ? ["/bin/sh", [attach.scriptPath]]
-        : [
-            "ssh",
-            [
-              // -t forces the remote pty for the interactive agent; the local
-              // pty this spawn provides is what lets ssh forward resizes.
-              "-t",
-              "-i",
-              attach.keyPath,
-              "-o",
-              "StrictHostKeyChecking=no",
-              "-o",
-              "UserKnownHostsFile=/dev/null",
-              "-o",
-              "LogLevel=ERROR",
-              `${attach.user}@${attach.host}`,
-              attach.scriptPath,
-            ],
-          ];
-    try {
-      pty = spawn(file, args, { name: "xterm-256color", cols: 80, rows: 24 });
-    } catch (error) {
-      send({ type: "error", message: error instanceof Error ? error.message : String(error) });
-      release();
-      socket.close();
-      return;
-    }
-
-    pty.onData((data) => send({ type: "data", data }));
-    pty.onExit(({ exitCode }) => {
-      pty = undefined; // teardown on socket close must not kill an exited pty
-      send({ type: "exit", code: exitCode });
-      release();
-      socket.close();
+    // No resize has arrived yet on a brand-new socket; 80x24 matches the
+    // PTY default `brevi attach` used to spawn locally, so the first frame
+    // isn't garbled before the client's real terminal size lands.
+    const opened = orchestrator.openRunAttach(runId, {
+      cols: 80,
+      rows: 24,
+      onData: (data: string) => send({ type: "data", data }),
+      onExit: (code: number) => {
+        session = undefined; // teardown on socket close must not re-close an exited session
+        send({ type: "exit", code });
+        release();
+        socket.close();
+      },
+      onError: (message: string) => {
+        // The worker reports an error only when the session could not run at
+        // all (no retained disk, a boot failure), and the registry drops the
+        // session with it, so there is nothing left to type into: end the
+        // socket rather than leave the terminal open against a dead relay.
+        session = undefined;
+        send({ type: "error", message });
+        release();
+        socket.close();
+      },
     });
+    if (!opened) {
+      send({ type: "error", message: "the worker holding this run's sandbox isn't connected right now" });
+      release();
+      socket.close();
+      return;
+    }
+    if (socket.readyState !== socket.OPEN) {
+      // The dashboard gave up while the relay was opening.
+      opened.close();
+      release();
+      return;
+    }
+    session = opened;
   })();
 
   socket.on("message", (raw) => {
@@ -85,15 +86,15 @@ export function handleAttachSocket(socket: WebSocket, orchestrator: Orchestrator
     } catch {
       return;
     }
-    if (message.type === "input") pty?.write(message.data);
+    if (message.type === "input") session?.input(message.data);
     else if (message.type === "resize" && message.cols > 0 && message.rows > 0) {
-      pty?.resize(Math.floor(message.cols), Math.floor(message.rows));
+      session?.resize(Math.floor(message.cols), Math.floor(message.rows));
     }
   });
 
   const teardown = (): void => {
-    pty?.kill();
-    pty = undefined;
+    session?.close();
+    session = undefined;
     release();
   };
   socket.on("close", teardown);

@@ -284,6 +284,22 @@ function Row({ row, thinking }: { row: ConsoleRow; thinking?: boolean }) {
     );
   }
 
+  if (event.type === "limit") {
+    const provider = event.limit.provider === "claude" ? "Claude" : "Codex";
+    const kind = event.limit.kind === "unknown" ? "usage limit" : `${event.limit.kind} limit`;
+    return (
+      <div className="flex gap-2.5 py-[3px]">
+        <Gutter ts={event.ts} />
+        <p className="min-w-0 font-mono text-[11.5px] text-haze-600">
+          hit {provider} <span className="text-haze-300">{kind}</span>{" "}
+          {event.limit.resetsAt && (
+            <span className="text-haze-700">resets {clock(event.limit.resetsAt)}</span>
+          )}
+        </p>
+      </div>
+    );
+  }
+
   if (event.type === "log") {
     const styles = {
       stdout: "text-haze-200",

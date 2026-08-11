@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import { WORKSPACES_DIR } from "@brevi/shared";
 import type { Sandbox } from "@brevi/sandbox";
+import { isSafePathSegment } from "@brevi/orchestrator/internal";
 import { buildCredentialProfile, buildGitAskpass } from "./resume.js";
-import { isSafePathSegment } from "./safepath.js";
 
 export interface ProvisionedCredentials {
   /** Absolute path of the installed credential profile (POSIX sh, mode 600). */

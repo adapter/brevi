@@ -18,6 +18,8 @@ export const IMAGES_DIR = join(BREVI_HOME, "images");
 export const WORKSPACES_DIR = join(BREVI_HOME, "workspaces");
 /** Per-repository memories, one JSON file per repo key (see MemoryStore). */
 export const MEMORIES_DIR = join(BREVI_HOME, "memories");
+/** Stable per-machine worker id (a randomUUID), created on first `brevi worker` run. */
+export const WORKER_ID_PATH = join(BREVI_HOME, "worker-id");
 
 /** Where `brevi setup` downloads the kernel and `build-rootfs.sh` writes the image. */
 export const DEFAULT_KERNEL_IMAGE = join(IMAGES_DIR, "vmlinux");

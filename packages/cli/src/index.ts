@@ -10,6 +10,7 @@ import { registerStatusCommand } from "./commands/status.js";
 import { registerStopCommand } from "./commands/stop.js";
 import { registerUiCommand } from "./commands/ui.js";
 import { registerUpdateCommand } from "./commands/update.js";
+import { registerWorkerCommand } from "./commands/worker.js";
 import { readPackageVersion } from "./lib/version.js";
 
 const program = new Command();
@@ -30,6 +31,7 @@ registerStopCommand(program);
 registerAttachCommand(program);
 registerStatusCommand(program);
 registerDoctorCommand(program);
+registerWorkerCommand(program);
 registerUpdateCommand(program);
 
 await program.parseAsync(process.argv);

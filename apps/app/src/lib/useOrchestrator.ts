@@ -8,6 +8,7 @@ import type {
   RunEvent,
   ServerMessage,
   Ticket,
+  WorkerSummary,
 } from "@brevi/shared";
 import { api, wsUrl } from "./api";
 
@@ -20,6 +21,7 @@ interface State {
   conn: Connection;
   runs: Run[];
   tickets: Ticket[];
+  workers: WorkerSummary[];
   config: BreviConfig | null;
   linearStatus: LinearStatus | null;
   health: HealthResponse | null;
@@ -35,10 +37,18 @@ interface State {
 
 type Action =
   | { t: "conn"; conn: Connection }
-  | { t: "hello"; runs: Run[]; tickets: Ticket[]; config: BreviConfig; linearStatus: LinearStatus }
+  | {
+      t: "hello";
+      runs: Run[];
+      tickets: Ticket[];
+      config: BreviConfig;
+      linearStatus: LinearStatus;
+      workers: WorkerSummary[];
+    }
   | { t: "config"; config: BreviConfig }
   | { t: "linear-status"; linearStatus: LinearStatus }
   | { t: "tickets"; tickets: Ticket[] }
+  | { t: "workers"; workers: WorkerSummary[] }
   | { t: "run"; run: Run }
   | { t: "event"; event: RunEvent }
   | { t: "seed"; runs?: Run[]; tickets?: Ticket[]; health?: HealthResponse }
@@ -52,6 +62,7 @@ const initial: State = {
   conn: "connecting",
   runs: [],
   tickets: [],
+  workers: [],
   config: null,
   linearStatus: null,
   health: null,
@@ -121,6 +132,7 @@ function reducer(state: State, action: Action): State {
         tickets: action.tickets,
         config: action.config,
         linearStatus: action.linearStatus,
+        workers: action.workers,
         loaded: true,
       };
     case "config":
@@ -129,6 +141,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, linearStatus: action.linearStatus };
     case "tickets":
       return { ...state, tickets: action.tickets };
+    case "workers":
+      return { ...state, workers: action.workers };
     case "run": {
       const runs = upsert(state.runs, action.run);
       return { ...state, runs, loaded: true };
@@ -242,6 +256,7 @@ export function useOrchestrator() {
               tickets: msg.tickets,
               config: msg.config,
               linearStatus: msg.linearStatus,
+              workers: msg.workers,
             });
             break;
           case "config":
@@ -252,6 +267,9 @@ export function useOrchestrator() {
             break;
           case "tickets":
             dispatch({ t: "tickets", tickets: msg.tickets });
+            break;
+          case "workers":
+            dispatch({ t: "workers", workers: msg.workers });
             break;
           case "run-updated":
             dispatch({ t: "run", run: msg.run });

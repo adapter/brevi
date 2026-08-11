@@ -90,9 +90,20 @@ jobs:
             exit 1
           fi
 
+      # The host is a pure scheduler: sandboxes are booted by the workers that
+      # execute runs, so an import of the provider package here would put
+      # execution back in the orchestrator process.
+      - name: Check the orchestrator imports no sandbox provider
+        run: |
+          if git grep -nI 'from "@brevi/sandbox"' -- packages/orchestrator; then
+            echo "packages/orchestrator must not import @brevi/sandbox: execution belongs to @brevi/worker." >&2
+            exit 1
+          fi
+
       - run: bun run lint
       - run: bun run check-types
       - run: bun run build
+      - run: bun test
 
   deploy-preview:
     name: Deploy preview (docs + api)

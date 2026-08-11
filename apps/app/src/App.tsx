@@ -20,6 +20,7 @@ export default function App() {
     conn,
     runs,
     tickets,
+    workers,
     config,
     linearStatus,
     health,
@@ -124,6 +125,7 @@ export default function App() {
               <RunDetail
                 run={selectedRun}
                 repoName={repoDisplay(config, selectedRun.ticket.repo)}
+                workers={workers}
                 events={events[selectedRun.id] ?? []}
                 now={now}
                 busy={busy[selectedRun.id] === true}
@@ -142,6 +144,7 @@ export default function App() {
             <ConfigurationPage
               config={config}
               runs={runs}
+              workers={workers}
               linearStatus={linearStatus}
               health={health}
               section={page.slice("config:".length) as ConfigSection}
