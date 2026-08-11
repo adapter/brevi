@@ -198,11 +198,17 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
     if (closed || reconnectTimer) return;
     const delayMs = withJitter(backoffMs);
     backoffMs = Math.min(backoffMs * 2, WORKER_BACKOFF_MAX_MS);
+    // Deliberately not unref'd, unlike the heartbeat timer: between a drop and
+    // the next attempt this is the only handle left, since the socket is gone
+    // and signal listeners don't hold the loop open. An unref'd one lets the
+    // process exit during the backoff, so `brevi worker` would die of the host
+    // restarting rather than reconnect through it. Every path that stops the
+    // worker for good (close, a fatal rejection, a revoke) clears this timer,
+    // so keeping it referenced cannot delay a shutdown either.
     reconnectTimer = setTimeout(() => {
       reconnectTimer = undefined;
       connect();
     }, delayMs);
-    reconnectTimer.unref?.();
   };
 
   /** What this attempt presents itself with; undefined only if both the token and the credential are gone, which connectToHost's guard above rules out. */
