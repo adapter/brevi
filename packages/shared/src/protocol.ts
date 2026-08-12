@@ -1,5 +1,5 @@
 import type { BreviConfig } from "./config.js";
-import type { WorkerView } from "./fleet.js";
+import type { WorkerState, WorkerView } from "./fleet.js";
 import type { ConfigPatch, SettingsApplied } from "./settings.js";
 import type { PrState, RepoMemory, Run, RunEvent, Ticket } from "./types.js";
 
@@ -91,6 +91,15 @@ import type { PrState, RepoMemory, Run, RunEvent, Ticket } from "./types.js";
  *        Put a drained worker back in rotation.
  *   DELETE /api/workers/:id              -> FleetResponse
  *        Revoke: the credential dies and the worker is disconnected at once.
+ *   GET  /api/worker/demand?workerId=    -> FleetDemandResponse
+ *        What a worker's supervisor (e.g. brevi's managed macOS VM) polls to
+ *        decide whether its machine needs to be awake. Unlike every other
+ *        route here the caller is not the dashboard but a program on the
+ *        worker's own machine, so it authenticates with that worker's durable
+ *        credential (Authorization: Bearer) and 403s on anything else. Served
+ *        by the fleet listener too, since that is the listener a worker's
+ *        machine can reach. Answers while the worker is offline, which is the
+ *        point: that is when a supervisor has to decide to boot it.
  *   WS   /ws/worker                      -> WorkerMessage / HostMessage
  *        The worker channel: register (with a pairing token or a durable
  *        credential), heartbeat, receive dispatches, and report runs back.
@@ -291,6 +300,41 @@ export interface RunAttachInfo {
 export interface ResumeRunResponse {
   run: Run;
   attach: RunAttachInfo;
+}
+
+/**
+ * What a worker's supervisor polls to decide whether its machine needs to be
+ * awake: is there work the fleet cannot take right now, and is the worker it
+ * supervises still busy. Authenticated with that worker's own durable
+ * credential, since the caller runs on the worker's machine rather than the
+ * host's; see WORKER_DEMAND_PATH.
+ */
+export interface FleetDemandResponse {
+  /** Runs queued on the host, waiting for a worker with room to take them. */
+  queuedRuns: number;
+  /** Runs executing across the whole fleet right now. */
+  activeRuns: number;
+  connectedWorkers: number;
+  /** Spare capacity across connected, non-draining workers (sum of maxConcurrency minus active leases). */
+  spareCapacity: number;
+  /** The worker the caller authenticated as. */
+  worker: FleetWorkerDemand;
+}
+
+export interface FleetWorkerDemand {
+  id: string;
+  connected: boolean;
+  /**
+   * Operator-controlled state. A supervisor needs this to read `queuedRuns`
+   * correctly: the scheduler never dispatches to a draining worker, so queued
+   * work is not a reason for a drained machine to be awake, and a supervisor
+   * that ignored this would boot a VM that then sits idle forever.
+   */
+  state: WorkerState;
+  /** Runs this worker holds a lease for. */
+  activeRuns: number;
+  /** Interactive attach sessions open against this worker's retained sandboxes. */
+  attachSessions: number;
 }
 
 /**

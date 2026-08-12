@@ -74,9 +74,13 @@ export function registerSetupCommand(program: Command): void {
     .description(
       "Set up the firecracker sandbox on this host (kvm, binary, kernel, rootfs, network)",
     )
-    .action(async () => {
+    .option(
+      "-y, --yes",
+      "answer every prompt with its default-yes and never wait for input (for unattended provisioning)",
+    )
+    .action(async (options: { yes?: boolean }) => {
       try {
-        const ready = await runSetup();
+        const ready = await runSetup({ assumeYes: options.yes === true });
         if (!ready) process.exitCode = 1;
       } catch (err) {
         log.error(errorMessage(err));
@@ -91,13 +95,22 @@ export interface RunSetupOptions {
    * intro/outro frame; setup then logs its result instead of closing the frame.
    */
   standalone?: boolean;
+  /**
+   * Unattended provisioning (e.g. inside brevi's managed VM, driven over a non-interactive
+   * shell): every prompt resolves immediately instead of waiting on stdin, logging the
+   * choice it made. No interactive terminal is required in this mode.
+   */
+  assumeYes?: boolean;
 }
 
 /** Runs the setup flow. Resolves to true when the host passes preflight at the end. */
-export async function runSetup({ standalone = true }: RunSetupOptions = {}): Promise<boolean> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+export async function runSetup({
+  standalone = true,
+  assumeYes = false,
+}: RunSetupOptions = {}): Promise<boolean> {
+  if (!assumeYes && (!process.stdin.isTTY || !process.stdout.isTTY)) {
     console.error(pc.red("✖ brevi setup is interactive and this terminal is not."));
-    console.error(pc.dim("  Run it from an interactive terminal."));
+    console.error(pc.dim("  Run it from an interactive terminal, or pass --yes for unattended provisioning."));
     process.exit(1);
   }
   if (process.platform !== "linux") {
@@ -123,14 +136,14 @@ export async function runSetup({ standalone = true }: RunSetupOptions = {}): Pro
   let firecracker = config?.sandbox.firecracker ?? firecrackerConfigSchema.parse({});
   const arch = firecrackerArch();
 
-  const missingTools = await checkHostTools();
-  const kvmReloginGroup = await ensureKvmAccess();
+  const missingTools = await checkHostTools(assumeYes);
+  const kvmReloginGroup = await ensureKvmAccess(assumeYes);
   ({ firecracker, config } = await ensureFirecrackerBinary(firecracker, config, arch));
   await ensureKernel(firecracker, arch);
-  await ensureRootfsImage(firecracker);
-  await ensureNetwork(config, missingTools);
+  await ensureRootfsImage(firecracker, assumeYes);
+  await ensureNetwork(config, missingTools, assumeYes);
 
-  return verify(firecracker, config, kvmReloginGroup, standalone);
+  return verify(firecracker, config, kvmReloginGroup, standalone, assumeYes);
 }
 
 async function loadExisting(): Promise<BreviConfig | undefined> {
@@ -152,7 +165,29 @@ function firecrackerArch(): FirecrackerArch | undefined {
   return undefined;
 }
 
-async function checkHostTools(): Promise<Set<string>> {
+/**
+ * The setup flow's yes/no prompts. With `assumeYes` (unattended provisioning, e.g. inside
+ * brevi's managed VM) it answers immediately instead of waiting on stdin, and logs the
+ * choice so a transcript from a non-interactive shell still shows what setup decided.
+ * Pass `unattended` when the interactive default is not the answer that works without a
+ * human (e.g. a from-source build that needs docker): `--yes` then takes the override
+ * answer instead of `initialValue`, and logs why.
+ */
+async function ask(
+  options: { message: string; initialValue?: boolean },
+  assumeYes: boolean,
+  unattended?: { answer: boolean; reason: string },
+): Promise<boolean> {
+  if (assumeYes) {
+    const answer = unattended?.answer ?? options.initialValue ?? true;
+    log.step(`${options.message} -> ${answer ? "yes" : "no"} (--yes)`);
+    if (unattended !== undefined) log.warn(unattended.reason);
+    return answer;
+  }
+  return exitOnCancel(await confirm(options));
+}
+
+async function checkHostTools(assumeYes: boolean): Promise<Set<string>> {
   let missing = await missingHostTools();
   if (missing.length === 0) {
     log.success("Host tools: ip, ssh, tar, and iptables are all installed.");
@@ -179,11 +214,9 @@ async function checkHostTools(): Promise<Set<string>> {
   }
 
   log.warn(describe().join("\n"));
-  const install = exitOnCancel(
-    await confirm({
-      message: `Install ${packages.join(", ")} with apt now? (uses sudo)`,
-      initialValue: true,
-    }),
+  const install = await ask(
+    { message: `Install ${packages.join(", ")} with apt now? (uses sudo)`, initialValue: true },
+    assumeYes,
   );
   if (!install) {
     log.warn("Skipped; the setup steps that need the missing tools will be skipped too.");
@@ -205,7 +238,7 @@ async function checkHostTools(): Promise<Set<string>> {
  * Docker for the from-source rootfs build, resolved at the point of use. Returns
  * false when the build cannot proceed, having already explained why.
  */
-async function ensureDocker(): Promise<boolean> {
+async function ensureDocker(assumeYes: boolean): Promise<boolean> {
   if ((await resolveBinary(DOCKER_PACKAGE.tool)) !== undefined) return true;
 
   if ((await resolveBinary("apt-get")) === undefined) {
@@ -220,11 +253,17 @@ async function ensureDocker(): Promise<boolean> {
     return false;
   }
 
-  const install = exitOnCancel(
-    await confirm({
+  const install = await ask(
+    {
       message: `Building from source needs docker. Install ${DOCKER_PACKAGE.aptPackage} with apt now? (uses sudo)`,
       initialValue: true,
-    }),
+    },
+    assumeYes,
+    {
+      answer: false,
+      reason:
+        "--yes never installs docker, so the from-source rootfs build cannot proceed unattended. Install docker.io and re-run brevi setup, or use the prebuilt rootfs download instead.",
+    },
   );
   if (!install) {
     log.warn("Skipped; the from-source build cannot run without docker.");
@@ -255,7 +294,7 @@ async function missingHostTools(): Promise<typeof TOOL_PACKAGES> {
 }
 
 /** Resolves to the group added when a change was made that needs a re-login to take effect. */
-async function ensureKvmAccess(): Promise<string | undefined> {
+async function ensureKvmAccess(assumeYes: boolean): Promise<string | undefined> {
   if (await isReadWritable("/dev/kvm")) {
     log.success("/dev/kvm is readable and writable.");
     return undefined;
@@ -279,11 +318,12 @@ async function ensureKvmAccess(): Promise<string | undefined> {
     );
     return group;
   }
-  const add = exitOnCancel(
-    await confirm({
+  const add = await ask(
+    {
       message: `/dev/kvm exists but is not readable and writable by ${username}. Add ${username} to the "${group}" group?`,
       initialValue: true,
-    }),
+    },
+    assumeYes,
   );
   if (!add) {
     log.warn("Skipped; brevi cannot boot microVMs until /dev/kvm is readable and writable.");
@@ -428,7 +468,7 @@ async function ensureKernel(
   s.stop(`Downloaded kernel to ${kernelImage}`);
 }
 
-async function ensureRootfsImage(firecracker: FirecrackerConfig): Promise<void> {
+async function ensureRootfsImage(firecracker: FirecrackerConfig, assumeYes: boolean): Promise<void> {
   // Key handling happens here, up front, regardless of which rootfs path (or none) is
   // found below; the preflight at the end reports a still-missing key as a problem.
   try {
@@ -467,11 +507,12 @@ async function ensureRootfsImage(firecracker: FirecrackerConfig): Promise<void> 
   if (rootfsArch() === undefined) {
     log.warn(`No prebuilt rootfs image is published for ${process.arch}.`);
   } else {
-    const download = exitOnCancel(
-      await confirm({
+    const download = await ask(
+      {
         message: `Download the prebuilt rootfs image for brevi ${cliVersion} (~1.5 GB, sha256-verified, no Docker needed)?`,
         initialValue: true,
-      }),
+      },
+      assumeYes,
     );
     if (download) {
       const s = spinner();
@@ -499,18 +540,24 @@ async function ensureRootfsImage(firecracker: FirecrackerConfig): Promise<void> 
     }
   }
 
-  const build = exitOnCancel(
-    await confirm({
+  const build = await ask(
+    {
       message:
         "Build the rootfs image from source now? It is a ~2 GB docker build that takes several minutes.",
       initialValue: true,
-    }),
+    },
+    assumeYes,
+    {
+      answer: false,
+      reason:
+        "--yes skips the from-source rootfs build (it needs docker); build it manually with the bundled build-rootfs.sh, or re-run brevi setup interactively once network access allows the prebuilt download.",
+    },
   );
   if (!build) {
     log.warn("Skipped; the firecracker provider cannot boot without a rootfs image.");
     return;
   }
-  if (!(await ensureDocker())) return;
+  if (!(await ensureDocker(assumeYes))) return;
 
   const script = shippedScript("build-rootfs.sh");
   if (script === undefined) return;
@@ -523,6 +570,7 @@ async function ensureRootfsImage(firecracker: FirecrackerConfig): Promise<void> 
 async function ensureNetwork(
   config: BreviConfig | undefined,
   missingTools: Set<string>,
+  assumeYes: boolean,
 ): Promise<void> {
   const taps = Math.max(16, config?.sandbox.concurrency ?? 1);
   if ((await collectFirecrackerNetworkProblems(taps)).length === 0) {
@@ -540,11 +588,12 @@ async function ensureNetwork(
     );
     return;
   }
-  const proceed = exitOnCancel(
-    await confirm({
+  const proceed = await ask(
+    {
       message: `Set up microVM networking now? (${taps} tap devices plus NAT for 172.30.0.0/16)`,
       initialValue: true,
-    }),
+    },
+    assumeYes,
   );
   if (!proceed) {
     log.warn("Skipped; microVMs will have no network until setup-network.sh runs.");
@@ -575,6 +624,7 @@ async function verify(
   config: BreviConfig | undefined,
   kvmReloginGroup: string | undefined,
   standalone: boolean,
+  assumeYes: boolean,
 ): Promise<boolean> {
   const taps = Math.max(16, config?.sandbox.concurrency ?? 1);
   const problems = [
@@ -584,11 +634,9 @@ async function verify(
 
   if (problems.length === 0) {
     if (config && config.sandbox.provider === "process") {
-      const switchProvider = exitOnCancel(
-        await confirm({
-          message: `sandbox.provider is "process"; switch it to "firecracker"?`,
-          initialValue: true,
-        }),
+      const switchProvider = await ask(
+        { message: `sandbox.provider is "process"; switch it to "firecracker"?`, initialValue: true },
+        assumeYes,
       );
       if (switchProvider) {
         await saveConfig({ ...config, sandbox: { ...config.sandbox, provider: "firecracker" } });

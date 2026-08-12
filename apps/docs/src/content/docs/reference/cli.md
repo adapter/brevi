@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: "Reference for the brevi command line: the default invocation, init, setup, start, status, doctor, worker and update."
+description: "Reference for the brevi command line: the default invocation, init, setup, start, status, doctor, worker, mac and update."
 ---
 
 The CLI is [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli), exposed as the `brevi` binary. Run it with `npx @brevi/cli [command]`, or install it globally with `npm install -g @brevi/cli` (see [Getting started](/getting-started/)).
@@ -20,6 +20,8 @@ brevi [command]
   attach <runId>
             Resume a run's agent conversation inside its retained sandbox
   worker    Enroll this machine as a worker, or reconnect an enrolled one
+  mac       Manage a fully isolated Firecracker worker in a Linux VM on
+            Apple silicon (M3+, macOS 15+)
   update    Update @brevi/cli to the latest version published on npm
 
   -V, --version   Print the version
@@ -64,6 +66,12 @@ Init then checks for the external CLIs brevi shells out to: `claude`, `codex`, `
 
 Provisions the current Linux host for the [Firecracker sandbox](/guides/sandboxes/). Interactive and idempotent: each step checks itself first and is skipped with a note when already satisfied, so re-running after a reboot or a partial first run is safe.
 
+| Flag | Meaning |
+| --- | --- |
+| `-y, --yes` | Answer every prompt with its default-yes and never wait for input, for unattended provisioning; no interactive terminal is required in this mode |
+
+`--yes` picks the path that needs no human and no extra host dependency: it accepts apt package installs, but declines a from-source rootfs build (and never installs docker) in favor of the prebuilt rootfs download, logging what it skipped and how to do it manually.
+
 The steps, in order:
 
 1. **Host tools**: checks for `ip`, `ssh`, `tar`, `iptables` and `docker`, and offers to install the missing ones with apt (asks first; on non-apt systems an install hint is printed instead). docker is only needed to build the rootfs from source, iptables only for networking.
@@ -75,7 +83,7 @@ The steps, in order:
 
 brevi never escalates privileges silently: every `sudo` command line is printed before it runs, and every step that uses one asks first. Setup ends with the same complete preflight check `brevi start` uses, including networking (tap devices and IPv4 forwarding) and the rootfs manifest version; when everything passes, setup offers to switch `sandbox.provider` from `process` to `firecracker` and reports the sandbox ready. Remaining problems are listed instead, with a pointer to re-run once fixed, and setup exits non-zero.
 
-Requires an interactive terminal and Linux; on other platforms there is nothing to set up, since the `auto` provider selects the [process provider](/guides/sandboxes/#the-process-provider) there (an explicit `firecracker` provider fails at startup instead). Works without a config too (`brevi init` picks the provisioned host up afterwards).
+Requires Linux and, without `--yes`, an interactive terminal; on other platforms there is nothing to set up, since the `auto` provider selects the [process provider](/guides/sandboxes/#the-process-provider) there (an explicit `firecracker` provider fails at startup instead). Works without a config too (`brevi init` picks the provisioned host up afterwards).
 
 ## `brevi start`
 
@@ -166,6 +174,60 @@ Every registration reports the worker's capabilities: OS, architecture, the reso
 Draining the worker from the Workers page reaches it over that same connection and takes effect at once: it refuses new dispatches with "worker is draining" while the runs already in flight finish and report normally, and the state survives reconnects, so a machine being decommissioned empties itself. Re-enabling it puts it back in rotation. Revoking it kills its credential and disconnects it immediately: the worker deletes its stored credential, shuts down what it was still running, and exits non-zero rather than retrying, since reconnecting with a dead credential would only produce a rejection loop. Enrolling that machine again needs a fresh pairing token.
 
 Runs in the foreground until `Ctrl+C` (or `SIGTERM`). The first signal stops the worker from accepting new dispatches, aborts whatever runs are still in flight, and waits for their final reporting to reach the host before the process exits; a second signal exits immediately instead of waiting. Reconnects on its own with exponential backoff (jittered, capped at 30 seconds) whenever the connection drops, resuming in-flight run reporting once it registers again; a rejection that retrying cannot fix, a dead credential or a protocol mismatch, is fatal and exits non-zero instead.
+
+## `brevi mac`
+
+```
+brevi mac install [--host <url>] [--token <token>] [--cpus <n>] [--memory <gib>] [--disk <gib>]
+                  [--idle-stop <minutes>] [--concurrency <n>] [--name <name>] [-y, --yes]
+brevi mac status
+brevi mac start
+brevi mac stop
+brevi mac uninstall [-y, --yes]
+brevi mac supervise      # the launchd entry point, not run by hand
+```
+
+Manages a fully isolated Firecracker worker running inside a managed Linux guest VM on a Mac, using nested virtualization through Apple's Virtualization.framework. Requires Apple silicon M3 or newer running macOS 15 or newer: nested virtualization isn't exposed on older Apple silicon or on Intel, and there is no process-provider fallback or degraded mode, so `brevi mac install` refuses on an unsupported Mac and exits non-zero without leaving anything behind. See [macOS workers](/guides/macos-worker/) for the full guide.
+
+### `brevi mac install`
+
+Requires [Lima](https://lima-vm.io/) (`brew install lima`), offering to install it when missing. Runs the hardware preflight, ensures Lima is present, saves settings to `~/.brevi/mac-vm.json` (mode `0600`; deliberately separate from `~/.brevi/config.json`), renders a pinned Lima template to `~/.brevi/mac/lima-brevi.yaml`, creates and first-boots the VM, and installs a launchd agent at `~/Library/LaunchAgents/dev.brevi.macvm.plist` that runs `brevi mac supervise` at login and keeps it alive across restarts.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--host <url>` | `http://localhost:<port>` of whichever local listener the guest can reach | The brevi host the guest worker dials |
+| `--token <token>` | none | Single-use pairing token minted on the host's Workers page; not needed once the guest is enrolled with that same host |
+| `--cpus <n>` | 4 | VM CPU count |
+| `--memory <gib>` | 8 | VM memory, in GiB |
+| `--disk <gib>` | 100 | VM disk size, in GiB |
+| `--idle-stop <minutes>` | 20 | Minutes idle (no leased run, no attach session, no queued host work) before the VM stops; `0` disables the idle stop |
+| `--concurrency <n>` | 1 | Dispatched runs the guest worker executes at once |
+| `--name <name>` | this machine's hostname | Shown for this worker on the host's dashboard |
+| `-y, --yes` | | Answer every prompt with its default and never wait for input |
+
+When `--host` is omitted, the port comes from whichever of this machine's listeners the guest can actually dial: the `fleet.host` worker channel when it is bound, otherwise the dashboard's `server.host`. Install refuses when both are loopback-only, since nothing the guest sends could reach them. The guest's own copy of the URL has a loopback host rewritten to `host.lima.internal` (inside the VM, `localhost` is the VM), while the macOS-side supervisor keeps polling the host on `localhost`.
+
+The guest is a pinned Ubuntu 24.04 cloud image (sha256-verified) with no host mounts, provisioned on first boot with Node.js, `@brevi/cli`, the ordinary `brevi setup --yes` Firecracker provisioning (binary, kernel, prebuilt rootfs, tap networking), a `brevi-network` oneshot unit that reapplies tap devices, forwarding and NAT on every boot (none of which survives a restart, and the supervisor restarts this VM on every idle cycle), and a `brevi-worker` systemd unit running `brevi worker` as root, which `Requires=` the networking unit. The guest worker reports its os as `macos-vm`, which the dashboard's Workers page shows as **macOS VM**.
+
+### `brevi mac status`
+
+Reports the VM's state and whether its `brevi-network` and `brevi-worker` units are active in the guest.
+
+### `brevi mac start` / `brevi mac stop`
+
+Starts or stops the VM immediately, bypassing the idle-stop policy.
+
+### `brevi mac uninstall`
+
+```
+brevi mac uninstall [-y, --yes]
+```
+
+Removes the launchd agent, the VM and its disk, the rendered Lima template, `~/.brevi/mac-vm.json`, and the supervisor log.
+
+### `brevi mac supervise`
+
+The launchd agent's entry point, installed and run automatically by `brevi mac install`; not meant to be run by hand. Polls the host's [`GET /api/worker/demand`](/reference/api/#worker-demand), authenticating as the guest's own worker, and starts or stops the VM according to the idle-stop policy. A drained worker is never woken for queued work, since the scheduler would not dispatch to it, logging to `~/.brevi/logs/mac-vm.log`.
 
 ## `brevi update`
 

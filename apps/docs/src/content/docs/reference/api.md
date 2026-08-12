@@ -33,6 +33,8 @@ There is no authentication: by default the server is loopback-only and anything 
 | `POST` | `/api/workers/:id/drain` | `FleetResponse` |
 | `POST` | `/api/workers/:id/enable` | `FleetResponse` |
 | `DELETE` | `/api/workers/:id` | `FleetResponse`: revoke the worker's enrollment |
+| `GET` | `/api/worker/demand` | `FleetDemandResponse`, a worker credential required |
+| `POST` | `/api/worker/state` | `FleetDemandResponse`, a worker credential required |
 | `PUT` | `/api/settings/credentials` | `CredentialsUpdateResponse` |
 | `POST` | `/api/connect/:provider` | `ConnectResponse` |
 | `POST` | `/api/connect/github/poll` | `DevicePollResponse` |
@@ -193,11 +195,29 @@ No credential material ever appears here: the host stores only the sha256 of eac
 
 `POST /api/workers/:id/rename` with `{ "name": "..." }` (trimmed, control characters stripped, capped at 60 characters; empty is `400`), `POST /api/workers/:id/drain` (finish in-flight runs, accept nothing new; the state is persisted and survives reconnects), `POST /api/workers/:id/enable` (put a drained worker back in rotation), and `DELETE /api/workers/:id` (revoke: the credential dies and the worker is disconnected at once, unable to reconnect with what it holds) all return the updated `FleetResponse`, or `404` for an id that is not enrolled.
 
+#### Worker demand
+
+`GET /api/worker/demand?workerId=<id>` is what a worker's own supervisor polls to decide whether its machine needs to be awake (e.g. brevi's managed macOS VM, which stops the guest when idle and has to cold-start it again for queued work, so it cannot just ask the guest). It is the one route here whose caller is not the dashboard but a program on the worker's machine, so it does not rely on the listener's bind address: it authenticates with that worker's own durable credential, as `Authorization: Bearer <credential>`, and answers `403` with `{ "error": string }` for an unknown worker or a missing or wrong credential. It is served by the fleet listener as well as the dashboard's, since the fleet listener is the one a remote worker's machine can reach.
+
+```json
+{
+  "queuedRuns": 2,
+  "activeRuns": 3,
+  "connectedWorkers": 1,
+  "spareCapacity": 0,
+  "worker": { "id": "wk-3f9a1c22b0", "connected": true, "state": "active", "activeRuns": 3, "attachSessions": 0 }
+}
+```
+
+`queuedRuns` is work waiting for a worker with room; `activeRuns`, `connectedWorkers` and `spareCapacity` are fleet-wide, with draining workers left out of the spare capacity. `worker` is the caller's own worker and is answered while it is offline too (`connected: false` with zeroes), which is the point: that is exactly when a supervisor has to decide to boot it. Its `state` is what makes `queuedRuns` readable: the scheduler never dispatches to a `draining` worker, so a supervisor must not treat a queue as a reason to wake a drained machine, and brevi's macOS supervisor does not.
+
+`POST /api/worker/state?workerId=<id>&state=draining` (or `state=active`), authenticated the same way, lets a supervisor drain or re-activate its own worker, and answers with the demand **as it stands after the change**. That single round trip is what makes powering a machine off safe. Demand alone is a snapshot: a run queued a moment after it is read still gets dispatched to a worker that is online, and cutting the power then kills it mid-execution. Draining first closes the window, since the scheduler stops placing runs on this worker before the answer is written, so whatever that answer reports in flight is the complete set of work a shutdown would destroy. brevi's macOS supervisor drains, checks, and only then stops the VM, restoring `active` on the next boot; a drain an operator placed is left alone, and never lifted by a supervisor.
+
 ### Worker channel
 
 `WS /ws/worker` is the channel `brevi worker` (see [CLI](/reference/cli/#brevi-worker)) connects to. Each worker dials it outbound and never accepts inbound connections, so a worker behind NAT needs no port open. The wire protocol is defined as zod schemas in `packages/shared/src/worker.ts` and is versioned (`WORKER_PROTOCOL_VERSION`, currently `2`); a worker on a different version is rejected on registration.
 
-It is served in two places: always by the dashboard's own listener (`server.host` / `server.port`), so a worker on this same machine can always enroll, and additionally by a dedicated listener bound to `fleet.host` / `fleet.port` (see [Configuration](/reference/configuration/#fleet)) when `fleet.host` is set. That second listener exists so a worker on another machine can reach `/ws/worker` without exposing the unauthenticated management API above, which stays on `server.host` regardless; the dedicated listener serves nothing else, and every other request on it gets a `404`.
+It is served in two places: always by the dashboard's own listener (`server.host` / `server.port`), so a worker on this same machine can always enroll, and additionally by a dedicated listener bound to `fleet.host` / `fleet.port` (see [Configuration](/reference/configuration/#fleet)) when `fleet.host` is set. That second listener exists so a worker on another machine can reach `/ws/worker` without exposing the unauthenticated management API above, which stays on `server.host` regardless; the dedicated listener serves nothing else beyond the credential-authenticated `GET /api/worker/demand` above, and every other request on it gets a `404`.
 
 The first frame on every connection is `register`, which carries the protocol version, the worker's capabilities, the leases it still believes it owns, and an auth envelope:
 

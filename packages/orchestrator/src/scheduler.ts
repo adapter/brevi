@@ -24,6 +24,7 @@ import {
   type CredentialsUpdateResponse,
   type DevicePollResponse,
   type DispatchPrompts,
+  type FleetDemandResponse,
   type FleetResponse,
   type GithubRepo,
   type LinearProject,
@@ -460,6 +461,38 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    */
   openRunAttach(runId: string, options: AttachSessionOptions): AttachSession | undefined {
     return this.#workers?.openAttach(runId, options);
+  }
+
+  /**
+   * Whether `credential` is this worker's own durable credential, for the one
+   * route a worker's supervisor calls over HTTP (see WORKER_DEMAND_PATH).
+   * Delegated straight to the registry so there is exactly one comparison of
+   * a credential against the fleet store, whether it arrives on the worker
+   * channel or on that route.
+   */
+  authenticateWorker(workerId: string, credential: string): boolean {
+    return this.#workers?.authenticate(workerId, credential) ?? false;
+  }
+
+  /**
+   * See GET WORKER_DEMAND_PATH: queued work across the host plus this one
+   * worker's liveness, for the supervisor deciding whether its machine has to
+   * be awake. The caller has already been authenticated as `workerId`.
+   */
+  fleetDemand(workerId: string): FleetDemandResponse {
+    return {
+      queuedRuns: this.#queue.length,
+      activeRuns: this.#workers?.inFlight() ?? 0,
+      connectedWorkers: this.listWorkers().filter((worker) => worker.connection === "online").length,
+      spareCapacity: this.#workers?.spareCapacity() ?? 0,
+      worker: this.#workers?.workerDemand(workerId) ?? {
+        id: workerId,
+        connected: false,
+        state: "draining",
+        activeRuns: 0,
+        attachSessions: 0,
+      },
+    };
   }
 
   getRun(id: string): Run | undefined {

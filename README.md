@@ -11,7 +11,7 @@ A local sandbox and orchestrator for coding agents.
 
 Connect your machine to Linear and GitHub, add the **`brevi`** label to a ticket, and brevi picks it up: it runs a coding agent on a checkout of the mapped repo, pushes a branch, and opens a GitHub PR. A demo (screenshots or a screen recording) captured by the agent is kept with the run in the local dashboard.
 
-Every execution runs in an isolated sandbox. On Linux with KVM, sandboxes are [Firecracker](https://firecracker-microvm.github.io/) microVMs; elsewhere a local process sandbox is used for development.
+Every execution runs in an isolated sandbox. On Linux with KVM, sandboxes are [Firecracker](https://firecracker-microvm.github.io/) microVMs; elsewhere a local process sandbox is used for development. On Apple silicon M3+ running macOS 15+, `brevi mac install` manages a Linux guest VM so a Mac gets the same Firecracker isolation; see the docs for [macOS workers](https://brevi.dev/guides/macos-worker/).
 
 ## Quick start
 
