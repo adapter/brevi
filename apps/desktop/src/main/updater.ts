@@ -41,7 +41,7 @@ const MAX_ERROR_MESSAGE_LENGTH = 120;
 export interface DesktopUpdaterOptions {
   /** app.getVersion(): the running version, compared against a pending install on launch. */
   currentVersion: string;
-  /** Runs the orchestrator is executing right now; a restart must wait for these. */
+  /** Runs a restart would disrupt (executing or queued); an automatic install must wait for these. */
   busyRuns: () => number;
   onState: (state: UpdaterState) => void;
   /** An update finished downloading and will apply on the next safe restart. */
@@ -153,7 +153,7 @@ export class DesktopUpdater {
     return true;
   }
 
-  /** Called whenever the fleet changes: applies a ready update as soon as nothing is running. */
+  /** Called whenever the fleet changes: applies a ready update as soon as nothing is running or queued. */
   runsChanged(): void {
     if (this.#state.kind !== "ready") return;
     // Refresh the busy count shown in the tray line even before it's safe to install.
@@ -198,11 +198,12 @@ export class DesktopUpdater {
   }
 
   /**
-   * The whole "no user action" path: whenever the state is ready and nothing
-   * is running, install right away instead of waiting for a menu click. A
-   * user can still install early from the tray while runs are in flight
-   * (updateAction only offers that when the state is ready), but the common
-   * case is the update just applies itself the moment the machine goes idle.
+   * The whole "no user action" path: whenever the state is ready and there
+   * is neither a running nor a queued run, install right away instead of
+   * waiting for a menu click. A user can still install early from the tray
+   * while runs are in flight (updateAction only offers that when the state
+   * is ready), but the common case is the update just applies itself the
+   * moment the machine goes idle.
    */
   #maybeInstall(): void {
     if (shouldInstallNow(this.#state, this.#options.busyRuns())) {

@@ -100,11 +100,12 @@ export function updateAction(state: UpdaterState): "install" | "check" | "none" 
 
 /**
  * Whether it's safe to restart into the downloaded update right now.
- * "busy" deliberately excludes queued and waiting runs: a queued run hasn't
- * started yet (a restart just delays it a few seconds), and a waiting run is
- * parked on a human's input (it isn't going anywhere while nobody's typing),
- * so neither is lost by restarting. A run the orchestrator is actually
- * executing locally is what would be lost, so only that counts as busy.
+ * "busy" covers both the runs being executed and the ones still queued (see
+ * updateBlockingRuns in summary.ts): stopping the orchestrator cancels
+ * whatever is left in its queue, so a queued run is lost by an automatic
+ * restart just as an executing one is. It deliberately excludes waiting
+ * runs: one parked on a human's input isn't going anywhere while nobody's
+ * typing, and the next boot reschedules it.
  */
 export function shouldInstallNow(state: UpdaterState, busyRuns: number): boolean {
   return state.kind === "ready" && busyRuns === 0;
