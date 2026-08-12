@@ -197,6 +197,8 @@ export function RunDetail({
             />
           )}
 
+          {run.status === "queued" && run.queueReason && <QueuedBanner reason={run.queueReason} />}
+
           {/* Two explicit rows: the tab strip alone on top, then the active
               panel and the evidence card side by side in one stretched row,
               so both cards share a top edge and a bottom edge. */}
@@ -426,6 +428,19 @@ function WaitingBanner({
           {limit.message}
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * The run is queued but nothing can dispatch it yet; say why. Neutral haze
+ * tones, matching the queued status's own colour (STATUS_TONE.queued):
+ * waiting on capacity is not "connected" (mint) or "working" (ember).
+ */
+function QueuedBanner({ reason }: { reason: string }) {
+  return (
+    <div className="rounded-[5px] border border-haze-700/50 bg-haze-600/10 p-3">
+      <p className="text-[12.5px] leading-relaxed text-haze-400">{reason}</p>
     </div>
   );
 }

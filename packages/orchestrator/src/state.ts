@@ -66,9 +66,12 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
   }
 
   /**
-   * Load persisted runs; mark runs interrupted by a previous process as
-   * failed. Runs waiting on a usage-limit reset survive restarts; the
-   * orchestrator reschedules their resume on boot.
+   * Load persisted runs verbatim. A host restart no longer loses anything:
+   * recovering non-terminal runs (re-matching a lease to a reconnecting
+   * worker, or interrupting the rest) is the scheduler's job now, done in
+   * Orchestrator.start() once the fleet registry has restored its leases,
+   * not this method's. A run left active here with no lease waiting for it
+   * is exactly what the scheduler treats as interrupted.
    */
   async init(): Promise<void> {
     await mkdir(this.runsDir, { recursive: true });
@@ -89,15 +92,6 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
       if (!Array.isArray(run.costs)) run = { ...run, costs: [] };
       // Runs persisted before run-level PR metadata existed.
       if (run.prUrl === undefined && run.result?.prUrl) run = { ...run, prUrl: run.result.prUrl };
-      if (!isTerminal(run.status) && run.status !== "waiting") {
-        run = {
-          ...run,
-          status: "failed",
-          error: "orchestrator restarted",
-          finishedAt: new Date().toISOString(),
-        };
-        await this.#persist(run);
-      }
       this.#runs.set(run.id, run);
     }
   }

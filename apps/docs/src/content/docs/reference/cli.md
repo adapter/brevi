@@ -181,6 +181,8 @@ Draining the worker from the Workers page reaches it over that same connection a
 
 Runs in the foreground until `Ctrl+C` (or `SIGTERM`). The first signal stops the worker from accepting new dispatches, aborts whatever runs are still in flight, and waits for their final reporting to reach the host before the process exits; a second signal exits immediately instead of waiting. Reconnects on its own with exponential backoff (jittered, capped at 30 seconds) whenever the connection drops, resuming in-flight run reporting once it registers again; a rejection that retrying cannot fix, a dead credential or a protocol mismatch, is fatal and exits non-zero instead.
 
+Losing the connection does not pause a run: the worker keeps executing whatever it was dispatched and buffers its patches, events and artifacts locally while the host is unreachable, then replays that backlog, deduplicated, once it reconnects. A host that is restarted mid-run, or a brief network drop, does not truncate the run's console or lose its final result.
+
 ### `brevi worker update`
 
 ```

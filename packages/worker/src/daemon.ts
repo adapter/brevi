@@ -18,7 +18,6 @@ import {
   type RunLease,
   type RunStatus,
   type WorkerCapabilities,
-  type WorkerMessage,
   type WorkerState,
 } from "@brevi/shared";
 import { createSandboxProvider, isReadWritable, type SandboxProvider } from "@brevi/sandbox";
@@ -207,15 +206,6 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
    */
   const claimedLeases = new Map<string, RunLease>();
   /**
-   * Completion frames handed to the socket but not yet acknowledged, keyed by
-   * lease. socket.send() accepting a frame is not the host receiving it, so a
-   * drop in that window would otherwise lose the completion permanently: the
-   * lease stays claimed, the reconnect re-advertises it, the host keeps it,
-   * and nothing ever resends. Replayed on every registration, cleared by the
-   * host's run-complete-ack.
-   */
-  const unacknowledgedCompletions = new Map<string, WorkerMessage>();
-  /**
    * Discards still tearing down a run's sandbox and workspace, keyed by run.
    * A retry discards the previous attempt's retained sandbox and redispatches
    * the same run id immediately, and the host has no acknowledgement to wait
@@ -248,7 +238,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   let attachSessions: AttachSessions;
 
   const handleDispatch = (dispatch: DispatchMessage): void => {
-    const { lease, kind, run, config: dispatchedConfig, prompts } = dispatch;
+    const { lease, kind, run, config: dispatchedConfig, prompts, vmSize } = dispatch;
     if (shuttingDown) {
       connection.send({ type: "dispatch-rejected", leaseId: lease.id, runId: run.id, reason: "worker is shutting down" });
       return;
@@ -282,10 +272,21 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     // A worker's provider and image paths are local to its machine: the
     // dispatched config's sandbox.* is the host's view (or blank, since the
     // host never boots a sandbox itself), never what this worker executes
-    // with.
+    // with. The VM size is different, though: it's not a local machine
+    // detail but a placement decision the host already made (see PD-40), so
+    // it overrides just the local firecracker config's `size`, keeping every
+    // other local firecracker field (binary, image paths, and an explicit
+    // vcpus/memMib override, which still wins at boot time through
+    // resolveFirecrackerResources regardless of what size ends up here). In
+    // short: the host chooses the size, the worker chooses the machine.
+    const localFirecracker = config.sandbox.firecracker;
     const runConfig: BreviConfig = {
       ...dispatchedConfig,
-      sandbox: { ...dispatchedConfig.sandbox, provider: config.sandbox.provider, firecracker: config.sandbox.firecracker },
+      sandbox: {
+        ...dispatchedConfig.sandbox,
+        provider: config.sandbox.provider,
+        firecracker: provider.name === "firecracker" && vmSize ? { ...localFirecracker, size: vmSize } : localFirecracker,
+      },
     };
 
     const abort = new AbortController();
@@ -350,9 +351,10 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
         activeRuns.delete(run.id);
         knownRuns.set(run.id, reporter.run);
         console.log(`[brevi] run ${run.id} finished: ${reporter.run.status}`);
-        const completion = runCompleteFor(lease.id, run.id, reporter);
-        unacknowledgedCompletions.set(lease.id, completion);
-        connection.send(completion);
+        // The connection's own replay buffer now holds this frame until the
+        // host's run-complete-ack, and resends it across a reconnect on its
+        // own; nothing here needs to track it separately.
+        connection.send(runCompleteFor(lease.id, run.id, reporter));
       }
     })();
     activeRuns.set(run.id, { lease, abort, reporter, execution });
@@ -363,6 +365,27 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     // A cancel for a lease this worker no longer holds (already finished, or
     // superseded by a later dispatch of the same run) is stale; ignore it.
     if (!active || active.lease.id !== message.leaseId) return;
+    active.abort.abort();
+  };
+
+  /**
+   * This worker no longer holds a lease, so anything still running for it has
+   * to stop. Either the host said so on reconnect or the lease's own deadline
+   * lapsed while the host was unreachable (see `onLeaseLost` in
+   * connection.ts); in both cases the host has written this execution off and
+   * may already have handed the run to another worker, so the danger is two
+   * workers pushing the same branch, not a lost result.
+   *
+   * The abort tears the sandbox and its agent process down through the same
+   * path a cancel uses. The claim goes too, so the next register does not
+   * re-advertise a lease that no longer exists, and nothing is reported: the
+   * host would refuse it, and the run belongs to someone else now.
+   */
+  const handleLeaseLost = (leaseId: string, runId: string, reason: string): void => {
+    claimedLeases.delete(leaseId);
+    const active = activeRuns.get(runId);
+    if (!active || active.lease.id !== leaseId) return;
+    console.error(`[brevi] abandoning run ${runId}: ${reason}`);
     active.abort.abort();
   };
 
@@ -381,7 +404,6 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   /** The host applied this run's completion and released the lease; a run this worker no longer claims (already dropped, or from a previous process) is ignored rather than treated as an error. */
   const handleRunCompleteAck = (message: RunCompleteAckMessage): void => {
     claimedLeases.delete(message.leaseId);
-    unacknowledgedCompletions.delete(message.leaseId);
   };
 
   /**
@@ -413,14 +435,19 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
       //      process are actually told to stop instead of being abandoned
       //   3. await those executions, bounded by a deadline, so their
       //      terminal reporting (patches plus run-complete) is produced
-      //      and hits the connection's outbound queue
-      //   4. wait for that queue to actually drain to the socket
+      //      and reaches the connection
+      //   4. wait for the connection to actually drain: not just the
+      //      generic queue, but every lease's replay buffer down to
+      //      nothing, i.e. the host has acknowledged the final run-complete
+      //      itself, not merely that a socket accepted it
       //   5. only now close attach sessions and the connection
-      // Closing the socket before step 4 would drop a run's final
-      // run-complete on the floor forever (the host has no idea the run
-      // ended); destroying sandboxes before step 2 or skipping the wait in
-      // step 3 leaves Firecracker VMs (or process-provider children)
-      // running with nothing left to report their exit.
+      // Closing the socket before step 4 would leave a run's final
+      // run-complete stuck unacknowledged in its lease's buffer until
+      // whatever host eventually reconnects to (the host has no idea the
+      // run ended in the meantime); destroying sandboxes before step 2 or
+      // skipping the wait in step 3 leaves Firecracker VMs (or
+      // process-provider children) running with nothing left to report
+      // their exit.
       for (const active of activeRuns.values()) active.abort.abort();
       const deadline = Date.now() + SHUTDOWN_DEADLINE_MS;
       const executions = [...activeRuns.values()].map((active) => active.execution);
@@ -465,7 +492,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     name,
     capabilities,
     activeLeases: () => [...claimedLeases.values()],
-    unacknowledged: () => [...unacknowledgedCompletions.values()],
+    onLeaseLost: (leaseId, runId, reason) => handleLeaseLost(leaseId, runId, reason),
     // The pairing token was just redeemed for this credential, and this is
     // the only copy of it that exists: everything the connection does next
     // waits on this write landing.

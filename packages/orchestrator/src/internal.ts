@@ -14,6 +14,7 @@
 
 export {
   authenticatedRemote,
+  branchNameFor,
   createPullRequest,
   FALLBACK_COMMIT_IDENTITY,
   formatPrFeedback,

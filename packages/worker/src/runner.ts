@@ -19,6 +19,7 @@ import {
   AgentLimitError,
   agentProvider,
   authenticatedRemote,
+  branchNameFor,
   createPullRequest,
   detectLimit,
   FALLBACK_COMMIT_IDENTITY,
@@ -692,10 +693,6 @@ export function limitLabel(limit: LimitInfo): string {
   const provider = limit.provider === "claude" ? "Claude" : "Codex";
   const kind = limit.kind === "unknown" ? "usage limit" : `${limit.kind} limit`;
   return `${provider} ${kind} reached`;
-}
-
-export function branchNameFor(ticket: Ticket): string {
-  return `brevi/${ticket.identifier.toLowerCase()}`;
 }
 
 /**

@@ -36,6 +36,10 @@ export const LOGS_DIR = join(BREVI_HOME, "logs");
 export const ORCHESTRATOR_LOG_PATH = join(LOGS_DIR, "orchestrator.log");
 /** Written by whichever process runs the server, so the CLI and the desktop app find each other. */
 export const SERVER_PID_PATH = join(BREVI_HOME, "server.pid");
+/** Fleet state the host keeps across restarts (see the orchestrator's LeaseStore). */
+export const FLEET_DIR = join(BREVI_HOME, "fleet");
+/** Outstanding run leases, reloaded on boot so a host restart does not lose in-flight runs. */
+export const LEASES_PATH = join(FLEET_DIR, "leases.json");
 
 /** Where `brevi setup` downloads the kernel and `build-rootfs.sh` writes the image. */
 export const DEFAULT_KERNEL_IMAGE = join(IMAGES_DIR, "vmlinux");

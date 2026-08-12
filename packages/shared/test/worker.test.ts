@@ -8,6 +8,7 @@ import {
   resolveWorkerOs,
   runEventSchema,
   runPatchSchema,
+  runSchema,
   WORKER_MAX_CONCURRENCY,
   WORKER_OS_ENV,
   WORKER_PROTOCOL_VERSION,
@@ -62,6 +63,13 @@ const run: Run = {
 const config = configSchema.parse({});
 const repo = repoConfigSchema.parse({ remote: "adapter/brevi" });
 
+describe("the run schema", () => {
+  it("accepts a queued run carrying why it has not been dispatched yet", () => {
+    const queued = { ...run, status: "queued" as const, queueReason: "no worker is connected" };
+    expect(runSchema.parse(JSON.parse(JSON.stringify(queued)))).toEqual(queued);
+  });
+});
+
 describe("dispatch", () => {
   it("carries the ticket, repo, prompts, agent config and per-run credentials", () => {
     const credentialed = configSchema.parse({
@@ -109,6 +117,39 @@ describe("dispatch", () => {
     if (decoded?.type !== "dispatch") return;
     expect(decoded.prompts.memories).toEqual([]);
     expect(decoded.prompts.recordMemories).toBe(false);
+  });
+
+  it("carries the Firecracker size preset the host placed the run at", () => {
+    const decoded = roundTripToWorker({
+      type: "dispatch",
+      lease: { id: "lease-1", runId: run.id, issuedAt: "2026-08-11T10:00:01.000Z" },
+      kind: "implementation",
+      run,
+      repoKey: "brevi",
+      repo,
+      prompts: { prDescription: "concise" },
+      config,
+      vmSize: "large",
+    });
+    expect(decoded.type).toBe("dispatch");
+    if (decoded.type !== "dispatch") return;
+    expect(decoded.vmSize).toBe("large");
+  });
+
+  it("rejects a vmSize outside the Firecracker presets", () => {
+    expect(
+      parseHostMessage({
+        type: "dispatch",
+        lease: { id: "lease-1", runId: run.id, issuedAt: "2026-08-11T10:00:01.000Z" },
+        kind: "implementation",
+        run,
+        repoKey: "brevi",
+        repo,
+        prompts: { prDescription: "concise" },
+        config,
+        vmSize: "huge",
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -250,6 +291,26 @@ describe("the run event stream", () => {
       expect(decoded.event).toEqual(event);
     });
   }
+
+  it("carries its replay sequence number, so the host can apply it idempotently", () => {
+    const decoded = roundTripToHost({
+      type: "run-event",
+      leaseId: "lease-1",
+      runId: run.id,
+      event: events[0]!,
+      seq: 7,
+    });
+    expect(decoded.type).toBe("run-event");
+    if (decoded.type !== "run-event") return;
+    expect(decoded.seq).toBe(7);
+  });
+
+  it("still parses without a seq, from a worker that predates buffered replay", () => {
+    const decoded = roundTripToHost({ type: "run-event", leaseId: "lease-1", runId: run.id, event: events[0]! });
+    expect(decoded.type).toBe("run-event");
+    if (decoded.type !== "run-event") return;
+    expect(decoded.seq).toBeUndefined();
+  });
 });
 
 describe("run patches", () => {
@@ -352,6 +413,27 @@ describe("completion", () => {
   it("is acknowledged, which is what lets a worker release the lease", () => {
     const decoded = roundTripToWorker({ type: "run-complete-ack", leaseId: "lease-1", runId: run.id });
     expect(decoded.type).toBe("run-complete-ack");
+  });
+});
+
+describe("lease-ack", () => {
+  it("tells the worker how far the host has applied a lease's reporting stream", () => {
+    const decoded = roundTripToWorker({
+      type: "lease-ack",
+      leaseId: "lease-1",
+      runId: run.id,
+      seq: 3,
+      expiresAt: "2026-08-11T10:05:00.000Z",
+    });
+    expect(decoded.type).toBe("lease-ack");
+    if (decoded.type !== "lease-ack") return;
+    expect(decoded.seq).toBe(3);
+  });
+
+  it("rejects a negative seq", () => {
+    expect(
+      parseHostMessage({ type: "lease-ack", leaseId: "lease-1", runId: run.id, seq: -1, expiresAt: "2026-08-11T10:05:00.000Z" }),
+    ).toBeUndefined();
   });
 });
 

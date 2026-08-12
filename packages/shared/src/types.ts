@@ -318,6 +318,13 @@ export interface Run {
   createdAt: string;
   /** Time the run last entered the scheduler's FIFO queue (refreshed on requeue); queued runs start in ascending queuedAt order. */
   queuedAt?: string;
+  /**
+   * Why a queued run has not been dispatched yet (no worker is connected, the
+   * fleet is at capacity, nothing can boot the VM size it asked for). Set by
+   * the scheduler when placement finds no worker and cleared the moment the
+   * run is dispatched, so a run card can say what it is waiting for.
+   */
+  queueReason?: string;
   startedAt?: string;
   finishedAt?: string;
   result?: RunResult;

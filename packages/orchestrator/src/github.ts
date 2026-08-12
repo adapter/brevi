@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Octokit } from "octokit";
-import type { GithubRepo, PrState } from "@brevi/shared";
+import type { GithubRepo, PrState, Ticket } from "@brevi/shared";
 
 export interface RemoteParts {
   owner: string;
@@ -41,6 +41,16 @@ export async function listRepos(token: string): Promise<GithubRepo[]> {
     description: repo.description ?? "",
     pushedAt: repo.pushed_at ?? "",
   }));
+}
+
+/**
+ * Deterministic branch name for a ticket, so the same ticket always maps to
+ * the same branch across attempts: a rerun (retry, or the host adopting a PR
+ * an interrupted run's worker already pushed) finds it rather than starting a
+ * fresh one.
+ */
+export function branchNameFor(ticket: Ticket): string {
+  return `brevi/${ticket.identifier.toLowerCase()}`;
 }
 
 export interface CreatePullRequestOptions {
@@ -286,6 +296,41 @@ export async function fetchPrStatus(prUrl: string, token: string): Promise<PrSta
   const octokit = new Octokit({ auth: token });
   const pr = await octokit.rest.pulls.get({ owner: parsed.owner, repo: parsed.name, pull_number: parsed.number });
   return { url: prUrl, number: parsed.number, state: prStateOf(pr.data) };
+}
+
+/** One pull request found for a branch, enough for the host to decide whether to adopt it. */
+export interface BranchPullRequest {
+  url: string;
+  state: PrState;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * The most recent pull request opened from `branch` on `remote`, whatever its
+ * state, or undefined when there is none. Used when a run's worker died
+ * without reporting: if it already pushed and opened a PR, the host adopts
+ * that one instead of re-running the ticket into a second one.
+ */
+export async function findPullRequestForBranch(options: {
+  remote: string;
+  branch: string;
+  token: string;
+}): Promise<BranchPullRequest | undefined> {
+  const { owner, name } = parseRemote(options.remote);
+  const octokit = new Octokit({ auth: options.token });
+  const existing = await octokit.rest.pulls.list({
+    owner,
+    repo: name,
+    head: `${owner}:${options.branch}`,
+    state: "all",
+    sort: "created",
+    direction: "desc",
+    per_page: 5,
+  });
+  const pr = existing.data[0];
+  if (!pr) return undefined;
+  return { url: pr.html_url, state: prStateOf(pr), createdAt: pr.created_at, updatedAt: pr.updated_at };
 }
 
 interface ReviewThreadsQueryResponse {

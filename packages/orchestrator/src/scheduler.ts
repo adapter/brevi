@@ -72,7 +72,7 @@ import {
   validateLinearApiKey,
 } from "./credentials.js";
 import { FleetStore, sanitizeWorkerName } from "./fleet.js";
-import { fetchPrStatus, fetchPullRequestState, listRepos } from "./github.js";
+import { branchNameFor, fetchPrStatus, fetchPullRequestState, findPullRequestForBranch, listRepos } from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
 import { isLinearAuthError, LinearService, type LinearAuthHooks } from "./linear.js";
 import { memoryKeyFor, MemoryStore, selectMemories } from "./memory.js";
@@ -84,8 +84,95 @@ import {
   type AttachSession,
   type AttachSessionOptions,
   type CancelOutcome,
+  type DispatchOutcome,
   type DispatchRequest,
+  type RestoredLease,
 } from "./workers.js";
+
+/**
+ * When a run's most recent attempt began. The run's own `startedAt` covers
+ * its first attempt; a retry's attempt is newer than that, so the latest
+ * attempt's own `startedAt` wins whenever there is one.
+ */
+export function attemptStartOf(run: Pick<Run, "attempts" | "startedAt" | "createdAt">): string {
+  return run.attempts.at(-1)?.startedAt ?? run.startedAt ?? run.createdAt;
+}
+
+/**
+ * Whether a pull request found on an interrupted run's branch is proof that
+ * *this attempt* produced it, and may therefore complete the run instead of
+ * requeueing it. See Orchestrator#adoptedPullRequest for why the bar is here;
+ * exported so the rule can be pinned down directly in tests.
+ */
+export function adoptableFromAttempt(options: {
+  kind: "implementation" | "follow-up";
+  /** ISO time the interrupted attempt began; see attemptStartOf. */
+  attemptStartedAt: string;
+  pr: { state: PrState; createdAt: string };
+}): boolean {
+  // A follow-up runs precisely *because* a pull request already exists, so
+  // finding one says nothing about whether this attempt rebased or addressed
+  // any feedback before its worker vanished.
+  if (options.kind === "follow-up") return false;
+  // A closed (never merged) pull request is not this run's work to keep.
+  if (options.pr.state === "closed") return false;
+  const startedAt = Date.parse(options.attemptStartedAt);
+  const createdAt = Date.parse(options.pr.createdAt);
+  if (!Number.isFinite(startedAt) || !Number.isFinite(createdAt)) return false;
+  // Opening the pull request is the last thing a run does, and it is what
+  // makes the run externally visible, so a PR that did not exist when this
+  // attempt began and does now is exactly the evidence that the dead worker
+  // got to the end. One that predates the attempt is not: `run.prUrl`
+  // survives a requeue by design (see Run.prUrl), and the branch a ticket
+  // maps to is stable across runs, so a retry and a follow-up both find a
+  // pull request they did nothing to produce.
+  return createdAt >= startedAt;
+}
+
+/** What #recoverRuns decides to do with each run it finds on disk after a restart. */
+export interface RunRecoveryPlan {
+  /** Runs a restored lease still covers: left alone, their worker may reconnect and resume reporting. */
+  leased: RestoredLease[];
+  /** Run ids to put back on the dispatch queue, in FIFO order. */
+  queue: string[];
+  /** Run ids that were mid-execution with nothing left holding them, so they take the interruption path. */
+  interrupted: string[];
+}
+
+/**
+ * Split the runs a restarted host finds still in progress into the three
+ * things that can be done with them, given the leases the fleet registry just
+ * restored. Exported so the one rule that matters here can be pinned down in
+ * tests without standing up an Orchestrator.
+ *
+ * That rule: a restored lease decides a run's fate before its recorded status
+ * does. A run can be persisted as "queued" and still hold a live lease,
+ * because dispatch() issues the lease while the run only leaves "queued" when
+ * the worker's first run-patch lands, and the host can stop in between.
+ * Queueing such a run again would hand the same work to a second worker while
+ * the first is still executing it, or hand it out twice if the first finished
+ * while the host was down.
+ */
+export function planRunRecovery(
+  pending: Pick<Run, "id" | "status" | "queuedAt" | "createdAt">[],
+  restored: RestoredLease[],
+): RunRecoveryPlan {
+  const leaseByRun = new Map(restored.map((lease) => [lease.runId, lease]));
+  const leased = pending.flatMap((run) => {
+    const lease = leaseByRun.get(run.id);
+    return lease ? [lease] : [];
+  });
+  // Ascending queuedAt, matching the FIFO order #queue and the dashboard's
+  // sidebar both expect; store.list() itself returns newest first.
+  const queue = pending
+    .filter((run) => run.status === "queued" && !leaseByRun.has(run.id))
+    .sort((a, b) => (a.queuedAt ?? a.createdAt).localeCompare(b.queuedAt ?? b.createdAt))
+    .map((run) => run.id);
+  const interrupted = pending
+    .filter((run) => run.status !== "queued" && !leaseByRun.has(run.id))
+    .map((run) => run.id);
+  return { leased, queue, interrupted };
+}
 
 /** Error with an HTTP-mappable code, thrown by orchestrator commands. */
 export class OrchestratorError extends Error {
@@ -277,8 +364,12 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #reapTimers = new Map<string, NodeJS.Timeout>();
   /**
    * Runs whose queued execution is a follow-up rather than a fresh
-   * implementation attempt. In-memory only: a restart fails queued runs
-   * anyway.
+   * implementation attempt. In-memory, but a restart no longer loses it: on
+   * boot #recoverRuns re-derives it from the restored leases whose kind is
+   * "follow-up". The one gap is a follow-up that was queued but never
+   * dispatched before the restart (no lease was ever issued for it), which
+   * falls back to a fresh implementation attempt; that's honest, since
+   * nothing was ever executed for it to follow up on.
    */
   #followUps = new Set<string>();
   /** #dispatchQueued logs "waiting on fleet capacity" once per stretch of unavailability, not on every attempt. */
@@ -548,6 +639,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       fleet: this.fleet,
       onRunSettled: (runId) => this.#onRunSettled(runId),
       onRunRejected: (runId, reason, kind) => this.#onRunRejected(runId, reason, kind),
+      onRunInterrupted: (runId, reason, kind) => void this.#onRunInterrupted(runId, reason, kind),
     });
     this.#workers.on("workers", (workers) => {
       this.emit("workers", workers);
@@ -555,6 +647,12 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       // stuck for lack of capacity can move again.
       this.#dispatchQueued();
     });
+
+    // Take over leases a previous process left behind before any worker
+    // reconnects, so a reconnecting worker's runs are recognised rather than
+    // treated as orphaned by the recovery pass below.
+    const restored = await this.#workers.restore();
+    await this.#recoverRuns(restored);
 
     // Runs left with a retained sandbox from a previous process pick their
     // reaper back up: a window that already passed is reclaimed right away,
@@ -577,6 +675,44 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     this.#watchConfigFile();
     this.#prTimer = setInterval(() => void this.#pollPrStates(), PR_POLL_INTERVAL_MS);
     this.#prTimer.unref();
+  }
+
+  /**
+   * Reconcile every run that was neither terminal nor waiting when this
+   * process last stopped, against the leases WorkerRegistry.restore() just
+   * took over. A queued run never had a lease and simply rejoins #queue; a
+   * run whose lease survived is left exactly as it is, since its worker may
+   * still reconnect and resume reporting on it; everything else was
+   * mid-execution with nothing here to show for it, so it takes the same
+   * interruption path a live run takes when its worker disappears.
+   */
+  async #recoverRuns(restored: RestoredLease[]): Promise<void> {
+    const pending = this.store.list().filter((run) => !isTerminal(run.status) && run.status !== "waiting");
+    const plan = planRunRecovery(pending, restored);
+
+    for (const lease of plan.leased) {
+      this.store.appendEvent({
+        runId: lease.runId,
+        ts: new Date().toISOString(),
+        type: "log",
+        stream: "system",
+        text: "brevi restarted; waiting for this run's worker to reconnect and resume reporting",
+      });
+      // Only a follow-up's kind needs reconstructing: #followUps is
+      // otherwise in-memory bookkeeping the worker itself never echoes
+      // back.
+      if (lease.kind === "follow-up") this.#followUps.add(lease.runId);
+    }
+
+    for (const runId of plan.queue) {
+      if (!this.#queue.includes(runId)) this.#queue.push(runId);
+    }
+
+    for (const runId of plan.interrupted) {
+      await this.#onRunInterrupted(runId, "brevi restarted with no worker executing this run", "implementation");
+    }
+
+    this.#dispatchQueued();
   }
 
   /** True once a Linear API key is configured. */
@@ -1541,19 +1677,19 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     // Waiting runs stay "waiting" on disk; the next boot reschedules them.
     for (const timer of this.#resumeTimers.values()) clearTimeout(timer);
     this.#resumeTimers.clear();
-    // Cancel anything still waiting in the queue so it isn't left "queued" forever.
-    for (const id of this.#queue.splice(0)) {
-      await this.store
-        .setStatus(id, "cancelled", { finishedAt: new Date().toISOString() })
-        .catch(() => undefined);
-    }
+    // Queued runs are left in #queue and on disk exactly as "queued": the
+    // next boot's #recoverRuns reloads them, so there is nothing to unwind
+    // here. Cancelling them on the way out is exactly the loss this ticket
+    // removes: a host restart no longer forfeits work that hadn't even
+    // started yet.
     for (const timer of this.#reapTimers.values()) clearTimeout(timer);
     this.#reapTimers.clear();
-    // Runs already handed to a worker are the worker's to finish or cancel;
-    // stop() asks it to cancel every one it's still holding a lease for and
-    // closes every socket. Their compute and any retained disk live on the
-    // worker, not here, so there's nothing local left to clean up for them.
-    this.#workers?.stop();
+    // Runs already handed to a worker keep running there: the registry only
+    // closes its sockets and flushes the leases to disk, so the next boot's
+    // restore() re-adopts them and a reconnecting worker resumes reporting.
+    // Their compute and any retained disk live on the worker, not here, so
+    // there's nothing local left to clean up for them.
+    await this.#workers?.stop();
     await this.store.flush();
   }
 
@@ -1815,13 +1951,29 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return next;
   }
 
-  /** Put a run back in the queue for its next attempt. */
-  async #requeue(runId: string): Promise<Run> {
+  /**
+   * Put a run back in the queue for its next attempt. `queueReason` is set
+   * when the caller already knows why the run isn't executing (an
+   * interruption); otherwise it is cleared like every other per-attempt
+   * field, since #dispatchQueued sets its own reason the next time
+   * placement is tried.
+   */
+  async #requeue(runId: string, queueReason?: string): Promise<Run> {
     this.#clearResume(runId);
     // A retry starts from a fresh checkout, so any sandbox retained from the
     // previous attempt is stale before it's ever used again; discard it now
     // rather than let it linger until its own retention window ends.
     await this.#discardRetained(runId);
+    return this.#enqueueForAttempt(runId, queueReason);
+  }
+
+  /**
+   * Shared tail of #requeue: flip the run back to "queued" and let
+   * #dispatchQueued try it against the fleet. Split out so
+   * #onRunInterrupted can reach it without #requeue's own discard step,
+   * whose failure it has to survive (see there for why).
+   */
+  async #enqueueForAttempt(runId: string, queueReason?: string): Promise<Run> {
     // Shed the previous attempt's outcome right away rather than at the
     // "preparing" transition: the queued snapshot goes straight to clients,
     // and a stale result/error would keep the dashboard's Result tab alive
@@ -1835,6 +1987,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       error: undefined,
       limit: undefined,
       result: undefined,
+      queueReason,
     });
     if (!this.#queue.includes(runId)) this.#queue.push(runId);
     this.#dispatchQueued();
@@ -2069,19 +2222,34 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         this.#queue.shift();
         continue;
       }
-      if (!this.#workers.dispatch(payload)) {
-        // No connected worker has room right now. Leave this run at the
-        // head so the next capacity change (a worker connecting, or one of
-        // its runs settling) resumes exactly here, and say so once rather
-        // than on every fruitless attempt in between.
+      const outcome: DispatchOutcome = this.#workers.dispatch(payload);
+      if (!outcome.placed) {
+        // No connected worker has room (or can boot this run's VM size)
+        // right now. Leave this run at the head so the next capacity change
+        // (a worker connecting, or one of its runs settling) resumes
+        // exactly here, and say so once rather than on every fruitless
+        // attempt in between.
         if (!this.#warnedNoCapacity) {
           this.#warnedNoCapacity = true;
           console.warn(`[brevi] ${this.#queue.length} run(s) queued but waiting on fleet capacity`);
+        }
+        // This runs on every heartbeat from every connected worker, so only
+        // write when the reason actually changed: an unconditional write
+        // here would be a write storm across the whole queue on every tick.
+        for (const id of this.#queue) {
+          const queuedRun = this.store.get(id);
+          if (queuedRun && queuedRun.queueReason !== outcome.reason) {
+            void this.store.update(id, { queueReason: outcome.reason }).catch(() => undefined);
+          }
         }
         return;
       }
       this.#warnedNoCapacity = false;
       this.#queue.shift();
+      if (run.queueReason !== undefined) {
+        void this.store.update(runId, { queueReason: undefined }).catch(() => undefined);
+      }
+      console.log(`[brevi] run ${runId} dispatched to worker ${outcome.workerName} (${outcome.workerId})`);
       // The follow-up marker is only consumed on a successful dispatch: a
       // rejected dispatch (see #onRunRejected) must still know to build a
       // follow-up payload the next time this run is tried.
@@ -2126,6 +2294,9 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       repo,
       config: this.config,
       prompts,
+      // Only a worker that can boot this preset qualifies for the dispatch;
+      // the registry filters on it before ever offering the run to one.
+      vmSize: this.config.sandbox.firecracker.size,
     };
   }
 
@@ -2167,6 +2338,111 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     });
     if (this.store.get(runId)?.status === "queued" && !this.#queue.includes(runId)) {
       this.#queue.unshift(runId);
+    }
+  }
+
+  /**
+   * A dispatched run's worker went away for good. A restart from scratch is
+   * safe (a run only becomes externally visible when its PR opens), so the
+   * default is to requeue: but the dead worker may have got as far as pushing
+   * the branch and opening the PR without reporting it, and re-running the
+   * ticket then means a second PR for the same branch. Check GitHub first and
+   * adopt what is there, otherwise put the run back on the queue.
+   */
+  async #onRunInterrupted(runId: string, reason: string, kind: DispatchRequest["kind"]): Promise<void> {
+    await this.#withRunLock(runId, async () => {
+      const run = this.store.get(runId);
+      if (!run || isTerminal(run.status)) return;
+      // A requeued follow-up must not be rebuilt as a fresh implementation
+      // against a PR that already exists (same reasoning as #onRunRejected).
+      if (kind === "follow-up") this.#followUps.add(runId);
+      this.store.appendEvent({
+        runId,
+        ts: new Date().toISOString(),
+        type: "log",
+        stream: "system",
+        text: `run interrupted: ${reason}`,
+      });
+      // Close the dangling attempt so the dashboard's attempt list doesn't
+      // show one hanging open forever; a no-op if the last attempt already
+      // finished.
+      await this.store.endAttempt(runId, { outcome: "failed", error: reason });
+
+      const adopted = await this.#adoptedPullRequest(run, kind);
+      if (adopted) {
+        const current = this.store.get(runId) ?? run;
+        await this.store.setStatus(runId, "completed", {
+          finishedAt: new Date().toISOString(),
+          prUrl: adopted.prUrl,
+          prState: adopted.prState,
+          result: {
+            prUrl: adopted.prUrl,
+            branch: adopted.branch,
+            summary:
+              "The run's worker went away without reporting back, but it had already opened this pull request; brevi adopted it instead of running the ticket again.",
+            artifacts: current.result?.artifacts ?? [],
+            costTotals: current.result?.costTotals,
+          },
+        });
+        this.#onRunSettled(runId);
+        return;
+      }
+
+      try {
+        await this.#discardRetained(runId);
+      } catch (error) {
+        // The owning worker is definitionally gone here (that's why this ran
+        // at all), so a throw is the expected outcome, not an exceptional
+        // one; it must not strand the run "active" forever over a worker
+        // that will never reconnect to discard its own retained disk. The
+        // reaper's own retry timer (see #maybeReap) keeps trying later.
+        console.error(
+          `[brevi] failed to discard run ${runId}'s retained sandbox after its worker was lost: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      this.#clearResume(runId);
+      await this.#enqueueForAttempt(runId, reason);
+    });
+  }
+
+  /**
+   * The pull request the *interrupted attempt itself* produced, if any.
+   *
+   * The bar is deliberately high, because adopting completes the run: the
+   * only thing that counts as proof the dead worker finished is a pull
+   * request that did not exist when this attempt began and does now. Two
+   * things are therefore never adopted, and both requeue instead:
+   *
+   * - A follow-up. It runs precisely *because* a pull request already
+   *   exists, so finding one says nothing about whether this attempt rebased
+   *   or addressed any feedback before its worker vanished.
+   * - Any pull request created before this attempt started. `run.prUrl`
+   *   survives a requeue by design (see Run.prUrl), so a retry carries the
+   *   previous attempt's PR, and the branch a ticket maps to is stable
+   *   across runs; in both cases the PR predates the attempt and proves
+   *   nothing about it.
+   *
+   * Requeueing when in doubt costs nothing and is always safe: the next
+   * attempt pushes the same branch, and opening a PR for a branch that
+   * already has one updates the existing PR rather than adding a second (see
+   * createPullRequest). Any GitHub failure resolves to undefined for the
+   * same reason.
+   */
+  async #adoptedPullRequest(
+    run: Run,
+    kind: DispatchRequest["kind"],
+  ): Promise<{ prUrl: string; prState: PrState; branch: string } | undefined> {
+    if (kind === "follow-up") return undefined;
+    const token = this.config.github.token;
+    const repo = run.ticket.repo ? this.config.repos[run.ticket.repo] : undefined;
+    if (!token || !repo) return undefined;
+    const branch = branchNameFor(run.ticket);
+    try {
+      const found = await findPullRequestForBranch({ remote: repo.remote, branch, token });
+      if (!found || !adoptableFromAttempt({ kind, attemptStartedAt: attemptStartOf(run), pr: found })) return undefined;
+      return { prUrl: found.url, prState: found.state, branch };
+    } catch {
+      return undefined;
     }
   }
 }

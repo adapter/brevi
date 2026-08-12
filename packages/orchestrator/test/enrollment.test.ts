@@ -81,6 +81,7 @@ async function startHost(ttlMinutes?: number): Promise<Host> {
     fleet,
     onRunSettled: () => undefined,
     onRunRejected: () => undefined,
+    onRunInterrupted: () => undefined,
   });
   const created = { fleet, registry };
   hosts.push(created);
@@ -100,7 +101,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const entry of hosts) entry.registry.stop();
+  for (const entry of hosts) await entry.registry.stop();
   // Registration, heartbeats and dispatch all queue writes that no caller
   // awaits; draining them before the directory goes away keeps a late write
   // from failing against a path that no longer exists. `drain` covers the
@@ -135,7 +136,7 @@ async function enroll(name = "bench-1"): Promise<{ socket: FakeSocket; workerId:
   return { socket, workerId: registered?.workerId ?? "", credential: registered?.credential ?? "" };
 }
 
-function dispatch(run: Run): boolean {
+function dispatch(run: Run) {
   return host.registry.dispatch({
     kind: "implementation",
     run,
@@ -200,7 +201,7 @@ describe("worker enrollment", () => {
   it("disconnects a revoked worker and refuses the credential it kept", async () => {
     const { socket, workerId, credential } = await enroll();
     const running = await store.createRun(ticket);
-    expect(dispatch(running)).toBe(true);
+    expect(dispatch(running)).toMatchObject({ placed: true });
 
     expect(await host.registry.revoke(workerId)).toBe(true);
     expect(socket.last("revoked")).toBeDefined();
@@ -234,7 +235,9 @@ describe("worker enrollment", () => {
   it("stops dispatching to a drained worker but leaves its in-flight run alone", async () => {
     const { socket, workerId } = await enroll();
     const running = await store.createRun(ticket);
-    expect(dispatch(running)).toBe(true);
+    expect(dispatch(running)).toMatchObject({ placed: true });
+    // The dispatch frame trails the lease's write to disk, so it takes a turn.
+    await flush();
     const lease = socket.last("dispatch")?.lease;
     expect(lease).toBeDefined();
 
@@ -247,7 +250,7 @@ describe("worker enrollment", () => {
     // even though it still has a free slot.
     expect(host.registry.capacity()).toBe(0);
     const queued = await store.createRun(ticket);
-    expect(dispatch(queued)).toBe(false);
+    expect(dispatch(queued)).toMatchObject({ placed: false });
     expect(socket.ofType("dispatch")).toHaveLength(1);
 
     // What it already holds is untouched, and still reports normally.
@@ -269,7 +272,7 @@ describe("worker enrollment", () => {
     expect(await host.registry.setState(workerId, "active")).toBe(true);
     expect(socket.last("worker-state")?.state).toBe("active");
     expect(host.registry.capacity()).toBe(2);
-    expect(dispatch(queued)).toBe(true);
+    expect(dispatch(queued)).toMatchObject({ placed: true });
   });
 
   it("keeps the enrolled fleet across a host restart", async () => {

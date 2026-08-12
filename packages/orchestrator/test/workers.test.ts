@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +13,7 @@ import {
 } from "@brevi/shared";
 import { FakeSocket, flush } from "./fake-socket.js";
 import { FleetStore } from "../src/fleet.js";
+import { LeaseStore } from "../src/leases.js";
 import { MemoryStore } from "../src/memory.js";
 import { RunStore } from "../src/state.js";
 import { WorkerRegistry } from "../src/workers.js";
@@ -38,14 +40,20 @@ const ticket: Ticket = {
 
 const repo = repoConfigSchema.parse({ remote: "adapter/brevi" });
 
-function capabilities(maxConcurrency = 2) {
+interface CapabilitiesOverrides {
+  provider?: "firecracker" | "process";
+  maxConcurrency?: number;
+  vmSizes?: ("small" | "medium" | "large")[];
+}
+
+function capabilities(overrides: CapabilitiesOverrides = {}) {
   return {
     os: "linux",
     arch: "x64",
-    provider: "firecracker" as const,
+    provider: overrides.provider ?? "firecracker",
     kvm: true,
-    maxConcurrency,
-    vmSizes: ["small", "medium", "large"] as ("small" | "medium" | "large")[],
+    maxConcurrency: overrides.maxConcurrency ?? 2,
+    vmSizes: overrides.vmSizes ?? (["small", "medium", "large"] as ("small" | "medium" | "large")[]),
     version: "0.5.0",
   };
 }
@@ -56,9 +64,11 @@ describe("WorkerRegistry", () => {
   let memories: MemoryStore;
   let fleet: FleetStore;
   let config: BreviConfig;
+  let leasesPath: string;
   let registry: WorkerRegistry;
   let settled: string[];
   let rejected: { runId: string; reason: string }[];
+  let interrupted: { runId: string; reason: string; kind: string }[];
   /** The id the host assigned the enrolled worker, and the credential it minted for it. */
   let workerId: string;
   let credential: string;
@@ -72,8 +82,10 @@ describe("WorkerRegistry", () => {
     fleet = new FleetStore(join(dir, "fleet.json"));
     await fleet.init();
     config = configSchema.parse({ fleet: { reconnectGraceSeconds: 3600 } });
+    leasesPath = join(dir, "fleet", "leases.json");
     settled = [];
     rejected = [];
+    interrupted = [];
     workerId = "";
     credential = "";
     registry = new WorkerRegistry({
@@ -81,29 +93,31 @@ describe("WorkerRegistry", () => {
       store,
       memories,
       fleet,
+      leases: new LeaseStore(leasesPath),
       onRunSettled: (runId) => settled.push(runId),
       onRunRejected: (runId, reason) => rejected.push({ runId, reason }),
+      onRunInterrupted: (runId, reason, kind) => interrupted.push({ runId, reason, kind }),
     });
   });
 
   afterEach(async () => {
-    registry.stop();
-    // A dispatch queues a run-store write that isn't awaited by the caller
-    // (see `void this.#store.update` in dispatch), and so do the lease-write
-    // chains behind a run's frames. Draining them before the directory goes
-    // away keeps a late write from failing against a path that no longer
-    // exists: that surfaces as an unhandled ENOENT attributed to whichever
-    // test happens to be running next. Mirrors enrollment.test.ts.
+    await registry.stop();
+    // A dispatch queues a run-store write that isn't awaited by the caller,
+    // and so do the lease-write chains behind a run's frames. Draining them
+    // before the directory goes away keeps a late write from failing against
+    // a path that no longer exists: that surfaces as an unhandled ENOENT
+    // attributed to whichever test happens to be running next. Mirrors
+    // enrollment.test.ts.
     await registry.drain();
     await rm(dir, { recursive: true, force: true });
   });
 
   /**
    * Enroll one worker with a fresh pairing token and wait for the host to
-   * answer. The id it ends up with is the host's to assign, so it is captured
-   * here rather than chosen by the test.
+   * answer. The id and the name it ends up with are the host's to assign, so
+   * both are read back off the `registered` frame rather than chosen here.
    */
-  async function connect(activeLeases: { id: string; runId: string; issuedAt: string }[] = []) {
+  async function enroll(name: string, capsOverrides: CapabilitiesOverrides = {}) {
     const { token } = fleet.mintPairingToken();
     const socket = new FakeSocket();
     registry.accept(socket.asWebSocket(), "127.0.0.1");
@@ -111,15 +125,29 @@ describe("WorkerRegistry", () => {
       type: "register",
       protocolVersion: WORKER_PROTOCOL_VERSION,
       auth: { kind: "pairing", token },
-      name: "bench-1",
-      capabilities: capabilities(),
-      activeLeases,
+      name,
+      capabilities: capabilities(capsOverrides),
+      activeLeases: [],
     });
     await flush();
     const registered = socket.last("registered");
-    workerId = registered?.workerId ?? "";
-    credential = registered?.credential ?? "";
-    return socket;
+    return {
+      socket,
+      id: registered?.workerId ?? "",
+      name: registered?.name ?? "",
+      credential: registered?.credential ?? "",
+    };
+  }
+
+  /**
+   * Enroll the one worker most tests use, capturing its identity in the outer
+   * `workerId` / `credential` so `reconnect` can come back as it.
+   */
+  async function connect(capsOverrides: CapabilitiesOverrides = {}) {
+    const worker = await enroll("bench-1", capsOverrides);
+    workerId = worker.id;
+    credential = worker.credential;
+    return worker.socket;
   }
 
   /** Bring the same enrollment back on a new socket, authenticating with its stored credential. */
@@ -142,7 +170,7 @@ describe("WorkerRegistry", () => {
     return store.createRun(ticket);
   }
 
-  function dispatch(run: Run): boolean {
+  function dispatch(run: Run, vmSize?: "small" | "medium" | "large") {
     return registry.dispatch({
       kind: "implementation",
       run,
@@ -150,6 +178,7 @@ describe("WorkerRegistry", () => {
       repo,
       config,
       prompts: { prDescription: "concise", memories: [], recordMemories: false },
+      vmSize,
     });
   }
 
@@ -160,8 +189,13 @@ describe("WorkerRegistry", () => {
     expect(registry.capacity()).toBe(2);
 
     const run = await queueRun();
-    expect(dispatch(run)).toBe(true);
+    const outcome = dispatch(run);
+    expect(outcome).toEqual({ placed: true, workerId, workerName: "bench-1" });
 
+    // The frame only goes out once the lease is on disk, so the outcome is
+    // immediate but the dispatch itself is one write away.
+    expect(socket.last("dispatch")).toBeUndefined();
+    await flush();
     const sent = socket.last("dispatch");
     expect(sent).toBeDefined();
     expect(sent?.run.id).toBe(run.id);
@@ -177,7 +211,7 @@ describe("WorkerRegistry", () => {
   it("reports a worker's demand: connected with its lease count after a dispatch, unknown otherwise", async () => {
     await connect();
     const run = await queueRun();
-    expect(dispatch(run)).toBe(true);
+    expect(dispatch(run)).toMatchObject({ placed: true });
 
     expect(registry.workerDemand(workerId)).toEqual({
       id: workerId,
@@ -598,5 +632,611 @@ describe("WorkerRegistry", () => {
     const logs = events.filter((event) => event.type === "log").map((event) => event.text);
     expect(logs.some((text) => text.includes("did not reach the host"))).toBe(false);
     expect(store.get(run.id)?.status).toBe("completed");
+  });
+
+
+  // --- placement -------------------------------------------------------
+
+  it("prefers a Firecracker worker over a process one, and falls back to the process worker once Firecracker is full", async () => {
+    const fc = await enroll("fc-1", { provider: "firecracker", maxConcurrency: 1 });
+    const proc = await enroll("proc-1", { provider: "process", maxConcurrency: 2, vmSizes: [] });
+
+    const first = await queueRun();
+    expect(dispatch(first)).toEqual({ placed: true, workerId: fc.id, workerName: fc.name });
+    await flush();
+    expect(fc.socket.last("dispatch")?.run.id).toBe(first.id);
+
+    // Firecracker is now at capacity (maxConcurrency 1); the process worker
+    // is the only one left with room.
+    const second = await queueRun();
+    expect(dispatch(second)).toEqual({ placed: true, workerId: proc.id, workerName: proc.name });
+    await flush();
+    expect(proc.socket.last("dispatch")?.run.id).toBe(second.id);
+  });
+
+  it("respects maxConcurrency, and the outcome's reason names capacity once every connected worker is full", async () => {
+    await connect({ maxConcurrency: 1 });
+    const first = await queueRun();
+    expect(dispatch(first)).toMatchObject({ placed: true });
+    await flush();
+
+    const second = await queueRun();
+    expect(dispatch(second)).toEqual({ placed: false, reason: "all 1 connected worker is at capacity" });
+    await flush();
+  });
+
+  it("refuses a run asking for a vmSize no connected Firecracker worker advertises", async () => {
+    await connect({ provider: "firecracker", vmSizes: ["small"] });
+    const run = await queueRun();
+    expect(dispatch(run, "large")).toEqual({ placed: false, reason: "no connected worker can boot a large VM" });
+    await flush();
+  });
+
+  it("never places a run on a draining worker, and says so when that is the only one connected", async () => {
+    const worker = await enroll("drained-1");
+    await registry.setState(worker.id, "draining");
+
+    const run = await queueRun();
+    expect(dispatch(run)).toEqual({ placed: false, reason: "the 1 connected worker is draining" });
+    await flush();
+
+    // Re-enabled, the same worker takes the run normally.
+    await registry.setState(worker.id, "active");
+    expect(dispatch(run)).toEqual({ placed: true, workerId: worker.id, workerName: worker.name });
+  });
+
+  // --- lease expiry ------------------------------------------------------
+
+  it("expires a lease when its worker stops reporting, and hands the run to onRunInterrupted instead of failing it", async () => {
+    // A short reconnectGraceSeconds so the disconnect's grace timer actually
+    // fires within the test; bypasses configSchema's 10s floor on purpose.
+    const fastConfig: BreviConfig = { ...config, fleet: { ...config.fleet, reconnectGraceSeconds: 0.1 } };
+    const localInterrupted: { runId: string; reason: string; kind: string }[] = [];
+    const fastFleet = new FleetStore(join(dir, "fleet-fast.json"));
+    await fastFleet.init();
+    const fastRegistry = new WorkerRegistry({
+      config: fastConfig,
+      store,
+      memories,
+      fleet: fastFleet,
+      leases: new LeaseStore(join(dir, "fleet-fast", "leases.json")),
+      onRunSettled: () => {},
+      onRunRejected: () => {},
+      onRunInterrupted: (runId, reason, kind) => localInterrupted.push({ runId, reason, kind }),
+    });
+    try {
+      const { token } = fastFleet.mintPairingToken();
+      const socket = new FakeSocket();
+      fastRegistry.accept(socket.asWebSocket(), "127.0.0.1");
+      socket.receive({
+        type: "register",
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        auth: { kind: "pairing", token },
+        name: "bench-fast",
+        capabilities: capabilities(),
+        activeLeases: [],
+      });
+      await flush();
+
+      const run = await queueRun();
+      const outcome = fastRegistry.dispatch({
+        kind: "implementation",
+        run,
+        repoKey: "brevi",
+        repo,
+        config,
+        prompts: { prDescription: "concise", memories: [], recordMemories: false },
+      });
+      expect(outcome).toMatchObject({ placed: true });
+
+      socket.drop();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      expect(localInterrupted).toHaveLength(1);
+      expect(localInterrupted[0]?.runId).toBe(run.id);
+      expect(localInterrupted[0]?.kind).toBe("implementation");
+      // Never failed: the run is exactly as it was (still queued, since the
+      // worker never got as far as reporting "running").
+      expect(store.get(run.id)?.status).toBe("queued");
+    } finally {
+      await fastRegistry.stop();
+    }
+  });
+
+  // --- replay watermark ---------------------------------------------------
+
+  it("drops a replayed run-event whose seq was already applied, and applies a newer one", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    const eventFrame = (seq: number) => ({
+      type: "run-event" as const,
+      leaseId: lease.id,
+      runId: run.id,
+      event: {
+        runId: run.id,
+        ts: "2026-08-11T10:00:00.000Z",
+        type: "log" as const,
+        stream: "system" as const,
+        text: `seq ${seq}`,
+      },
+      seq,
+    });
+
+    socket.receive(eventFrame(1));
+    await flush();
+    expect((await store.readEvents(run.id)).filter((event) => event.type === "log")).toHaveLength(1);
+
+    // A replay of the same seq is dropped silently: no duplicate log line.
+    socket.receive(eventFrame(1));
+    await flush();
+    expect((await store.readEvents(run.id)).filter((event) => event.type === "log")).toHaveLength(1);
+
+    // A newer seq is applied.
+    socket.receive(eventFrame(2));
+    await flush();
+    expect((await store.readEvents(run.id)).filter((event) => event.type === "log")).toHaveLength(2);
+  });
+
+  it("holds the watermark back until the frame's write has actually landed", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    socket.receive({
+      type: "run-event",
+      leaseId: lease.id,
+      runId: run.id,
+      event: { runId: run.id, ts: "2026-08-11T10:00:00.000Z", type: "log", stream: "system", text: "in flight" },
+      seq: 1,
+    });
+
+    // Nothing awaited in between, so the write is still queued. Telling the
+    // worker "applied through 1" now would make it drop the frame from its
+    // replay buffer while the host has yet to write it.
+    socket.receive({ type: "heartbeat", ts: new Date().toISOString(), leaseIds: [lease.id] });
+    expect(socket.last("lease-ack")?.seq).toBe(0);
+
+    await flush();
+    socket.receive({ type: "heartbeat", ts: new Date().toISOString(), leaseIds: [lease.id] });
+    expect(socket.last("lease-ack")?.seq).toBe(1);
+  });
+
+  it("never acknowledges past a gap, and releases everything behind it once the gap is filled", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    const eventFrame = (seq: number) => ({
+      type: "run-event" as const,
+      leaseId: lease.id,
+      runId: run.id,
+      event: {
+        runId: run.id,
+        ts: "2026-08-11T10:00:00.000Z",
+        type: "log" as const,
+        stream: "system" as const,
+        text: `seq ${seq}`,
+      },
+      seq,
+    });
+
+    // Frames 2 and 3 arrive and land, but 1 never showed up. The watermark is
+    // the contiguous prefix, so it stays at 0: acking 3 here would tell the
+    // worker to drop a frame the host has never seen.
+    socket.receive(eventFrame(2));
+    socket.receive(eventFrame(3));
+    await flush();
+    socket.receive({ type: "heartbeat", ts: new Date().toISOString(), leaseIds: [lease.id] });
+    expect(socket.last("lease-ack")?.seq).toBe(0);
+
+    // The missing frame arrives; the whole run of them is contiguous now, so
+    // the watermark jumps straight to 3 rather than one step at a time.
+    socket.receive(eventFrame(1));
+    await flush();
+    socket.receive({ type: "heartbeat", ts: new Date().toISOString(), leaseIds: [lease.id] });
+    expect(socket.last("lease-ack")?.seq).toBe(3);
+    expect((await store.readEvents(run.id)).filter((event) => event.type === "log")).toHaveLength(3);
+  });
+
+  it("stalls the watermark on a failed write, then re-admits the resend and catches up", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    // A directory where the artifact's bytes want to be: writeFile fails with
+    // EISDIR, which is the "the write did not land" case without having to
+    // reach for the real ones (a full disk, bad permissions).
+    await mkdir(join(store.artifactsDir(run.id), "demo.png"), { recursive: true });
+
+    socket.receive({
+      type: "run-artifact",
+      leaseId: lease.id,
+      runId: run.id,
+      artifact: { name: "demo.png", type: "screenshot", size: 3 },
+      data: Buffer.from("png").toString("base64"),
+      seq: 1,
+    });
+    socket.receive({
+      type: "run-event",
+      leaseId: lease.id,
+      runId: run.id,
+      event: { runId: run.id, ts: "2026-08-11T10:00:00.000Z", type: "log", stream: "system", text: "after the failure" },
+      seq: 2,
+    });
+    await flush();
+
+    // Frame 2 landed, but the watermark must not step over frame 1, which did
+    // not: acking 2 would tell the worker to drop the artifact it still owes
+    // the host. So the ack stays where it was, and keeps saying so on every
+    // heartbeat, which is the signal the worker resends on.
+    expect((await store.readEvents(run.id)).filter((event) => event.type === "log")).toHaveLength(1);
+    socket.receive({ type: "heartbeat", ts: new Date().toISOString(), leaseIds: [lease.id] });
+    expect(socket.last("lease-ack")?.seq).toBe(0);
+    socket.receive({ type: "heartbeat", ts: new Date().toISOString(), leaseIds: [lease.id] });
+    expect(socket.last("lease-ack")?.seq).toBe(0);
+
+    // The worker resends the gap on the same healthy socket. It has to be
+    // admitted again rather than dismissed as already seen, which is what
+    // stops the lost artifact being lost for good.
+    await rm(join(store.artifactsDir(run.id), "demo.png"), { recursive: true, force: true });
+    socket.receive({
+      type: "run-artifact",
+      leaseId: lease.id,
+      runId: run.id,
+      artifact: { name: "demo.png", type: "screenshot", size: 3 },
+      data: Buffer.from("png").toString("base64"),
+      seq: 1,
+    });
+    await flush();
+
+    // Filling the gap releases frame 2 with it: the watermark goes straight
+    // to 2, and the artifact is on disk this time.
+    socket.receive({ type: "heartbeat", ts: new Date().toISOString(), leaseIds: [lease.id] });
+    expect(socket.last("lease-ack")?.seq).toBe(2);
+    expect(await Bun.file(join(store.artifactsDir(run.id), "demo.png")).text()).toBe("png");
+    // Frame 2 was applied once, not twice: the resend only covered the gap.
+    expect((await store.readEvents(run.id)).filter((event) => event.type === "log")).toHaveLength(1);
+  });
+
+  it("does not settle or acknowledge a lease whose completion could not be applied", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    // setStatus has to fail for the completion to fail. A directory where the
+    // run's own record belongs makes its write throw with EISDIR, without
+    // reaching into the store's private state to stub anything.
+    const record = join(dir, "runs", run.id, "run.json");
+    await rm(record, { force: true });
+    await mkdir(record, { recursive: true });
+
+    const completion = {
+      type: "run-complete" as const,
+      leaseId: lease.id,
+      runId: run.id,
+      outcome: "completed" as const,
+      finishedAt: "2026-08-11T10:30:00.000Z",
+      artifacts: [],
+      attempts: [],
+      costs: [],
+      seq: 1,
+    };
+    socket.receive(completion);
+    await flush();
+
+    // The host never claimed it: no ack, the lease is still outstanding, and
+    // the scheduler was not told the run settled.
+    expect(socket.ofType("run-complete-ack")).toHaveLength(0);
+    expect(registry.inFlight()).toBe(1);
+    expect(settled).toEqual([]);
+
+    // The worker still holds the completion in its replay buffer, so it
+    // resends it on its next connection. With the run's record writable again
+    // that replay applies, which is the recovery: the lease was never
+    // acknowledged, so nothing was lost.
+    await rm(record, { recursive: true, force: true });
+    const reconnected = await reconnect([{ id: lease.id, runId: run.id, issuedAt: lease.issuedAt }]);
+    reconnected.receive(completion);
+    await flush();
+    expect(reconnected.ofType("run-complete-ack")).toHaveLength(1);
+    expect(store.get(run.id)?.status).toBe("completed");
+    expect(settled).toEqual([run.id]);
+  });
+
+  it("sends a lease-ack per claimed lease on register (even at watermark 0) and on heartbeat", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    // Reconnecting before anything has been reported: the ack still carries seq 0.
+    const reconnected = await reconnect([{ id: lease.id, runId: run.id, issuedAt: lease.issuedAt }]);
+    expect(reconnected.last("lease-ack")).toMatchObject({ type: "lease-ack", leaseId: lease.id, runId: run.id, seq: 0 });
+    // Every ack restates the deadline, which is what the worker fences itself with.
+    expect(Date.parse(reconnected.last("lease-ack")!.expiresAt)).toBeGreaterThan(Date.now());
+
+    reconnected.receive({
+      type: "run-event",
+      leaseId: lease.id,
+      runId: run.id,
+      event: { runId: run.id, ts: "2026-08-11T10:00:00.000Z", type: "log", stream: "system", text: "hi" },
+      seq: 1,
+    });
+    await flush();
+
+    reconnected.receive({ type: "heartbeat", ts: new Date().toISOString(), leaseIds: [lease.id] });
+    expect(reconnected.last("lease-ack")).toMatchObject({ type: "lease-ack", leaseId: lease.id, runId: run.id, seq: 1 });
+  });
+
+  it("holds a completion behind a gap, then applies it when a resend closes the gap", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    // Frame 1's write fails, so the watermark cannot reach the completion at
+    // frame 2. Acking that completion would tell the worker to throw away its
+    // whole buffer for the lease, taking the only copy of frame 1 with it.
+    await mkdir(join(store.artifactsDir(run.id), "demo.png"), { recursive: true });
+    socket.receive({
+      type: "run-artifact",
+      leaseId: lease.id,
+      runId: run.id,
+      artifact: { name: "demo.png", type: "screenshot", size: 3 },
+      data: Buffer.from("png").toString("base64"),
+      seq: 1,
+    });
+    const completion = {
+      type: "run-complete" as const,
+      leaseId: lease.id,
+      runId: run.id,
+      outcome: "completed" as const,
+      finishedAt: "2026-08-11T10:30:00.000Z",
+      artifacts: [{ name: "demo.png", type: "screenshot" as const, size: 3 }],
+      attempts: [],
+      costs: [],
+      seq: 2,
+    };
+    socket.receive(completion);
+    await flush();
+
+    // Nothing was written, acked or settled: the run is honestly unfinished
+    // and the lease is still outstanding while the host chases frame 1.
+    expect(store.get(run.id)?.status).not.toBe("completed");
+    expect(socket.ofType("run-complete-ack")).toHaveLength(0);
+    expect(registry.inFlight()).toBe(1);
+    expect(settled).toEqual([]);
+
+    // The worker resends frame 1, it lands, and the completion parked behind
+    // it goes through on its own.
+    await rm(join(store.artifactsDir(run.id), "demo.png"), { recursive: true, force: true });
+    socket.receive({
+      type: "run-artifact",
+      leaseId: lease.id,
+      runId: run.id,
+      artifact: { name: "demo.png", type: "screenshot", size: 3 },
+      data: Buffer.from("png").toString("base64"),
+      seq: 1,
+    });
+    await flush();
+
+    expect(store.get(run.id)?.status).toBe("completed");
+    expect(socket.ofType("run-complete-ack")).toHaveLength(1);
+    expect(registry.inFlight()).toBe(0);
+    expect(settled).toEqual([run.id]);
+    // The artifact really is there, so its manifest entry is not reported lost.
+    const logs = (await store.readEvents(run.id)).filter((event) => event.type === "log").map((event) => event.text);
+    expect(logs.some((text) => text.includes("did not reach the host"))).toBe(false);
+  });
+
+  it("steps over frames the worker says it dropped, and releases a completion held behind them", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    // The worker's buffer overflowed while this host was unreachable: frames
+    // 1 and 2 are gone for good, so the watermark would otherwise never reach
+    // the completion at 3 and the run would hang forever.
+    socket.receive({
+      type: "run-complete",
+      leaseId: lease.id,
+      runId: run.id,
+      outcome: "completed",
+      finishedAt: "2026-08-11T10:30:00.000Z",
+      artifacts: [],
+      attempts: [],
+      costs: [],
+      seq: 3,
+    });
+    await flush();
+    expect(store.get(run.id)?.status).not.toBe("completed");
+
+    socket.receive({ type: "lease-gap", leaseId: lease.id, runId: run.id, throughSeq: 2, dropped: 2 });
+    await flush();
+
+    expect(store.get(run.id)?.status).toBe("completed");
+    expect(socket.ofType("run-complete-ack")).toHaveLength(1);
+    // The loss is recorded against the run rather than swallowed.
+    const logs = (await store.readEvents(run.id)).filter((event) => event.type === "log").map((event) => event.text);
+    expect(logs.some((text) => text.includes("2 log or artifact frame(s) were dropped"))).toBe(true);
+  });
+
+  it("tells a worker that reconnects claiming a lease this host no longer holds to abort it", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    // The worker was partitioned long enough for its lease to expire; the run
+    // has been handed back to the scheduler and may already be running
+    // elsewhere. It comes back still claiming a lease the host has forgotten.
+    socket.drop();
+    const orphaned = await reconnect([{ id: "lease-gone", runId: run.id, issuedAt: lease.issuedAt }]);
+
+    // Not merely dropped from the worker's claims: an explicit instruction to
+    // stop, which is what keeps two workers off the same branch.
+    const lost = orphaned.last("lease-lost");
+    expect(lost).toMatchObject({ type: "lease-lost", leaseId: "lease-gone", runId: run.id });
+    expect(lost?.reason).toContain("no longer yours");
+  });
+
+  it("only dispatches once the lease is on disk, so a restart cannot hand the run out twice", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+
+    // What the claim looked like on disk at the instant the worker was told
+    // to start. A crash in that window is the whole risk: the next boot would
+    // find no lease for a run somebody is already executing, and dispatch it
+    // to a second worker.
+    let leasedWhenDispatched: string[] | undefined;
+    const send = socket.send.bind(socket);
+    socket.send = (raw: string) => {
+      send(raw);
+      if ((JSON.parse(raw) as { type?: string }).type === "dispatch") {
+        const onDisk: unknown = existsSync(leasesPath) ? JSON.parse(readFileSync(leasesPath, "utf8")) : [];
+        leasedWhenDispatched = Array.isArray(onDisk) ? onDisk.map((entry: { runId?: string }) => entry.runId ?? "") : [];
+      }
+    };
+
+    expect(dispatch(run)).toMatchObject({ placed: true });
+    // The outcome is immediate (capacity is accounted for at once) but the
+    // frame itself waits for the write.
+    expect(socket.last("dispatch")).toBeUndefined();
+    await flush();
+
+    expect(socket.last("dispatch")?.run.id).toBe(run.id);
+    expect(leasedWhenDispatched).toEqual([run.id]);
+  });
+
+  it("routes frames the worker sends the instant it is told `registered`", async () => {
+    // The worker starts heartbeating and flushes whatever it queued while
+    // disconnected as soon as `registered` lands, and the host is still
+    // finishing the registration at that point (it drains and acks each
+    // lease afterwards). Reacting to the frame the way a real worker does is
+    // the only way to catch a registration that admits traffic too late.
+    const { token } = fleet.mintPairingToken();
+    const socket = new FakeSocket();
+    const send = socket.send.bind(socket);
+    socket.send = (raw: string) => {
+      send(raw);
+      if ((JSON.parse(raw) as { type?: string }).type === "registered") {
+        socket.receive({ type: "heartbeat", ts: new Date().toISOString(), leaseIds: [] });
+      }
+    };
+    registry.accept(socket.asWebSocket(), "127.0.0.1");
+    socket.receive({
+      type: "register",
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      auth: { kind: "pairing", token },
+      name: "eager-1",
+      capabilities: capabilities(),
+      activeLeases: [],
+    });
+    await flush();
+
+    // Dropped instead of routed, the heartbeat gets no answer at all.
+    expect(socket.ofType("heartbeat-ack")).toHaveLength(1);
+  });
+
+  // --- restart recovery ----------------------------------------------------
+
+  it("restore() re-adopts a persisted lease so a reconnecting worker keeps reporting on it, and drops one whose run already finished", async () => {
+    // Enrolled on the shared FleetStore, so the restored registry (which is
+    // handed the same store) recognises the credential this worker comes back
+    // with, exactly as a fresh process would.
+    const worker = await enroll("bench-restart");
+    const active = await queueRun();
+    const finished = await queueRun();
+    await store.setStatus(finished.id, "completed", { finishedAt: new Date().toISOString() });
+
+    const seedLeases = new LeaseStore(leasesPath);
+    await seedLeases.init();
+    seedLeases.put({
+      id: "lease-active",
+      runId: active.id,
+      workerId: worker.id,
+      workerName: worker.name,
+      kind: "implementation",
+      issuedAt: "2026-08-11T09:00:00.000Z",
+      expiresAt: "2026-08-11T09:10:00.000Z",
+      appliedSeq: 3,
+    });
+    seedLeases.put({
+      id: "lease-finished",
+      runId: finished.id,
+      workerId: worker.id,
+      workerName: worker.name,
+      kind: "implementation",
+      issuedAt: "2026-08-11T09:00:00.000Z",
+      expiresAt: "2026-08-11T09:10:00.000Z",
+      appliedSeq: 0,
+    });
+    await seedLeases.flush();
+
+    const restoredRegistry = new WorkerRegistry({
+      config,
+      store,
+      memories,
+      fleet,
+      leases: new LeaseStore(leasesPath),
+      onRunSettled: () => {},
+      onRunRejected: () => {},
+      onRunInterrupted: () => {},
+    });
+    try {
+      const restored = await restoredRegistry.restore();
+      expect(restored).toEqual([
+        {
+          leaseId: "lease-active",
+          runId: active.id,
+          workerId: worker.id,
+          workerName: worker.name,
+          kind: "implementation",
+        },
+      ]);
+
+      // The still-open lease is live in the registry (a cancel against it is
+      // "pending", not "unknown"), while the finished one was dropped.
+      expect(restoredRegistry.cancel(active.id)).toBe("pending");
+      expect(restoredRegistry.cancel(finished.id)).toBe("unknown");
+
+      // A worker that reconnects claiming the restored lease resumes
+      // reporting on it rather than being told it's unknown.
+      const socket = new FakeSocket();
+      restoredRegistry.accept(socket.asWebSocket(), "127.0.0.1");
+      socket.receive({
+        type: "register",
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        auth: { kind: "credential", workerId: worker.id, secret: worker.credential },
+        name: worker.name,
+        capabilities: capabilities(),
+        activeLeases: [{ id: "lease-active", runId: active.id, issuedAt: "2026-08-11T09:00:00.000Z" }],
+      });
+      await flush();
+      expect(socket.last("lease-ack")).toMatchObject({ type: "lease-ack", leaseId: "lease-active", runId: active.id, seq: 3 });
+
+      socket.receive({ type: "run-patch", leaseId: "lease-active", runId: active.id, patch: { status: "running" } });
+      await flush();
+      expect(store.get(active.id)?.status).toBe("running");
+    } finally {
+      await restoredRegistry.stop();
+    }
   });
 });

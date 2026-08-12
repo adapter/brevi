@@ -439,6 +439,11 @@ function RunStrip({
             {relative(run.createdAt, now)}
           </span>
         </div>
+        {run.status === "queued" && run.queueReason && (
+          <p className="mt-1.5 truncate text-[11px] text-haze-700" title={run.queueReason}>
+            {run.queueReason}
+          </p>
+        )}
       </div>
     </div>
   );
