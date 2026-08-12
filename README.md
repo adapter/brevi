@@ -30,6 +30,14 @@ Every credential is verified live before saving and stored in `~/.brevi/config.j
 
 Other commands: `brevi start` (headless, no browser), `brevi stop` (shut down a running instance), `brevi status`, `brevi doctor` (check the whole setup: config, server, sandbox, connectors, CLIs), `brevi update` (update an installed CLI to the latest release on npm, restarting a running instance so the new version takes effect), and `brevi init` (rerun the sandbox provider pick any time).
 
+## Desktop app
+
+Prefer a GUI to a terminal? Mission Control is the same brevi as a downloadable, self-updating desktop app for macOS and Linux: it starts and supervises the same orchestrator and shows the same dashboard in its own window, sharing `~/.brevi` with the CLI so the two are interchangeable. Get it from [brevi.dev/download](https://brevi.dev/download/), or grab a platform build directly:
+
+- **macOS (universal, signed and notarized)**: [`brevi-mac-universal.dmg`](https://downloads.brevi.dev/desktop/latest/brevi-mac-universal.dmg)
+- **Linux (AppImage)**: [`brevi-linux-x86_64.AppImage`](https://downloads.brevi.dev/desktop/latest/brevi-linux-x86_64.AppImage)
+- **Linux (deb / rpm)**: [`brevi-linux-amd64.deb`](https://downloads.brevi.dev/desktop/latest/brevi-linux-amd64.deb) / [`brevi-linux-x86_64.rpm`](https://downloads.brevi.dev/desktop/latest/brevi-linux-x86_64.rpm)
+
 ## How it works
 
 ```

@@ -6,12 +6,14 @@ import { loadConfig } from "@brevi/orchestrator/config";
 import { ensureConfig } from "./config.js";
 import { FleetMonitor } from "./fleet.js";
 import { orchestratorUrl, probeHealth } from "./health.js";
-import { notifyRunFinished } from "./notifications.js";
+import { notifyRunFinished, notifyUpdateFailed, notifyUpdateReady } from "./notifications.js";
 import { ORCHESTRATOR_LOG_PATH, resolveCliEntry } from "./paths.js";
-import { countRuns, menuRuns } from "./summary.js";
+import { countRuns, menuRuns, runningCount } from "./summary.js";
 import { launchAtLoginEnabled, openedAtLogin, setLaunchAtLogin } from "./autostart.js";
 import { OrchestratorSupervisor, type SupervisorState } from "./supervisor.js";
 import { FleetTray, type TrayView } from "./tray.js";
+import { updateAction } from "./update-policy.js";
+import { DesktopUpdater } from "./updater.js";
 import { MissionControl } from "./window.js";
 
 /** How many recent runs the tray menu lists (see summary.ts's menuRuns). */
@@ -23,6 +25,7 @@ let missionControl: MissionControl | undefined;
 let tray: FleetTray | undefined;
 let supervisor: OrchestratorSupervisor | undefined;
 let fleet: FleetMonitor | undefined;
+let updater: DesktopUpdater | undefined;
 let quitting = false;
 
 // The default application menu already wires Cmd+Q to quit and gives every
@@ -42,6 +45,28 @@ if (!app.requestSingleInstanceLock()) {
   app.on("window-all-closed", () => {});
 
   void app.whenReady().then(main);
+}
+
+/**
+ * Shared teardown for both a normal quit and an update install: stop taking
+ * new work, stop the updater's own timers, hand the window and fleet watcher
+ * a chance to clean up, then stop the orchestrator (swallowing errors, since
+ * a stuck child must not block either path) and destroy the tray icon.
+ * Guarded by `quitting` so it only ever runs once, whichever path reaches it
+ * first; an update install calls this itself before `quitAndInstall`, and
+ * that same teardown must not run again when the resulting quit fires
+ * `before-quit`.
+ */
+async function teardownForQuit(): Promise<void> {
+  if (quitting) return;
+  quitting = true;
+  updater?.stop();
+  missionControl?.prepareForQuit();
+  fleet?.stop();
+  await (supervisor?.stop() ?? Promise.resolve()).catch(() => {
+    // A stuck orchestrator process shouldn't trap the app open.
+  });
+  tray?.destroy();
 }
 
 async function main(): Promise<void> {
@@ -84,6 +109,7 @@ async function main(): Promise<void> {
       refreshTray();
     },
     onOpenLogs: () => void shell.openPath(ORCHESTRATOR_LOG_PATH),
+    onUpdate: () => handleUpdateAction(),
     onQuit: () => app.quit(),
   });
 
@@ -96,8 +122,24 @@ async function main(): Promise<void> {
 
   fleet = new FleetMonitor({
     url: baseUrl,
-    onChange: () => refreshTray(),
+    onChange: () => {
+      refreshTray();
+      updater?.runsChanged();
+    },
     onRunFinished: (run) => notifyRunFinished(run, (path) => openWindow(path)),
+  });
+
+  // An app update carries the embedded orchestrator with it (the CLI is
+  // staged inside the app bundle, see stage-cli.ts), so there is no separate
+  // "update the orchestrator" path here: updating the desktop app IS how the
+  // orchestrator gets updated on a desktop-supervised install.
+  updater = new DesktopUpdater({
+    currentVersion: app.getVersion(),
+    busyRuns: () => runningCount(countRuns(fleet?.state.runs ?? [])),
+    onState: () => refreshTray(),
+    onUpdateReady: (version) => notifyUpdateReady(version, () => openWindow()),
+    onRollback: (version) => notifyUpdateFailed(version),
+    beforeInstall: () => teardownForQuit(),
   });
 
   /**
@@ -131,6 +173,14 @@ async function main(): Promise<void> {
    */
   function openWindow(path?: string): void {
     missionControl?.show(dashboardLoaded ? path : undefined);
+  }
+
+  /** Tray's update menu item click: what it does depends entirely on the updater's current state. */
+  function handleUpdateAction(): void {
+    if (!updater) return;
+    const action = updateAction(updater.state);
+    if (action === "install") void updater.install();
+    else if (action === "check") updater.checkNow();
   }
 
   function handleSupervisorState(state: SupervisorState): void {
@@ -171,29 +221,26 @@ async function main(): Promise<void> {
       connected: fleet.state.connected,
       launchAtLogin,
       url: baseUrl,
+      update: updater?.state ?? { kind: "idle" },
+      appVersion: app.getVersion(),
     };
     tray.update(view);
   }
 
   // Registered before the orchestrator is started, so quitting mid-startup
-  // still shuts down whatever the supervisor has already spawned.
+  // still shuts down whatever the supervisor has already spawned. A stuck
+  // orchestrator must not trap the app open, so the actual teardown always
+  // runs to completion (see teardownForQuit) before the app is allowed to quit.
   app.on("before-quit", (event) => {
     if (quitting) return;
-    quitting = true;
     event.preventDefault();
-    missionControl?.prepareForQuit();
-    fleet?.stop();
-    (supervisor?.stop() ?? Promise.resolve())
-      .catch(() => {
-        // Quit either way; a stuck orchestrator process shouldn't trap the app open.
-      })
-      .finally(() => {
-        tray?.destroy();
-        app.quit();
-      });
+    void teardownForQuit().finally(() => app.quit());
   });
 
   refreshTray();
   fleet.start();
   await supervisor.start();
+  // Update checks deliberately begin only once the orchestrator is up, so
+  // they never compete with it for startup time.
+  updater.start();
 }

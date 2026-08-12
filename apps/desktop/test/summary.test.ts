@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { Run, RunStatus, Ticket } from "@brevi/shared";
-import { countRuns, fleetLine, menuRuns, runLabel, workerLine } from "../src/main/summary.js";
+import {
+  countRuns,
+  fleetLine,
+  menuRuns,
+  orchestratorVersionLine,
+  runLabel,
+  runningCount,
+  workerLine,
+} from "../src/main/summary.js";
 import type { SupervisorState } from "../src/main/supervisor.js";
 
 function ticket(identifier: string): Ticket {
@@ -55,6 +63,20 @@ describe("countRuns", () => {
   });
 });
 
+describe("runningCount", () => {
+  test("subtracts queued and waiting out of active", () => {
+    expect(runningCount({ active: 4, queued: 2, waiting: 1, failed: 0, total: 7 })).toBe(1);
+  });
+
+  test("is zero for an idle fleet", () => {
+    expect(runningCount({ active: 0, queued: 0, waiting: 0, failed: 0, total: 0 })).toBe(0);
+  });
+
+  test("clamps at zero rather than going negative", () => {
+    expect(runningCount({ active: 1, queued: 2, waiting: 2, failed: 0, total: 5 })).toBe(0);
+  });
+});
+
 describe("fleetLine", () => {
   test("reports idle with no work anywhere in the pipeline", () => {
     expect(fleetLine(countRuns([]))).toBe("Idle");
@@ -95,6 +117,24 @@ describe("workerLine", () => {
   test("failed: surfaces the reason", () => {
     const state: SupervisorState = { kind: "failed", reason: "port 4400 already in use" };
     expect(workerLine(state)).toBe("Orchestrator: failed (port 4400 already in use)");
+  });
+});
+
+describe("orchestratorVersionLine", () => {
+  test("null when not attached", () => {
+    expect(orchestratorVersionLine("1.2.0", false, "1.1.0")).toBeNull();
+  });
+
+  test("null when attached but the orchestrator version is unknown", () => {
+    expect(orchestratorVersionLine("1.2.0", true, undefined)).toBeNull();
+  });
+
+  test("null when attached and versions match", () => {
+    expect(orchestratorVersionLine("1.2.0", true, "1.2.0")).toBeNull();
+  });
+
+  test("reports both versions when attached to a mismatched orchestrator", () => {
+    expect(orchestratorVersionLine("1.2.0", true, "1.1.0")).toBe("Version: app 1.2.0, attached orchestrator 1.1.0");
   });
 });
 

@@ -1,0 +1,68 @@
+---
+title: Download
+description: Download Mission Control, the self-updating desktop app for macOS and Linux.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+Mission Control is brevi as a desktop app: an Electron shell that starts and supervises the orchestrator and shows the same dashboard in its own window, no terminal required. It reads and writes the same `~/.brevi` config, run history and server as the CLI, so the two are interchangeable: only one orchestrator ever runs at a time, and starting the app while `brevi start` is already running just attaches to it instead of starting a second one.
+
+Each link below always points at the newest release.
+
+<Tabs>
+<TabItem label="macOS" icon="apple">
+
+One universal build for Apple Silicon and Intel, signed with a Developer ID certificate and notarized by Apple, so it opens with no Gatekeeper warning.
+
+**[Download brevi-mac-universal.dmg](https://downloads.brevi.dev/desktop/latest/brevi-mac-universal.dmg)**
+
+Open the dmg and drag brevi to Applications.
+
+</TabItem>
+<TabItem label="Linux" icon="linux">
+
+The AppImage is the primary Linux download: it self-updates, same as the macOS build. deb and rpm packages are also published for package-manager installs, at the cost of automatic updates (see below).
+
+**[Download brevi-linux-x86_64.AppImage](https://downloads.brevi.dev/desktop/latest/brevi-linux-x86_64.AppImage)**
+
+```sh
+chmod +x brevi-linux-x86_64.AppImage
+./brevi-linux-x86_64.AppImage
+```
+
+**[Download brevi-linux-amd64.deb](https://downloads.brevi.dev/desktop/latest/brevi-linux-amd64.deb)**
+
+```sh
+sudo apt install ./brevi-linux-amd64.deb
+```
+
+**[Download brevi-linux-x86_64.rpm](https://downloads.brevi.dev/desktop/latest/brevi-linux-x86_64.rpm)**
+
+```sh
+sudo dnf install ./brevi-linux-x86_64.rpm
+```
+
+</TabItem>
+</Tabs>
+
+Windows is not supported.
+
+Every release is also attached to a [GitHub release](https://github.com/adapter/brevi/releases) named `desktop-v<version>`, which is where to get an older version.
+
+## Updates
+
+The dmg and AppImage builds update themselves in the background against a static feed: no user action needed. The app downloads a new version, waits until no run is executing locally, then restarts into it; run history and everything else under `~/.brevi` is untouched, since that state is owned by the orchestrator and outlives the app version. If an install fails, the previous version keeps running, and the app stops offering that release after two failed attempts. Releases can also roll out to a fraction of installs at a time.
+
+<Aside type="note">
+deb and rpm installs don't self-update by design: the app detects it was installed by a package manager and leaves updates to `apt`/`dnf`. Re-download or re-install to get a newer version.
+</Aside>
+
+The app version is always the `@brevi/cli` version: the orchestrator ships inside the app, so an update always brings a matching orchestrator with it.
+
+## Prefer the CLI?
+
+The CLI remains fully supported and is what CI and headless machines use. See [Getting started](/getting-started/):
+
+```sh
+npx @brevi/cli
+```

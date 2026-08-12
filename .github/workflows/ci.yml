@@ -184,6 +184,25 @@ jobs:
           rm -rf "$isolated"
           echo "desktop packaging smoke check passed"
 
+      - name: Verify the update feed is baked in
+        run: |
+          # app-update.yml is what tells an installed app where to look for
+          # updates (provider and feed URL, baked in by electron-builder
+          # from the `publish:` block in electron-builder.yml). Losing it,
+          # e.g. a config regression that drops `publish:`, would silently
+          # disable auto-update for every install: the app would just never
+          # check, with no error anywhere.
+          update_yml=$(find apps/desktop/release -maxdepth 4 -type f -path '*/resources/app-update.yml' | head -1)
+          if [ -z "$update_yml" ]; then
+            echo "Could not find a resources/app-update.yml in the packaged output." >&2
+            exit 1
+          fi
+          echo "Checking $update_yml"
+          cat "$update_yml"
+          grep -q '^provider: generic' "$update_yml" || { echo "app-update.yml does not declare the generic provider" >&2; exit 1; }
+          grep -q 'downloads\.brevi\.dev' "$update_yml" || { echo "app-update.yml does not point at downloads.brevi.dev" >&2; exit 1; }
+          echo "update feed baked in correctly"
+
   deploy-preview:
     name: Deploy preview (docs + api)
     # Uploads per-commit *versions* of the production workers (no traffic

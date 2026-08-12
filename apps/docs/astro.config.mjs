@@ -24,6 +24,7 @@ export default defineConfig({
 			],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/adapter/brevi' }],
 			sidebar: [
+				{ label: 'Download', slug: 'download' },
 				{ label: 'Getting started', slug: 'getting-started' },
 				{
 					label: 'Guides',

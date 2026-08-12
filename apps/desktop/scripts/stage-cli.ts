@@ -34,8 +34,24 @@
  * target (see .github/workflows/desktop-release.yml). An optional
  * dependency that isn't installed on this host is *expected* to be missing
  * and is skipped, not an error.
+ *
+ * The `--darwin-universal` flag is the one deliberate exception to "only the
+ * host's arch is staged". electron-builder's `mac.target` `arch: [universal]`
+ * (see ../electron-builder.yml) builds an x64 and an arm64 app bundle and
+ * merges them with `lipo` into a single binary, and both intermediate builds
+ * copy their `extraResources` from this *same* staged tree: a merged app
+ * only works on both architectures if that tree carries both
+ * `@lydell/node-pty-darwin-arm64` and `@lydell/node-pty-darwin-x64`, not just
+ * whichever one the staging host's own install happened to select. Passing
+ * the flag downloads whichever of the two isn't already staged directly from
+ * npm after the normal dependency closure below has run. It only ever
+ * touches `@lydell/node-pty-darwin-*` package names, so it is a no-op on
+ * Linux (see package.json's `package:linux`, which never sets it) beyond the
+ * wasted npm lookups it would otherwise not need to do there.
  */
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -56,6 +72,21 @@ interface PackageManifest {
 function fail(message: string): never {
   console.error(`✖ ${message}`);
   process.exit(1);
+}
+
+// Argument parsing is deliberately minimal and dependency-free: there is
+// exactly one flag. An unrecognized argument fails loudly rather than being
+// ignored, so a typo (e.g. "--darwin-univeral") cannot silently produce a
+// non-universal staged tree that then fails much later, inside
+// electron-builder's arch merge, with a far less obvious error.
+const DARWIN_UNIVERSAL_FLAG = "--darwin-universal";
+let darwinUniversal = false;
+for (const arg of process.argv.slice(2)) {
+  if (arg === DARWIN_UNIVERSAL_FLAG) {
+    darwinUniversal = true;
+  } else {
+    fail(`Unknown argument "${arg}". Supported flags: ${DARWIN_UNIVERSAL_FLAG}.`);
+  }
 }
 
 function readManifest(dir: string): PackageManifest {
@@ -147,6 +178,62 @@ function stagePackage(name: string, fromDir: string, required: boolean): void {
   }
 }
 
+// Package names fetched directly from npm for --darwin-universal, kept
+// separate from `copied` (the dependency-closure walk above) for the summary.
+const darwinFetched: string[] = [];
+
+/**
+ * Makes sure `@lydell/node-pty-darwin-<arch>` exists under
+ * `build/cli/node_modules/@lydell/`, downloading it from npm if the
+ * dependency closure above didn't already stage it (i.e. it isn't the
+ * staging host's own architecture). Fails loudly on any download or
+ * extraction problem: a universal artifact silently missing one arch's
+ * native addon is exactly the failure this whole script exists to prevent,
+ * so there is no quiet fallback here.
+ */
+function stageDarwinNodePty(arch: "arm64" | "x64", pinnedVersion: string | undefined): void {
+  const name = `@lydell/node-pty-darwin-${arch}`;
+  const dest = join(NODE_MODULES, "@lydell", `node-pty-darwin-${arch}`);
+
+  if (existsSync(dest)) {
+    console.log(`  ${name}: already staged from the host's own install`);
+    return;
+  }
+
+  if (!pinnedVersion) {
+    fail(
+      `@lydell/node-pty's optionalDependencies has no pinned version for "${name}"; ` +
+        "cannot determine which version to download for the universal build.",
+    );
+  }
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "brevi-stage-pty-"));
+  try {
+    execFileSync("npm", ["pack", `${name}@${pinnedVersion}`, "--pack-destination", tmpDir], { stdio: "pipe" });
+
+    const tarball = readdirSync(tmpDir).find((entry) => entry.endsWith(".tgz"));
+    if (!tarball) {
+      fail(`'npm pack ${name}@${pinnedVersion}' did not produce a .tgz in ${tmpDir}.`);
+    }
+    execFileSync("tar", ["-xzf", tarball, "-C", tmpDir], { cwd: tmpDir, stdio: "pipe" });
+
+    const extracted = join(tmpDir, "package");
+    if (!existsSync(extracted)) {
+      fail(`Extracting ${tarball} did not produce the expected package/ directory.`);
+    }
+
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(extracted, dest, { recursive: true, dereference: true });
+  } catch (error) {
+    fail(`Failed to fetch "${name}@${pinnedVersion}" from npm for the universal macOS build: ${String(error)}`);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  darwinFetched.push(name);
+  console.log(`  ${name}: fetched ${pinnedVersion} from npm`);
+}
+
 // --- 1. Preconditions -------------------------------------------------
 
 if (!existsSync(CLI_ENTRY)) {
@@ -201,9 +288,32 @@ for (const name of Object.keys(cliManifest.dependencies ?? {})) {
   stagePackage(name, CLI_DIR, true);
 }
 
-// --- 5. Summary -----------------------------------------------------------
+// --- 5. Fill in both darwin node-pty builds (--darwin-universal only) ---
+// Runs after the dependency closure above so it only ever needs to fetch the
+// one arch the staging host didn't already install; on a non-darwin-universal
+// run (including every Linux run) this whole block is skipped entirely.
+
+if (darwinUniversal) {
+  const nodePtyDir = findPackageDir("@lydell/node-pty", CLI_DIR);
+  if (!nodePtyDir) {
+    fail(
+      'Could not resolve "@lydell/node-pty" from the workspace install to look up darwin package versions. ' +
+        "Run 'bun install' at the repo root first.",
+    );
+  }
+  const nodePtyOptional = readManifest(nodePtyDir).optionalDependencies ?? {};
+
+  console.log("Staging both darwin @lydell/node-pty builds for the universal macOS artifact:");
+  stageDarwinNodePty("arm64", nodePtyOptional["@lydell/node-pty-darwin-arm64"]);
+  stageDarwinNodePty("x64", nodePtyOptional["@lydell/node-pty-darwin-x64"]);
+}
+
+// --- 6. Summary -----------------------------------------------------------
 
 const totalBytes = dirSize(STAGE_DIR);
 console.log(`Staged @brevi/cli into ${STAGE_DIR}`);
 console.log(`  ${copied.length} dependency package(s): ${copied.join(", ")}`);
+if (darwinUniversal) {
+  console.log(`  ${darwinFetched.length} darwin package(s) fetched from npm for the universal build: ${darwinFetched.join(", ") || "none"}`);
+}
 console.log(`  total size: ${bytesToHuman(totalBytes)}`);
