@@ -8,7 +8,7 @@ import { FleetMonitor } from "./fleet.js";
 import { orchestratorUrl, probeHealth } from "./health.js";
 import { notifyRunFinished, notifyUpdateFailed, notifyUpdateReady } from "./notifications.js";
 import { ORCHESTRATOR_LOG_PATH, resolveCliEntry } from "./paths.js";
-import { countRuns, menuRuns, runningCount } from "./summary.js";
+import { countRuns, menuRuns, updateBlockingRuns } from "./summary.js";
 import { launchAtLoginEnabled, openedAtLogin, setLaunchAtLogin } from "./autostart.js";
 import { OrchestratorSupervisor, type SupervisorState } from "./supervisor.js";
 import { FleetTray, type TrayView } from "./tray.js";
@@ -135,7 +135,7 @@ async function main(): Promise<void> {
   // orchestrator gets updated on a desktop-supervised install.
   updater = new DesktopUpdater({
     currentVersion: app.getVersion(),
-    busyRuns: () => runningCount(countRuns(fleet?.state.runs ?? [])),
+    busyRuns: () => updateBlockingRuns(countRuns(fleet?.state.runs ?? [])),
     onState: () => refreshTray(),
     onUpdateReady: (version) => notifyUpdateReady(version, () => openWindow()),
     onRollback: (version) => notifyUpdateFailed(version),

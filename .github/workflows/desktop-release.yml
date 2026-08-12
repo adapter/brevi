@@ -24,8 +24,11 @@
 #     main is the reliable release signal. Same reasoning as rootfs.yml.
 #   - push of an "@brevi/cli@*" tag, which covers a manually pushed tag.
 #   - workflow_dispatch, for a packaging dry run (the default) or, with
-#     `publish: true`, a manually triggered real release. `force` rebuilds
-#     and republishes a version that is already live; `staging_percentage`
+#     `publish: true`, a manually triggered real release. A dry run always
+#     builds and packages, even for a version that is already published,
+#     since proving packaging still works is the whole point of it.
+#     `force` rebuilds and republishes a version that is already live (it
+#     only means anything to a publishing run); `staging_percentage`
 #     overrides the DESKTOP_STAGING_PERCENTAGE repository variable for this
 #     run only (see the "Apply staged rollout percentage" step below).
 #
@@ -38,10 +41,11 @@
 #     enrolled in the Developer Program, an app-specific password for it
 #     (appleid.apple.com > Sign-In and Security), and the team ID, for
 #     notarization.
-#   All five are optional as a set: if unset, the macOS build steps still
-#   produce a artifact, just unsigned and not notarized (see "Detect macOS
-#   signing secrets" below); it will be Gatekeeper-quarantined until the
-#   user right-clicks > Open, or a future signed run replaces it.
+#   All five are optional as a set, and only as a set: with any of them
+#   unset the macOS build steps still produce an artifact, just unsigned and
+#   not notarized (see "Detect macOS signing secrets" below); it will be
+#   Gatekeeper-quarantined until the user right-clicks > Open, or a future
+#   signed run replaces it.
 #   CLOUDFLARE_API_TOKEN: needs R2 write access to the brevi-downloads
 #     bucket, in addition to whatever else it's already scoped for.
 #   CLOUDFLARE_ACCOUNT_ID: the Cloudflare account the bucket lives in.
@@ -157,13 +161,23 @@ jobs:
       # A manifest.json-style probe: the channel file is uploaded last (see
       # the R2 publish step below), so its presence at this path means a
       # complete, previous run already published this exact version.
+      #
+      # The shortcut only applies to runs that would publish. A dispatch
+      # without `publish` exists to prove packaging still works, and the
+      # version it builds is almost always one that is already live, so
+      # skipping there would turn every dry run into a green run that built
+      # nothing.
       - name: Check whether this version is already published
         id: check
         env:
           FORCE: ${{ github.event.inputs.force }}
+          PUBLISHING: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.publish == 'true' }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if [ "$FORCE" = "true" ]; then
+          if [ "$PUBLISHING" != "true" ]; then
+            echo "packaging dry run (dispatch without publish): building $VERSION regardless of what's already published"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [ "$FORCE" = "true" ]; then
             echo "force=true: rebuilding $VERSION regardless of what's already published"
             echo "skip=false" >> "$GITHUB_OUTPUT"
           elif curl -sfI "https://downloads.brevi.dev/desktop/v$VERSION/${{ matrix.channel_file }}" >/dev/null; then
@@ -192,34 +206,56 @@ jobs:
         run: bun run build
 
       # Plain shell, not a marketplace action: signing/notarization needs
-      # five secrets (see the header comment). When they're not configured
-      # the build must still produce a downloadable artifact, just unsigned,
-      # rather than failing the whole release.
+      # five secrets (see the header comment). They are all-or-nothing: a
+      # partial set cannot produce a signed, notarized build, so anything
+      # short of all five takes the unsigned path rather than handing
+      # electron-builder half the credentials and failing the release. When
+      # they're not configured the build must still produce a downloadable
+      # artifact, just unsigned.
       - name: Detect macOS signing secrets
         if: steps.check.outputs.skip != 'true' && runner.os == 'macOS'
         id: signing
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-        run: |
-          if [ -z "$CSC_LINK" ] || [ -z "$APPLE_ID" ]; then
-            echo "::warning::No macOS signing secrets configured (CSC_LINK/APPLE_ID unset). Building an UNSIGNED, NOT NOTARIZED artifact: macOS Gatekeeper will quarantine it, and the user will need to right-click > Open (or clear the quarantine attribute) to run it. Configure CSC_LINK, CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID to ship a signed, notarized build."
-            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
-            echo "extra_args=-c.mac.notarize=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Signing secrets present; building a signed, notarized artifact."
-            echo "extra_args=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Stage the CLI and package
-        if: steps.check.outputs.skip != 'true'
-        working-directory: apps/desktop
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=""
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            # Indirect expansion: the loop reports which names are unset
+            # without ever echoing a secret's value.
+            if [ -z "${!name}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::macOS signing secrets incomplete (unset:$missing). Building an UNSIGNED, NOT NOTARIZED artifact: macOS Gatekeeper will quarantine it, and the user will need to right-click > Open (or clear the quarantine attribute) to run it. Configure CSC_LINK, CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID to ship a signed, notarized build."
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "extra_args=-c.mac.notarize=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "All five signing secrets present; building a signed, notarized artifact."
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "extra_args=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The secrets only reach electron-builder on the signed path: passing a
+      # partial set through would have it pick the credentials up one by one
+      # (importing a certificate, then asking for a notarization password
+      # that isn't there) instead of taking the unsigned fallback the step
+      # above chose. The Linux leg never runs that step, so `signed` is empty
+      # there and every value below is empty too, which is what it wants.
+      - name: Stage the CLI and package
+        if: steps.check.outputs.skip != 'true'
+        working-directory: apps/desktop
+        env:
+          CSC_LINK: ${{ steps.signing.outputs.signed == 'true' && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ steps.signing.outputs.signed == 'true' && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ steps.signing.outputs.signed == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ steps.signing.outputs.signed == 'true' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ steps.signing.outputs.signed == 'true' && secrets.APPLE_TEAM_ID || '' }}
           PACKAGE_SCRIPT: ${{ matrix.package_script }}
           EXTRA_ARGS: ${{ steps.signing.outputs.extra_args }}
         # The `--` separator is only added when there is actually something
@@ -233,9 +269,8 @@ jobs:
             bun run "$PACKAGE_SCRIPT"
           fi
 
-      # A dry run (dispatch without publish, or any run for a version
-      # already published) still proves the whole pipeline builds without
-      # cutting a release.
+      # A dry run (a dispatch without publish) still proves the whole
+      # pipeline builds without cutting a release.
       - name: List what was produced
         if: steps.check.outputs.skip != 'true'
         run: ls -lh apps/desktop/release

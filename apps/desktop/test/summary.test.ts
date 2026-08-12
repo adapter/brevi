@@ -7,6 +7,7 @@ import {
   orchestratorVersionLine,
   runLabel,
   runningCount,
+  updateBlockingRuns,
   workerLine,
 } from "../src/main/summary.js";
 import type { SupervisorState } from "../src/main/supervisor.js";
@@ -74,6 +75,30 @@ describe("runningCount", () => {
 
   test("clamps at zero rather than going negative", () => {
     expect(runningCount({ active: 1, queued: 2, waiting: 2, failed: 0, total: 5 })).toBe(0);
+  });
+});
+
+describe("updateBlockingRuns", () => {
+  test("counts running and queued runs together", () => {
+    expect(updateBlockingRuns({ active: 4, queued: 2, waiting: 1, failed: 0, total: 7 })).toBe(3);
+  });
+
+  test("queued runs alone block an install: stopping the orchestrator cancels them", () => {
+    const counts = countRuns([run("a", "queued"), run("b", "queued")]);
+    expect(runningCount(counts)).toBe(0);
+    expect(updateBlockingRuns(counts)).toBe(2);
+  });
+
+  test("waiting runs never block: a restart reschedules them", () => {
+    expect(updateBlockingRuns(countRuns([run("a", "waiting")]))).toBe(0);
+  });
+
+  test("is zero for an idle fleet", () => {
+    expect(updateBlockingRuns(countRuns([run("a", "completed"), run("b", "failed")]))).toBe(0);
+  });
+
+  test("clamps at zero rather than going negative", () => {
+    expect(updateBlockingRuns({ active: 1, queued: 0, waiting: 2, failed: 0, total: 3 })).toBe(0);
   });
 });
 

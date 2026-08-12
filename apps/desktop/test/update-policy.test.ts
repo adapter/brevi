@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { updateBlockingRuns } from "../src/main/summary.js";
 import {
   shouldInstallNow,
   updateAction,
@@ -172,6 +173,14 @@ describe("shouldInstallNow", () => {
 
   test("false when ready but a run is executing", () => {
     expect(shouldInstallNow({ kind: "ready", version: "1.2.0", busyRuns: 2 }, 1)).toBe(false);
+  });
+
+  test("false when the only busy runs are queued ones (a restart cancels them)", () => {
+    // busyRuns is updateBlockingRuns (see summary.ts), which counts queued
+    // runs: stopping the orchestrator cancels them rather than delaying them.
+    const queuedOnly = updateBlockingRuns({ active: 2, queued: 2, waiting: 0, failed: 0, total: 2 });
+    expect(queuedOnly).toBe(2);
+    expect(shouldInstallNow({ kind: "ready", version: "1.2.0", busyRuns: queuedOnly }, queuedOnly)).toBe(false);
   });
 
   test("false when not ready, even with nothing running", () => {

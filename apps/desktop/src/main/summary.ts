@@ -47,15 +47,30 @@ export function trayTitle(counts: FleetCounts): string {
 
 /**
  * Count of runs the orchestrator is executing right now: "active" minus the
- * runs that are merely queued or parked waiting on a human. This is what
- * gates a restart-to-update (see shouldInstallNow in update-policy.ts): a
- * run in this count would be killed mid-flight by a restart, unlike a
- * queued or waiting one. Clamped at 0 defensively; the buckets should never
+ * runs that are merely queued or parked waiting on a human. This is the
+ * number a person reads in the tray, not the one that gates an update (see
+ * updateBlockingRuns). Clamped at 0 defensively; the buckets should never
  * disagree, but a caller passing inconsistent counts shouldn't produce a
  * negative "running".
  */
 export function runningCount(counts: FleetCounts): number {
   return Math.max(0, counts.active - counts.queued - counts.waiting);
+}
+
+/**
+ * Count of runs a restart-to-update would disrupt, which is what gates the
+ * automatic install (see shouldInstallNow in update-policy.ts): the runs
+ * being executed right now plus the ones still queued. A queued run counts
+ * even though nothing is executing it yet, because Scheduler.stop() cancels
+ * every entry left in the queue on shutdown (see
+ * packages/orchestrator/src/scheduler.ts), so restarting under a queue
+ * throws submitted work away rather than delaying it. A waiting run is
+ * parked on a human's input and is rescheduled on the next boot, so it
+ * survives a restart and never blocks. Clamped at 0 like runningCount, for
+ * the same reason.
+ */
+export function updateBlockingRuns(counts: FleetCounts): number {
+  return Math.max(0, counts.active - counts.waiting);
 }
 
 /** One-line fleet summary, e.g. "2 running, 3 queued" or "Idle". */
