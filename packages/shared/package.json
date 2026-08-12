@@ -52,7 +52,7 @@
   },
   "devDependencies": {
     "@repo/typescript-config": "*",
-    "@types/node": "^26.1.2",
+    "@types/node": "^26.2.0",
     "oxlint": "^1.77.0",
     "typescript": "^7.0.2"
   }
