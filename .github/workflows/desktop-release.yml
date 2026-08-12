@@ -1,19 +1,33 @@
-# Builds and publishes the desktop app (Mission Control) to GitHub Releases:
-# dmg + zip for macOS (arm64 and Intel), AppImage + deb for Linux (x64).
-# Each artifact is staged and packaged on a runner matching its own target
-# OS/arch, not cross-built: the staged CLI (apps/desktop/build/cli, see
-# apps/desktop/scripts/stage-cli.ts) embeds whichever platform/arch build of
-# the native @lydell/node-pty addon the *staging host* has installed via
-# optionalDependencies, so packaging a different arch's artifact on this
-# host would silently ship the wrong native binary.
+# Builds and publishes the desktop app (Mission Control) as a static
+# auto-update feed on Cloudflare R2, plus a GitHub release: dmg + zip for
+# macOS (one universal binary, arm64 and x64 merged with `lipo`), AppImage +
+# deb + rpm for Linux (x64). Each leg is staged and packaged on a runner
+# matching its own target OS/arch, not cross-built: the staged CLI
+# (apps/desktop/build/cli, see apps/desktop/scripts/stage-cli.ts) embeds
+# whichever platform/arch build of the native @lydell/node-pty addon the
+# *staging host* has installed via optionalDependencies, so packaging a
+# different arch's artifact on this host would silently ship the wrong
+# native binary.
 #
-# Triggers on pushed tags matching `desktop-v*`, whose version has to match
-# apps/desktop/package.json (so desktop-v0.2.0 needs version 0.2.0). A manual
-# dispatch runs the same build as a dry run and publishes nothing.
+# The desktop app has no version of its own: it ships whatever
+# packages/cli/package.json says (injected at package time, see
+# apps/desktop/electron-builder.yml and scripts/cli-version.ts), so a
+# release here always carries an app and an embedded orchestrator on the
+# same version. That is also what drives everything below: there is no
+# desktop-specific version to bump or tag.
 #
-# Artifacts are attached to the tag's GitHub release with `gh release upload`
-# rather than by electron-builder's own publisher, which derives its release
-# tag from the app version (`v<version>`) and would miss the `desktop-v*` tag.
+# Triggers:
+#   - push to main touching packages/cli/package.json: the changesets
+#     "Release packages" PR merge (release.yml) lands as a human-initiated
+#     push, which triggers workflows; tags the changesets action pushes with
+#     GITHUB_TOKEN cannot trigger workflows, so this version-bump commit on
+#     main is the reliable release signal. Same reasoning as rootfs.yml.
+#   - push of an "@brevi/cli@*" tag, which covers a manually pushed tag.
+#   - workflow_dispatch, for a packaging dry run (the default) or, with
+#     `publish: true`, a manually triggered real release. `force` rebuilds
+#     and republishes a version that is already live; `staging_percentage`
+#     overrides the DESKTOP_STAGING_PERCENTAGE repository variable for this
+#     run only (see the "Apply staged rollout percentage" step below).
 #
 # Required repository secrets:
 #   GITHUB_TOKEN: provided automatically; needs `contents: write` (granted
@@ -28,43 +42,76 @@
 #   produce a artifact, just unsigned and not notarized (see "Detect macOS
 #   signing secrets" below); it will be Gatekeeper-quarantined until the
 #   user right-clicks > Open, or a future signed run replaces it.
+#   CLOUDFLARE_API_TOKEN: needs R2 write access to the brevi-downloads
+#     bucket, in addition to whatever else it's already scoped for.
+#   CLOUDFLARE_ACCOUNT_ID: the Cloudflare account the bucket lives in.
+#
+# Optional repository variable:
+#   DESKTOP_STAGING_PERCENTAGE: default staged-rollout percentage (0-100)
+#     applied to every real release unless a workflow_dispatch overrides it.
+#     Unset behaves as 100 (ship to everyone).
+#
+# One-time manual setup (not done by this workflow): the brevi-downloads R2
+# bucket must exist, and downloads.brevi.dev must be attached to it as a
+# public custom domain, in the Cloudflare dashboard.
 name: Desktop release
 
 on:
   push:
+    branches: [main]
+    paths:
+      - packages/cli/package.json
     tags:
-      - "desktop-v*"
+      - "@brevi/cli@*"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the build (a dispatch is a packaging dry run otherwise)
+        type: boolean
+        default: false
+      staging_percentage:
+        description: Staged rollout percentage (1-100); overrides the DESKTOP_STAGING_PERCENTAGE repository variable for this run
+        type: string
+        default: "100"
+      force:
+        description: Rebuild and overwrite a version that is already published
+        type: boolean
+        default: false
 
-# Default to no permissions; each job declares exactly what it needs.
+# Default to no permissions; the job declares exactly what it needs.
 permissions: {}
 
-concurrency: desktop-release-${{ github.ref }}
+# One publish at a time per ref: two overlapping runs racing to upload the
+# same version, or a dispatch racing the automatic push trigger, is worse
+# than queuing.
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
     name: Build (${{ matrix.name }})
     permissions:
-      contents: write # electron-builder creates/updates the GitHub release and uploads assets
+      contents: write # create/update the GitHub release and upload assets
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: macOS arm64
+          - name: macOS universal
             os: macos-latest
-            arch_flag: --arm64
-          - name: macOS x64
-            os: macos-13 # last Intel-based GitHub-hosted macOS image
-            arch_flag: --x64
+            package_script: package:mac
+            channel_file: latest-mac.yml
           - name: Linux x64
             os: ubuntu-latest
-            arch_flag: --x64
+            package_script: package:linux
+            channel_file: latest-linux.yml
             # Not blacksmith-4vcpu-ubuntu-2404 (used elsewhere in this repo):
             # electron-builder's Linux packaging needs system libraries
             # (fakeroot, dpkg, etc.) and GitHub's ubuntu-latest image has
             # them preinstalled; we haven't verified the Blacksmith image
             # does, so this stays on a GitHub-hosted runner until that's
-            # confirmed.
+            # confirmed. The rpm target additionally needs rpm/rpmbuild,
+            # installed explicitly below since neither image ships it.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,19 +138,65 @@ jobs:
             bun-turbo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-
             bun-turbo-${{ runner.os }}-${{ runner.arch }}-
 
-      - run: bun install --frozen-lockfile
+      # The desktop app has no version of its own: it ships whatever
+      # packages/cli/package.json says, so an app update always carries a
+      # matching embedded orchestrator (see the header comment). "tag" here
+      # is the GitHub release tag this run cuts or attaches to, not a git
+      # tag that has to already exist.
+      - name: Read the version
+        id: version
+        run: |
+          version=$(jq -r .version packages/cli/package.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=desktop-v$version" >> "$GITHUB_OUTPUT"
+          echo "building desktop v$version"
+
+      # A push to main touching packages/cli/package.json is not always a
+      # release (a plain dependency edit touches it too), so the published
+      # feed, not the trigger, is the source of truth for "already shipped".
+      # A manifest.json-style probe: the channel file is uploaded last (see
+      # the R2 publish step below), so its presence at this path means a
+      # complete, previous run already published this exact version.
+      - name: Check whether this version is already published
+        id: check
+        env:
+          FORCE: ${{ github.event.inputs.force }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            echo "force=true: rebuilding $VERSION regardless of what's already published"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif curl -sfI "https://downloads.brevi.dev/desktop/v$VERSION/${{ matrix.channel_file }}" >/dev/null; then
+            echo "$VERSION is already published (${{ matrix.channel_file }} exists); skipping (re-run via workflow_dispatch with force to overwrite)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$VERSION is not published yet; proceeding"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # electron-builder shells out to rpmbuild for the rpm target; neither
+      # GitHub-hosted Linux image ships it by default.
+      - name: Install rpm packaging tools
+        if: steps.check.outputs.skip != 'true' && runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      - name: Install dependencies
+        if: steps.check.outputs.skip != 'true'
+        run: bun install --frozen-lockfile
 
       # The whole dependency graph: packages/cli/dist must exist before
       # apps/desktop/scripts/stage-cli.ts can stage it, and packages/cli's
       # own build needs apps/app/dist (the dashboard) to already exist too.
-      - run: bun run build
+      - name: Build
+        if: steps.check.outputs.skip != 'true'
+        run: bun run build
 
       # Plain shell, not a marketplace action: signing/notarization needs
       # five secrets (see the header comment). When they're not configured
       # the build must still produce a downloadable artifact, just unsigned,
       # rather than failing the whole release.
       - name: Detect macOS signing secrets
-        if: runner.os == 'macOS'
+        if: steps.check.outputs.skip != 'true' && runner.os == 'macOS'
         id: signing
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -118,23 +211,8 @@ jobs:
             echo "extra_args=" >> "$GITHUB_OUTPUT"
           fi
 
-      # The tag names the release; the app version names every artifact
-      # (artifactName in electron-builder.yml). If they disagree, the release
-      # page and the files on it tell different stories, so fail early rather
-      # than publish that.
-      - name: Check the tag matches the app version
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          version=$(node -p "require('./apps/desktop/package.json').version")
-          if [ "$TAG" != "desktop-v$version" ]; then
-            echo "Tag $TAG does not match apps/desktop/package.json version $version (expected desktop-v$version). Bump the version and retag." >&2
-            exit 1
-          fi
-          echo "Tag $TAG matches version $version"
-
       - name: Stage the CLI and package
+        if: steps.check.outputs.skip != 'true'
         working-directory: apps/desktop
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -142,37 +220,189 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: bun run package -- ${{ matrix.arch_flag }} ${{ steps.signing.outputs.extra_args }}
+          PACKAGE_SCRIPT: ${{ matrix.package_script }}
+          EXTRA_ARGS: ${{ steps.signing.outputs.extra_args }}
+        # The `--` separator is only added when there is actually something
+        # to pass: the Linux leg never runs the signing step, so a bare
+        # trailing `--` would reach electron-builder as an argument of its
+        # own.
+        run: |
+          if [ -n "$EXTRA_ARGS" ]; then
+            bun run "$PACKAGE_SCRIPT" -- $EXTRA_ARGS
+          else
+            bun run "$PACKAGE_SCRIPT"
+          fi
 
-      # A manual dispatch has no tag to publish against, so it is a packaging
-      # dry run: it proves the whole pipeline still builds on every target
-      # without cutting a release.
+      # A dry run (dispatch without publish, or any run for a version
+      # already published) still proves the whole pipeline builds without
+      # cutting a release.
       - name: List what was produced
+        if: steps.check.outputs.skip != 'true'
         run: ls -lh apps/desktop/release
 
+      # Without the channel file nothing can auto-update: it is what
+      # electron-updater fetches to decide a newer version exists. Fail
+      # loudly rather than silently publish artifacts no installed app will
+      # ever find, and catch a version mismatch (e.g. a stale cached build)
+      # before it reaches R2.
+      - name: Verify the update feed channel file
+        if: steps.check.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          channel_file="apps/desktop/release/${{ matrix.channel_file }}"
+          if [ ! -f "$channel_file" ]; then
+            echo "Missing $channel_file: electron-builder did not produce an update feed for this artifact set." >&2
+            exit 1
+          fi
+          feed_version=$(grep -m1 '^version:' "$channel_file" | sed 's/^version:[[:space:]]*//' | tr -d '"')
+          if [ "$feed_version" != "$VERSION" ]; then
+            echo "$channel_file reports version $feed_version, expected $VERSION." >&2
+            exit 1
+          fi
+          echo "$channel_file matches version $VERSION"
+
+      # electron-updater reads `stagingPercentage` from the channel file and
+      # decides per machine with a stable random id it keeps locally, so the
+      # same percentage genuinely means "this fraction of installs will be
+      # offered the update". Lowering it is how a risky release is rolled
+      # out gradually; raise it (or re-run with a higher value) to widen the
+      # rollout, or re-upload the previous version's channel file to R2 to
+      # pull a bad release back entirely.
+      - name: Apply staged rollout percentage
+        if: steps.check.outputs.skip != 'true'
+        env:
+          PERCENTAGE: ${{ github.event.inputs.staging_percentage || vars.DESKTOP_STAGING_PERCENTAGE || '100' }}
+        run: |
+          channel_file="apps/desktop/release/${{ matrix.channel_file }}"
+          if [ "$PERCENTAGE" != "100" ]; then
+            echo "stagingPercentage: $PERCENTAGE" >> "$channel_file"
+            echo "applied stagingPercentage: $PERCENTAGE to $channel_file"
+          else
+            echo "staging percentage is 100: shipping to everyone, no stagingPercentage line added"
+          fi
+
       # Uploaded here rather than by electron-builder's own GitHub publisher,
-      # which derives the release tag from the app version (`v<version>`) and
-      # so would not find the `desktop-v*` tag this run was cut from. The
-      # three matrix legs race to create the release, hence create-or-ignore
-      # then upload with --clobber.
+      # which derives the release tag from the app version (`v<version>`)
+      # and races against the R2 publish that owns the real auto-update
+      # feed. The two matrix legs race to create this release, hence
+      # create-or-ignore then upload with --clobber.
       - name: Attach the artifacts to the release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.check.outputs.skip != 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.publish == 'true')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           # No `set -u`: the macOS runners still ship bash 3.2, where
           # referencing an empty array under `set -u` is an "unbound
           # variable" error rather than an empty expansion.
           set -eo pipefail
+          # --target pins the release tag to the commit this artifact was
+          # built from. Without it the tag is cut at the default branch tip,
+          # which is the wrong commit whenever this run came from an
+          # "@brevi/cli@*" tag push that main has already moved past.
           gh release view "$TAG" >/dev/null 2>&1 ||
-            gh release create "$TAG" --title "brevi desktop $TAG" --generate-notes ||
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "brevi desktop v$VERSION" --generate-notes ||
             gh release view "$TAG" >/dev/null
           shopt -s nullglob
-          assets=(apps/desktop/release/*.dmg apps/desktop/release/*.zip apps/desktop/release/*.AppImage apps/desktop/release/*.deb)
+          assets=(apps/desktop/release/*.dmg apps/desktop/release/*.zip apps/desktop/release/*.AppImage apps/desktop/release/*.deb apps/desktop/release/*.rpm)
           if [ ${#assets[@]} -eq 0 ]; then
             echo "electron-builder produced no installable artifacts." >&2
             exit 1
           fi
           printf 'uploading %s\n' "${assets[@]}"
           gh release upload "$TAG" "${assets[@]}" --clobber
+
+      # Same layout rootfs.yml uses: a versioned, immutable prefix for
+      # rollback, and a "latest" prefix that is the live feed the app
+      # actually polls. The channel file references its sibling artifacts
+      # by bare filename, so they have to sit right next to it in both
+      # prefixes; the stable aliases exist purely so the docs site has a
+      # download link that never changes across releases.
+      - name: Publish artifacts and update feed to R2
+        if: steps.check.outputs.skip != 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.publish == 'true')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          VERSION: ${{ steps.version.outputs.version }}
+          CHANNEL_FILE: ${{ matrix.channel_file }}
+        run: |
+          set -eo pipefail
+          # Pinned to the exact wrangler version apps/api already depends on
+          # (apps/api/package.json / bun.lock): this handles the Cloudflare
+          # token, so it must not float to whatever npx would otherwise
+          # resolve as latest. Bump it deliberately, in step with apps/api.
+          wrangler="npx --yes wrangler@4.118.0"
+
+          content_type_for() {
+            case "$1" in
+              *.dmg) echo application/x-apple-diskimage ;;
+              *.zip) echo application/zip ;;
+              *.deb) echo application/vnd.debian.binary-package ;;
+              *.rpm) echo application/x-rpm ;;
+              *.yml) echo text/yaml ;;
+              *) echo application/octet-stream ;; # AppImage, blockmap
+            esac
+          }
+
+          shopt -s nullglob
+          artifacts=(apps/desktop/release/*.dmg apps/desktop/release/*.zip apps/desktop/release/*.AppImage apps/desktop/release/*.deb apps/desktop/release/*.rpm apps/desktop/release/*.blockmap)
+          channel_file="apps/desktop/release/$CHANNEL_FILE"
+
+          if [ ${#artifacts[@]} -eq 0 ]; then
+            echo "No installable artifacts found in apps/desktop/release to publish." >&2
+            exit 1
+          fi
+
+          # Versioned prefix: the immutable archive a rollback republishes
+          # from. Channel file last, so a half-uploaded version is never
+          # resolvable as "this version exists" (same rule rootfs.yml uses).
+          for f in "${artifacts[@]}"; do
+            name=$(basename "$f")
+            $wrangler r2 object put "brevi-downloads/desktop/v$VERSION/$name" \
+              --file "$f" --content-type "$(content_type_for "$name")" --remote
+          done
+          $wrangler r2 object put "brevi-downloads/desktop/v$VERSION/$CHANNEL_FILE" \
+            --file "$channel_file" --content-type text/yaml --remote
+
+          # Live prefix: the feed electron-updater actually polls. Same
+          # manifest-last rule.
+          for f in "${artifacts[@]}"; do
+            name=$(basename "$f")
+            $wrangler r2 object put "brevi-downloads/desktop/latest/$name" \
+              --file "$f" --content-type "$(content_type_for "$name")" --remote
+          done
+
+          # Stable aliases so the docs site can link to a URL that never
+          # changes across releases. Each leg only uploads its own
+          # platform's aliases.
+          case "${{ runner.os }}" in
+            macOS)
+              dmg=(apps/desktop/release/*.dmg)
+              $wrangler r2 object put "brevi-downloads/desktop/latest/brevi-mac-universal.dmg" \
+                --file "${dmg[0]}" --content-type application/x-apple-diskimage --remote
+              ;;
+            Linux)
+              appimage=(apps/desktop/release/*.AppImage)
+              deb=(apps/desktop/release/*.deb)
+              rpm=(apps/desktop/release/*.rpm)
+              $wrangler r2 object put "brevi-downloads/desktop/latest/brevi-linux-x86_64.AppImage" \
+                --file "${appimage[0]}" --content-type application/octet-stream --remote
+              $wrangler r2 object put "brevi-downloads/desktop/latest/brevi-linux-amd64.deb" \
+                --file "${deb[0]}" --content-type application/vnd.debian.binary-package --remote
+              $wrangler r2 object put "brevi-downloads/desktop/latest/brevi-linux-x86_64.rpm" \
+                --file "${rpm[0]}" --content-type application/x-rpm --remote
+              ;;
+          esac
+
+          $wrangler r2 object put "brevi-downloads/desktop/latest/$CHANNEL_FILE" \
+            --file "$channel_file" --content-type text/yaml --remote
+
+          echo "published:"
+          echo "  https://downloads.brevi.dev/desktop/v$VERSION/$CHANNEL_FILE"
+          echo "  https://downloads.brevi.dev/desktop/latest/$CHANNEL_FILE"
+          for f in "${artifacts[@]}"; do
+            name=$(basename "$f")
+            echo "  https://downloads.brevi.dev/desktop/latest/$name"
+          done

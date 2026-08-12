@@ -1,16 +1,21 @@
 # Packaging config for `bun run package` (electron-builder), which produces
 # distributable macOS/Linux builds under apps/desktop/release. Windows is out
-# of scope for this project. Wired into CI:
-# .github/workflows/desktop-release.yml runs this once per target OS/arch for
-# every `desktop-v*` tag and attaches the results to that tag's GitHub
-# release; ci.yml also runs a Linux-only `--linux dir` packaging smoke check
-# on every PR.
+# of scope for this project. Wired into CI: .github/workflows/desktop-release.yml
+# runs this once per target (a universal macOS build, an x64 Linux build) when
+# @brevi/cli's version bumps, and uploads the results to that release; ci.yml
+# also runs a Linux-only `--linux dir` packaging smoke check on every PR.
 #
-# Packaging never publishes by itself (`--publish never` above). Uploading is
-# the workflow's job, with `gh release upload` against the tag that triggered
-# it: electron-builder's own GitHub publisher derives the release tag from
-# the app version (`v<version>`), which would not match the `desktop-v*` tag
-# a release is cut from.
+# The shipped version is not this file's or apps/desktop/package.json's own:
+# both packaging scripts inject it at package time from packages/cli/package.json
+# (`-c.extraMetadata.version=$(bun scripts/cli-version.ts)`), so the app and the
+# embedded orchestrator it supervises can never disagree on version.
+#
+# Packaging never publishes by itself (`--publish never` in every package
+# script). Uploading is the workflow's job, with wrangler pushing the update
+# feed to R2 and `gh release upload` attaching the artifacts to the release
+# that the version bump cut. See the `publish:` block below for why the config
+# still declares a publish target even though electron-builder never uses it
+# to upload.
 appId: dev.brevi.desktop
 productName: brevi
 directories:
@@ -42,8 +47,19 @@ mac:
   category: public.app-category.developer-tools
   icon: assets/icon.png
   target:
-    - dmg
-    - zip
+    # A single universal artifact rather than one dmg/zip per arch: `arch:
+    # [universal]` tells electron-builder to build both an x64 and an arm64
+    # app bundle and merge them with `lipo` into one binary. That merge
+    # requires the staged CLI's extraResources to be *identical* between the
+    # two intermediate builds (electron-builder diffs them and fails the
+    # merge otherwise) and to work on both architectures once merged, which
+    # is why stage-cli.ts's `--darwin-universal` flag stages both
+    # @lydell/node-pty-darwin-arm64 and @lydell/node-pty-darwin-x64 into the
+    # one tree both intermediate builds copy from.
+    - target: dmg
+      arch: [universal]
+    - target: zip
+      arch: [universal]
   # Required for a download users can actually open: Gatekeeper rejects an
   # unnotarized app, and notarization requires the hardened runtime.
   hardenedRuntime: true
@@ -55,17 +71,39 @@ linux:
   category: Development
   icon: assets/icon.png
   target:
+    # AppImage is the primary download (self-contained, auto-updates through
+    # the `publish:` feed below). deb and rpm exist for people who would
+    # rather their distro's package manager own the install; electron-builder
+    # cannot wire auto-update into either format, so an app installed from a
+    # .deb or .rpm detects that at runtime (see src/main) and skips update
+    # checks instead of offering an update it cannot apply.
     - AppImage
     - deb
-# No `arch:` list here on purpose. electron-builder defaults to the *host's*
-# architecture when none is given, and desktop-release.yml passes an
-# explicit --arm64/--x64 flag per matrix leg to make that intent visible.
-# Both matter: the staged CLI (build/cli, see scripts/stage-cli.ts) embeds
-# whichever platform/arch build of the native @lydell/node-pty the *staging
-# host* had installed, so a single run building both arches (e.g. an arm64
-# mac cross-building an x64 dmg) would silently ship the wrong native binary
-# in one of the two artifacts. Every artifact is staged and packaged on a
-# runner matching its own target arch instead (see the release workflow's
-# build matrix); there is deliberately no linux/arm64 leg there yet, so this
-# config never produces one either.
+    - rpm
+# electron-builder still defaults to the *host's* architecture when no `arch:`
+# is given at the top level, and that default is what both Linux targets use:
+# only the staging host's own build of the native @lydell/node-pty is ever
+# installed (see stage-cli.ts), so packaging still happens on a runner
+# matching the target arch (desktop-release.yml has an x64 Linux leg; there is
+# deliberately no arm64 one yet). macOS is the exception now that it packages
+# as a single `universal` artifact above: that target builds and merges both
+# arches itself in one run, which is exactly why it needs the
+# `--darwin-universal` staged tree rather than the host's own node-pty build.
 artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
+# The update feed electron-updater checks against. Declaring `publish:` makes
+# electron-builder write `app-update.yml` into the packaged app itself (this
+# URL/provider/channel, baked in so electron-updater knows where to look at
+# runtime) and, alongside the artifacts in the output directory, the
+# `latest-mac.yml`/`latest-linux.yml` channel files describing them; both are
+# produced purely from having this config, independent of whether anything
+# actually gets uploaded. Every package script still runs with
+# `--publish never`, so electron-builder's own publisher is never invoked to
+# upload them. Uploading is the release workflow's job: it pushes the
+# artifacts and channel files with wrangler and `gh release upload` into a
+# static directory in the public Cloudflare R2 bucket `brevi-downloads`
+# (served at downloads.brevi.dev), the same shape the Firecracker rootfs
+# images use in .github/workflows/rootfs.yml.
+publish:
+  provider: generic
+  url: https://downloads.brevi.dev/desktop/latest
+  channel: latest

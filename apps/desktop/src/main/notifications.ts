@@ -24,3 +24,26 @@ export function notifyRunFinished(run: Run, open: (path: string) => void): void 
   notification.on("click", () => open(`/runs/${encodeURIComponent(run.id)}`));
   notification.show();
 }
+
+/** Native notification that a downloaded update will apply itself once no runs are in flight; clicking it opens the window. */
+export function notifyUpdateReady(version: string, onClick: () => void): void {
+  if (!Notification.isSupported()) return;
+
+  const notification = new Notification({
+    title: "brevi",
+    body: `Version ${version} is ready. brevi will restart to apply it once no runs are in flight.`,
+  });
+  notification.on("click", () => onClick());
+  notification.show();
+}
+
+/** Native notification that an update install didn't take; the app rolled back to the previous version on its own. */
+export function notifyUpdateFailed(version: string): void {
+  if (!Notification.isSupported()) return;
+
+  const notification = new Notification({
+    title: "brevi",
+    body: `Could not install version ${version}. brevi is still running the previous version.`,
+  });
+  notification.show();
+}

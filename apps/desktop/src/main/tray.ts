@@ -2,8 +2,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "electron";
 import type { HealthResponse, Run } from "@brevi/shared";
-import { fleetLine, runLabel, trayTitle, workerLine, type FleetCounts } from "./summary.js";
+import { fleetLine, orchestratorVersionLine, runLabel, trayTitle, workerLine, type FleetCounts } from "./summary.js";
 import type { SupervisorState } from "./supervisor.js";
+import { updateLine, updateMenuItem, type UpdaterState } from "./update-policy.js";
 
 // The main bundle is dist/main.js; assets ship as siblings of dist (see
 // apps/desktop/package.json's build script and electron-builder.yml).
@@ -24,6 +25,8 @@ export interface TrayView {
   connected: boolean;
   launchAtLogin: boolean;
   url: string;
+  update: UpdaterState;
+  appVersion: string;
 }
 
 export interface FleetTrayOptions {
@@ -33,6 +36,7 @@ export interface FleetTrayOptions {
   onRestartOrchestrator: () => void;
   onToggleLaunchAtLogin: (enabled: boolean) => void;
   onOpenLogs: () => void;
+  onUpdate: () => void;
   onQuit: () => void;
 }
 
@@ -54,7 +58,10 @@ export class FleetTray {
   update(view: TrayView): void {
     const menu = Menu.buildFromTemplate(this.#buildTemplate(view));
     this.#tray.setContextMenu(menu);
-    this.#tray.setToolTip(`${fleetLine(view.counts)}\n${workerLine(view.supervisor)}`);
+    const tooltipLines = [fleetLine(view.counts), workerLine(view.supervisor)];
+    const update = updateLine(view.update);
+    if (update) tooltipLines.push(update);
+    this.#tray.setToolTip(tooltipLines.join("\n"));
     if (process.platform === "darwin") this.#tray.setTitle(trayTitle(view.counts));
   }
 
@@ -69,6 +76,14 @@ export class FleetTray {
     ];
     if (view.health) header.push({ label: `Sandbox: ${view.health.sandboxProvider}`, enabled: false });
     if (!view.connected) header.push({ label: "Dashboard: offline", enabled: false });
+    const update = updateLine(view.update);
+    if (update) header.push({ label: update, enabled: false });
+    const versionLine = orchestratorVersionLine(
+      view.appVersion,
+      view.supervisor.kind === "attached",
+      view.health?.version,
+    );
+    if (versionLine) header.push({ label: versionLine, enabled: false });
 
     // "Restart" implies something is already running; when it isn't (stopped
     // from outside the app, or never came up), the same click handler should
@@ -98,6 +113,7 @@ export class FleetTray {
         click: () => this.#options.onRestartOrchestrator(),
       },
       { label: "Open Logs", click: () => this.#options.onOpenLogs() },
+      { ...updateMenuItem(view.update), click: () => this.#options.onUpdate() },
       { type: "separator" },
       {
         label: "Start at Login",

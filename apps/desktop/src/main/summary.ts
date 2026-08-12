@@ -45,11 +45,24 @@ export function trayTitle(counts: FleetCounts): string {
   return counts.active > 0 ? String(counts.active) : "";
 }
 
+/**
+ * Count of runs the orchestrator is executing right now: "active" minus the
+ * runs that are merely queued or parked waiting on a human. This is what
+ * gates a restart-to-update (see shouldInstallNow in update-policy.ts): a
+ * run in this count would be killed mid-flight by a restart, unlike a
+ * queued or waiting one. Clamped at 0 defensively; the buckets should never
+ * disagree, but a caller passing inconsistent counts shouldn't produce a
+ * negative "running".
+ */
+export function runningCount(counts: FleetCounts): number {
+  return Math.max(0, counts.active - counts.queued - counts.waiting);
+}
+
 /** One-line fleet summary, e.g. "2 running, 3 queued" or "Idle". */
 export function fleetLine(counts: FleetCounts): string {
   // "active" also covers queued and waiting runs (see ACTIVE_STATUSES); the
   // line breaks it back into the buckets a person actually cares about.
-  const running = Math.max(0, counts.active - counts.queued - counts.waiting);
+  const running = runningCount(counts);
   const parts: string[] = [];
   if (running > 0) parts.push(`${running} running`);
   if (counts.queued > 0) parts.push(`${counts.queued} queued`);
@@ -79,6 +92,26 @@ export function workerLine(state: SupervisorState): string {
     default:
       return "Orchestrator: unknown";
   }
+}
+
+/**
+ * "Version: app 1.2.0, attached orchestrator 1.1.4", or null when there's
+ * nothing worth showing. The app ships (and normally supervises) its own
+ * copy of the orchestrator, so in the common case the two versions are
+ * identical and this line would just be noise. They only diverge when the
+ * app attached to an orchestrator some other install started (see
+ * SupervisorState's "attached" kind), and that mismatch is worth surfacing
+ * rather than hiding, since it means the two are on different code.
+ */
+export function orchestratorVersionLine(
+  appVersion: string,
+  attached: boolean,
+  orchestratorVersion: string | undefined,
+): string | null {
+  if (!attached) return null;
+  if (!orchestratorVersion) return null;
+  if (orchestratorVersion === appVersion) return null;
+  return `Version: app ${appVersion}, attached orchestrator ${orchestratorVersion}`;
 }
 
 function runTimestamp(run: Run): number {
