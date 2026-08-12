@@ -148,7 +148,15 @@ pre-creates a pool of tap devices owned by your user so brevi can attach VMs to 
 without root. One tap is consumed per concurrent run, so provision at least
 `sandbox.concurrency` of them; 16 covers the maximum. brevi never escalates privileges itself: if it has to create a tap device
 and gets `EPERM`, it fails with a message pointing back at this script. Both the rules and
-the devices are lost on reboot, so re-run after restarting. `--clean` removes them.
+the devices are lost on reboot, so re-run after restarting; a re-run converges on the
+pool you ask for, deleting taps beyond `--taps` and re-pointing the NAT rules when the
+egress interface has changed. Every firewall rule it installs carries
+`-m comment --comment brevi-network`, and cleanup deletes only rules carrying that tag
+(or matching, character for character, one of the three shapes an older brevi wrote), so
+your own rules about the same subnet or tap devices are left alone. `--clean` removes
+everything the script created, whatever interface the rules name, and puts
+`net.ipv4.ip_forward` back to the value the first run found (recorded in
+`/var/lib/brevi-network.state`).
 
 ### 4. KVM access
 

@@ -6,4 +6,20 @@ A worker only ever dials out, it never listens: `brevi worker --host <url> --tok
 
 This package is consumed by [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli); most users want `npx @brevi/cli worker` rather than this package directly.
 
+## Install on a Linux server
+
+The hosted installer (`scripts/install.sh`, published at `https://brevi.dev/install.sh`) turns a stock KVM-enabled Ubuntu/Debian server into a connected worker: it provisions a dedicated `brevi` system user, installs the `brevi` binary and the Firecracker images, and runs the daemon as two systemd services, `brevi-network.service` (the tap pool and NAT, so it survives a reboot) and `brevi-worker.service` (the daemon itself). It is idempotent: re-run the same command, or `sudo brevi worker update`, to upgrade in place without losing enrollment or settings.
+
+```sh
+curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- --host https://your-host:4400 --token <pairing token>
+
+# update in place
+sudo brevi worker update
+
+# remove everything the installer created
+curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- --uninstall
+```
+
+Full documentation, including `--check` preflight output and every flag, is on [brevi.dev](https://brevi.dev).
+
 Docs: [brevi.dev](https://brevi.dev) · Source: [github.com/adapter/brevi](https://github.com/adapter/brevi)

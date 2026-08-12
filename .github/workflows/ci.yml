@@ -101,6 +101,27 @@ jobs:
             exit 1
           fi
 
+      # The installer is POSIX sh on purpose, since it runs under dash (not
+      # bash) on Debian and Ubuntu via `curl | sudo sh`; setup-network.sh is
+      # bash. `-n` only parses, it doesn't execute either script.
+      - name: Check the shell scripts parse
+        run: |
+          sh -n packages/worker/scripts/install.sh
+          bash -n packages/sandbox/scripts/setup-network.sh
+
+      # The installer validates --concurrency itself, so that a value the config
+      # schema rejects fails before the machine has been provisioned rather than
+      # after. A shell script cannot import the constant, so CI holds the two
+      # numbers together.
+      - name: Check the installer's concurrency limit matches the config schema
+        run: |
+          schema=$(sed -n 's/^export const MAX_SANDBOX_CONCURRENCY = \([0-9]*\).*/\1/p' packages/shared/src/config.ts | head -n1)
+          installer=$(sed -n 's/^MAX_CONCURRENCY=\([0-9]*\).*/\1/p' packages/worker/scripts/install.sh | head -n1)
+          if [ -z "$schema" ] || [ "$schema" != "$installer" ]; then
+            echo "MAX_CONCURRENCY in install.sh ('$installer') must match MAX_SANDBOX_CONCURRENCY in packages/shared/src/config.ts ('$schema')." >&2
+            exit 1
+          fi
+
       - run: bun run lint
       - run: bun run check-types
       - run: bun run build

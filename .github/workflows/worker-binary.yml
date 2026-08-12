@@ -1,0 +1,205 @@
+# Builds brevi as a single-file standalone executable (`bun build --compile`,
+# see packages/cli/scripts/build-binary.ts) and publishes it to Cloudflare R2
+# so the Linux worker installer (packages/worker/scripts/install.sh) can
+# fetch it without a node/bun/npm install of its own. Publishing is keyed by
+# the @brevi/cli release version, in lockstep with the rootfs image this
+# workflow's sibling (rootfs.yml) publishes: every release publishes
+# worker/<cliVersion>/<arch>/, even one where the binary's own contents did
+# not meaningfully change.
+#
+# The binary embeds a native addon (@lydell/node-pty's platform-specific
+# pty.node, statically required by the build-binary.ts plugin), so it must
+# be built natively per architecture; cross-compiling is not an option here.
+#
+# Triggers:
+#   - push to main touching packages/cli/package.json: the "Release packages"
+#     PR merge (release.yml) lands as a human-initiated push, which triggers
+#     workflows; tags the changesets action pushes with GITHUB_TOKEN cannot
+#     trigger workflows, so the version-bump commit on main is the reliable
+#     release signal. This keeps the published binary in lockstep with the
+#     @brevi/cli release.
+#   - push of an "@brevi/cli@*" tag, which covers a manually pushed tag.
+#   - workflow_dispatch, with a `force` input to rebuild and overwrite a
+#     version that is already published.
+#
+# Required repository secrets (same names ci.yml already documents):
+#   CLOUDFLARE_API_TOKEN:  needs R2 write access to the brevi-images bucket,
+#                          in addition to whatever else it's already scoped for
+#   CLOUDFLARE_ACCOUNT_ID: the Cloudflare account the bucket lives in
+#
+# One-time manual setup (not done by this workflow): the brevi-images R2
+# bucket must exist, and images.brevi.dev must be attached to it as a custom
+# domain, in the Cloudflare dashboard.
+name: Worker binary
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/cli/package.json
+    tags:
+      - "@brevi/cli@*"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild and overwrite an already-published version
+        type: boolean
+        default: false
+
+# Default to no permissions; the job declares exactly what it needs.
+permissions: {}
+
+# One publish at a time per ref: two overlapping runs racing to upload the
+# same version is worse than queuing.
+concurrency:
+  group: worker-binary-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Build and publish (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read # checkout
+    strategy:
+      fail-fast: false
+      # GitHub-hosted on purpose, and native per architecture: the binary
+      # embeds @lydell/node-pty's native addon for whichever platform/arch
+      # actually built it, so cross-compiling from one runner would bake in
+      # the wrong addon.
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: Read cli version
+        id: version
+        run: |
+          cli_version="$(jq -r .version packages/cli/package.json)"
+          echo "cli version: $cli_version"
+          echo "cli=$cli_version" >> "$GITHUB_OUTPUT"
+
+      # A manifest.json response means this cli version/arch already has a
+      # complete published binary (manifest is uploaded last, see below), so
+      # there is nothing to do. curl failing, including because
+      # images.brevi.dev isn't set up yet, means proceed.
+      - name: Check whether this version is already published
+        id: check
+        env:
+          FORCE: ${{ github.event.inputs.force }}
+          CLI_VERSION: ${{ steps.version.outputs.cli }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            echo "force=true: rebuilding $CLI_VERSION/$ARCH regardless of what's already published"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif curl -sfI "https://images.brevi.dev/worker/$CLI_VERSION/$ARCH/manifest.json" >/dev/null; then
+            echo "$CLI_VERSION/$ARCH is already published; skipping (re-run via workflow_dispatch with force to overwrite)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$CLI_VERSION/$ARCH is not published yet; proceeding"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.skip != 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        if: steps.check.outputs.skip != 'true'
+        run: bun run build
+
+      - name: Build standalone binary
+        if: steps.check.outputs.skip != 'true'
+        run: bun run --filter=@brevi/cli build:binary
+
+      # Catches the standalone build silently losing its embedded version,
+      # which would break the rootfs cache key clients derive from it.
+      - name: Sanity check the binary reports the right version
+        if: steps.check.outputs.skip != 'true'
+        env:
+          CLI_VERSION: ${{ steps.version.outputs.cli }}
+        run: |
+          actual="$(packages/cli/dist/brevi --version)"
+          if [ "$actual" != "$CLI_VERSION" ]; then
+            echo "packages/cli/dist/brevi --version printed '$actual', expected '$CLI_VERSION'." >&2
+            exit 1
+          fi
+          echo "binary reports version $actual"
+
+      - name: Compress and checksum
+        if: steps.check.outputs.skip != 'true'
+        id: artifact
+        env:
+          CLI_VERSION: ${{ steps.version.outputs.cli }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          binary="packages/cli/dist/brevi"
+          renamed="$RUNNER_TEMP/brevi-$ARCH"
+          cp "$binary" "$renamed"
+
+          binary_sha256="$(sha256sum "$renamed" | cut -d' ' -f1)"
+          binary_size="$(stat -c %s "$renamed")"
+
+          gzip -9 -k "$renamed"
+          gz="$renamed.gz"
+          gz_sha256="$(sha256sum "$gz" | cut -d' ' -f1)"
+          gz_size="$(stat -c %s "$gz")"
+
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          jq -n \
+            --arg cliVersion "$CLI_VERSION" \
+            --arg arch "$ARCH" \
+            --arg builtAt "$built_at" \
+            --arg binaryName "brevi-$ARCH" \
+            --arg binarySha256 "$binary_sha256" \
+            --argjson binarySize "$binary_size" \
+            --arg gzName "brevi-$ARCH.gz" \
+            --arg gzSha256 "$gz_sha256" \
+            --argjson gzSize "$gz_size" \
+            '{
+              cliVersion: $cliVersion,
+              arch: $arch,
+              builtAt: $builtAt,
+              binary: { name: $binaryName, sha256: $binarySha256, sizeBytes: $binarySize },
+              compressed: { name: $gzName, sha256: $gzSha256, sizeBytes: $gzSize }
+            }' > "$RUNNER_TEMP/manifest.json"
+
+          echo "gz=$gz" >> "$GITHUB_OUTPUT"
+          echo "manifest=$RUNNER_TEMP/manifest.json" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to R2
+        if: steps.check.outputs.skip != 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLI_VERSION: ${{ steps.version.outputs.cli }}
+          ARCH: ${{ matrix.arch }}
+          GZ: ${{ steps.artifact.outputs.gz }}
+          MANIFEST: ${{ steps.artifact.outputs.manifest }}
+        run: |
+          # Pinned to the exact wrangler version apps/api already depends on
+          # (apps/api/package.json / bun.lock): this handles the Cloudflare
+          # token, so it must not float to whatever npx would otherwise
+          # resolve as latest. Bump it deliberately, in step with apps/api.
+          wrangler="npx --yes wrangler@4.118.0"
+
+          # Binary first, manifest last: the manifest's presence at this path
+          # is what clients treat as "this cli version/arch is published"
+          # (the skip check above probes exactly this file), so a
+          # half-uploaded version must never be resolvable.
+          $wrangler r2 object put "brevi-images/worker/$CLI_VERSION/$ARCH/brevi-$ARCH.gz" \
+            --file "$GZ" --content-type application/gzip --remote
+          $wrangler r2 object put "brevi-images/worker/$CLI_VERSION/$ARCH/manifest.json" \
+            --file "$MANIFEST" --content-type application/json --remote

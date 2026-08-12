@@ -77,6 +77,16 @@ Prefer a GUI to a terminal? Mission Control is the same brevi as a downloadable,
 
 </Steps>
 
+## Adding a worker
+
+Everything above runs a single machine that both schedules and executes. To hand execution to another Linux box instead, so runs happen there while the dashboard stays here, install brevi as a worker on it:
+
+```sh
+curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- --host https://your-host:4400 --token <pairing token>
+```
+
+The pairing token comes from "Add a worker" under Configuration > Workers on this machine. See [Workers](/guides/workers/) for what the installer sets up, and how to update or remove a worker later.
+
 ## What just happened
 
 ```

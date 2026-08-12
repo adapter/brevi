@@ -64,13 +64,19 @@ Init then checks for the external CLIs brevi shells out to: `claude`, `codex`, `
 
 ## `brevi setup`
 
+```
+brevi setup [-y, --yes] [--skip-network] [--set-provider]
+```
+
 Provisions the current Linux host for the [Firecracker sandbox](/guides/sandboxes/). Interactive and idempotent: each step checks itself first and is skipped with a note when already satisfied, so re-running after a reboot or a partial first run is safe.
 
 | Flag | Meaning |
 | --- | --- |
 | `-y, --yes` | Answer every prompt with its default-yes and never wait for input, for unattended provisioning; no interactive terminal is required in this mode |
+| `--skip-network` | Skip the networking step. For a caller that provisions tap devices and NAT rules itself, for example the [Linux worker installer](/guides/workers/)'s systemd unit, which re-runs `setup-network.sh` as root on every boot instead of relying on this one-shot step. |
+| `--set-provider` | Set `sandbox.provider` to `firecracker` once setup succeeds, instead of asking, and write the firecracker settings this run provisioned along with it (creating the config when the machine has none). |
 
-`--yes` picks the path that needs no human and no extra host dependency: it accepts apt package installs, but declines a from-source rootfs build (and never installs docker) in favor of the prebuilt rootfs download, logging what it skipped and how to do it manually.
+`--yes` picks the path that needs no human and no extra host dependency: it accepts apt package installs, but declines a from-source rootfs build (and never installs docker) in favor of the prebuilt rootfs download, logging what it skipped and how to do it manually. The [Linux worker installer](/guides/workers/) runs `brevi setup --yes --skip-network --set-provider` to provision Firecracker unattended as its service user.
 
 The steps, in order:
 
@@ -81,7 +87,7 @@ The steps, in order:
 5. **Rootfs + ssh key**: downloads the prebuilt, checksum-verified rootfs image, no Docker needed, and caches it under `~/.brevi/cache/rootfs/`; building from source with docker (takes several minutes; asks first) remains the fallback. Generates the ssh keypair if missing.
 6. **Networking**: creates the tap device pool and NAT rules (asks first; not persistent across reboots).
 
-brevi never escalates privileges silently: every `sudo` command line is printed before it runs, and every step that uses one asks first. Setup ends with the same complete preflight check `brevi start` uses, including networking (tap devices and IPv4 forwarding) and the rootfs manifest version; when everything passes, setup offers to switch `sandbox.provider` from `process` to `firecracker` and reports the sandbox ready. Remaining problems are listed instead, with a pointer to re-run once fixed, and setup exits non-zero.
+brevi never escalates privileges silently: every `sudo` command line is printed before it runs, and every step that uses one asks first. Setup ends with the same complete preflight check `brevi start` uses, including networking (tap devices and IPv4 forwarding) and the rootfs manifest version; when everything passes, setup offers to switch `sandbox.provider` from `process` to `firecracker` (asking, unless `--set-provider` already answered) and reports the sandbox ready. Remaining problems are listed instead, with a pointer to re-run once fixed, and setup exits non-zero.
 
 Requires Linux and, without `--yes`, an interactive terminal; on other platforms there is nothing to set up, since the `auto` provider selects the [process provider](/guides/sandboxes/#the-process-provider) there (an explicit `firecracker` provider fails at startup instead). Works without a config too (`brevi init` picks the provisioned host up afterwards).
 
@@ -174,6 +180,27 @@ Every registration reports the worker's capabilities: OS, architecture, the reso
 Draining the worker from the Workers page reaches it over that same connection and takes effect at once: it refuses new dispatches with "worker is draining" while the runs already in flight finish and report normally, and the state survives reconnects, so a machine being decommissioned empties itself. Re-enabling it puts it back in rotation. Revoking it kills its credential and disconnects it immediately: the worker deletes its stored credential, shuts down what it was still running, and exits non-zero rather than retrying, since reconnecting with a dead credential would only produce a rejection loop. Enrolling that machine again needs a fresh pairing token.
 
 Runs in the foreground until `Ctrl+C` (or `SIGTERM`). The first signal stops the worker from accepting new dispatches, aborts whatever runs are still in flight, and waits for their final reporting to reach the host before the process exits; a second signal exits immediately instead of waiting. Reconnects on its own with exponential backoff (jittered, capped at 30 seconds) whenever the connection drops, resuming in-flight run reporting once it registers again; a rejection that retrying cannot fix, a dead credential or a protocol mismatch, is fatal and exits non-zero instead.
+
+### `brevi worker update`
+
+```
+brevi worker update [--check] [--version <v>]
+```
+
+Upgrades an installed **standalone worker binary**, the single-file executable the [worker installer](/guides/workers/) places at `/usr/local/bin/brevi`, and its prebuilt rootfs image in place, without touching `~/.brevi/config.json` or `~/.brevi/worker.json`, so enrollment survives. Run against an npm install (global, `npx`, etc.) it reports that there's no standalone binary to replace and points at [`brevi update`](#brevi-update) instead.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--check` | off | Only report whether a newer version exists; installs nothing |
+| `--version <v>` | latest on npm | Install this exact `@brevi/cli` version instead of the latest |
+
+Run as root on a machine with the unit installed (`sudo brevi worker update`), it acts on the `brevi` service user's own `~/.brevi`, resolved from `getent passwd`, rather than root's: the config it reads, the rootfs cache it downloads into, and the ownership of what it wrote are all the daemon's, so a multi-gigabyte image never lands in a directory the worker never looks at.
+
+A machine that pins its own image with `sandbox.firecracker.rootfs` is refused rather than overridden: that setting means brevi never consults its managed cache, so an image the new release cannot use is something only you can replace, and downloading one anyway would report success while leaving the worker unable to start. The update stops before downloading anything, says what is wrong with the pinned image, and leaves the service running.
+
+The binary is replaced first, and the rest of the update then runs as the release that was just installed: replacing an executable leaves the running process on the old one, and which rootfs image a release wants (down to the image contract it will accept) is a question only that release can answer, so once the new binary is on disk it is re-executed to finish the job. A manifest naming a different release or architecture than the one asked for is refused before anything is downloaded.
+
+Downloads the target version's binary and rootfs image from the same source [`brevi setup`](#brevi-setup) uses, then restarts `brevi-worker.service` when that systemd unit is installed (as root directly, or by printing the `systemctl restart` command to run yourself otherwise). Exits `0` when already up to date or after a successful update, `1` when `--check` found a newer version, when the download failed, or when the installed unit's restart failed (the binary and/or image may already be in place, but the running daemon is still on the old one until it restarts).
 
 ## `brevi mac`
 

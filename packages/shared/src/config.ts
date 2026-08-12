@@ -11,6 +11,15 @@ import { z } from "zod";
 export const DEFAULT_PORT = 4400;
 export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_FLEET_PORT = 4410;
+/**
+ * Largest sandbox.concurrency a stored config accepts, and the ceiling the Linux
+ * worker installer validates its own `--concurrency` against (CI keeps the two
+ * numbers in step, since a shell script cannot import this one). Distinct from
+ * WORKER_MAX_CONCURRENCY (worker.ts, 64), which is the wire protocol's
+ * registration ceiling; this is what a single machine's sandbox provider is
+ * expected to run at once.
+ */
+export const MAX_SANDBOX_CONCURRENCY = 16;
 
 export const repoConfigSchema = z.object({
   /** Git remote in "owner/name" form. */
@@ -233,7 +242,7 @@ export const configSchema = z.object({
        * the worker that executes runs: each worker reads its own copy from
        * its own `~/.brevi/config.json` and caps its own concurrency with it.
        */
-      concurrency: z.number().int().min(1).max(16).default(1),
+      concurrency: z.number().int().min(1).max(MAX_SANDBOX_CONCURRENCY).default(1),
       /**
        * Hard wall-clock limit applied per agent execution, not per run: the
        * implementation pass, each Codex reviewer, the synthesis pass, and the

@@ -3,8 +3,12 @@ import { createWriteStream } from "node:fs";
 import { rename, rm } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 
-/** Exact hosts allowed for setup artifact downloads. */
-const ALLOWED_HOSTS = new Set(["github.com", "s3.amazonaws.com"]);
+/**
+ * Exact hosts allowed for setup artifact downloads. images.brevi.dev serves
+ * both the prebuilt rootfs images and the worker binaries published per
+ * @brevi/cli release.
+ */
+const ALLOWED_HOSTS = new Set(["github.com", "s3.amazonaws.com", "images.brevi.dev"]);
 
 /**
  * Hosts ending in these suffixes are allowed too. GitHub serves release

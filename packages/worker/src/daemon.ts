@@ -42,7 +42,11 @@ const VERSION = ((): string => {
     const pkg = require("../package.json") as { version?: string };
     return pkg.version ?? "0.0.0";
   } catch {
-    return "0.0.0";
+    // A compiled worker binary (bun build --compile, see packages/cli's
+    // build-binary.ts) has no package.json to require; it reports the
+    // @brevi/cli release it was built from instead, baked in at compile
+    // time via --define.
+    return process.env.BREVI_EMBEDDED_CLI_VERSION || "0.0.0";
   }
 })();
 

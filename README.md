@@ -30,6 +30,14 @@ Every credential is verified live before saving and stored in `~/.brevi/config.j
 
 Other commands: `brevi start` (headless, no browser), `brevi stop` (shut down a running instance), `brevi status`, `brevi doctor` (check the whole setup: config, server, sandbox, connectors, CLIs), `brevi update` (update an installed CLI to the latest release on npm, restarting a running instance so the new version takes effect), and `brevi init` (rerun the sandbox provider pick any time).
 
+To add a Linux machine to the fleet so runs execute there instead of locally, install brevi as a worker with the one-line installer:
+
+```sh
+curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- --host https://your-host:4400 --token <pairing token>
+```
+
+See the [Workers guide](https://brevi.dev/guides/workers/) for where the pairing token comes from and what the installer sets up.
+
 ## Desktop app
 
 Prefer a GUI to a terminal? Mission Control is the same brevi as a downloadable, self-updating desktop app for macOS and Linux: it starts and supervises the same orchestrator and shows the same dashboard in its own window, sharing `~/.brevi` with the CLI so the two are interchangeable. Get it from [brevi.dev/download](https://brevi.dev/download/), or grab a platform build directly:

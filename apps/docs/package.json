@@ -4,9 +4,9 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "bun run scripts/build-changelog.ts && astro dev",
-    "start": "bun run scripts/build-changelog.ts && astro dev",
-    "build": "bun run scripts/build-changelog.ts && astro build",
+    "dev": "bun run scripts/build-changelog.ts && bun run scripts/copy-payload.ts && astro dev",
+    "start": "bun run scripts/build-changelog.ts && bun run scripts/copy-payload.ts && astro dev",
+    "build": "bun run scripts/build-changelog.ts && bun run scripts/copy-payload.ts && astro build",
     "lint": "oxlint --max-warnings 0",
     "preview": "astro preview",
     "astro": "astro",
