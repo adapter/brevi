@@ -3,6 +3,11 @@ dist/
 # generated types
 .astro/
 
+# Generated at docs build time by scripts/copy-payload.ts from
+# packages/worker/scripts/install.sh and packages/sandbox/scripts/setup-network.sh
+public/install.sh
+public/setup-network.sh
+
 # dependencies
 node_modules/
 

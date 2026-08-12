@@ -51,7 +51,7 @@ It walks through everything below interactively (see [the CLI reference](/refere
    sudo packages/sandbox/scripts/setup-network.sh --taps 16 --user "$(whoami)"
    ```
 
-   Each concurrent run needs its own tap device, so provision at least as many taps as your `sandbox.concurrency` setting; 16 covers the maximum. brevi never escalates privileges itself: if it has to create a tap device and gets `EPERM`, it fails with a message pointing back at this script. The rules and devices are lost on reboot, so re-run it after restarting. `--clean` removes them.
+   Each concurrent run needs its own tap device, so provision at least as many taps as your `sandbox.concurrency` setting; 16 covers the maximum. brevi never escalates privileges itself: if it has to create a tap device and gets `EPERM`, it fails with a message pointing back at this script. The rules and devices are lost on reboot, so re-run it after restarting; a re-run converges on the pool you ask for, deleting taps beyond `--taps` and re-pointing the NAT rules if the egress interface changed. Every firewall rule it installs is tagged `-m comment --comment brevi-network`, and cleanup only ever deletes rules carrying that tag, so a rule of your own about the same subnet or tap devices is never swept up with them. `--clean` removes everything the script created, whatever interface the rules name, and restores the `net.ipv4.ip_forward` value the first run found.
 
 4. **KVM access**: `/dev/kvm` must be readable and writable by the user running brevi:
 
@@ -97,5 +97,7 @@ Every run executes on a `brevi worker` daemon, so the machine running the orches
 A worker's sandbox settings are its own: `sandbox.provider`, the Firecracker image paths and the VM size come from that machine's `~/.brevi/config.json`, never from the host, so a Linux worker can boot microVMs for a host running on a Mac. A machine that only ever runs `brevi worker` needs no config at all; without one it uses the process provider at concurrency 1.
 
 Rename, drain (finish in-flight runs, accept nothing new), re-enable, and revoke are all on the Workers page. Revoking kills the worker's credential immediately: it is disconnected, deletes its stored credential, and needs a fresh pairing token to come back.
+
+On a Linux server, the [one-line installer](/guides/workers/) does step 3 and everything around it for you: it provisions Firecracker, installs the daemon as a systemd service, and hands it the same pairing token to enroll with. On an Apple silicon Mac, [`brevi mac install`](/guides/macos-worker/) does the equivalent inside a managed Linux VM.
 
 See the [CLI reference](/reference/cli/#brevi-worker) for `brevi worker`'s flags and the [API reference](/reference/api/#workers) for the underlying endpoints and worker channel.

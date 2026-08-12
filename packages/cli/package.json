@@ -19,6 +19,7 @@
   ],
   "scripts": {
     "build": "rm -rf dist && bun build src/index.ts --outdir dist --target=node --format=esm --external open --external @lydell/node-pty && cp -R ../../apps/app/dist dist/app && cp -R ../sandbox/scripts dist/scripts",
+    "build:binary": "bun run scripts/build-binary.ts",
     "dev": "tsc --watch",
     "lint": "oxlint --max-warnings 0",
     "check-types": "tsc --noEmit"

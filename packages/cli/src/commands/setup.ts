@@ -20,6 +20,7 @@ import {
 } from "@brevi/sandbox";
 import {
   BREVI_HOME,
+  CONFIG_DEFAULTS,
   CONFIG_PATH,
   firecrackerConfigSchema,
   DEFAULT_ROOTFS,
@@ -78,9 +79,21 @@ export function registerSetupCommand(program: Command): void {
       "-y, --yes",
       "answer every prompt with its default-yes and never wait for input (for unattended provisioning)",
     )
-    .action(async (options: { yes?: boolean }) => {
+    .option(
+      "--skip-network",
+      "skip microVM network setup entirely; use when it is managed elsewhere (e.g. the Linux worker installer's brevi-network.service unit)",
+    )
+    .option(
+      "--set-provider",
+      'set sandbox.provider to "firecracker" once setup succeeds, without asking',
+    )
+    .action(async (options: { yes?: boolean; skipNetwork?: boolean; setProvider?: boolean }) => {
       try {
-        const ready = await runSetup({ assumeYes: options.yes === true });
+        const ready = await runSetup({
+          assumeYes: options.yes === true,
+          skipNetwork: options.skipNetwork === true,
+          setProvider: options.setProvider === true,
+        });
         if (!ready) process.exitCode = 1;
       } catch (err) {
         log.error(errorMessage(err));
@@ -101,12 +114,30 @@ export interface RunSetupOptions {
    * choice it made. No interactive terminal is required in this mode.
    */
   assumeYes?: boolean;
+  /**
+   * Skips ensureNetwork entirely rather than offering to set it up. microVM
+   * networking is managed elsewhere in that case: the Linux worker installer's
+   * own brevi-network.service unit, which runs as root and re-runs
+   * setup-network.sh on every boot, while setup itself runs as the unprivileged
+   * service user.
+   */
+  skipNetwork?: boolean;
+  /**
+   * Writes sandbox.provider = "firecracker" once setup has succeeded, instead
+   * of asking. The Linux worker installer passes it: the machine it just
+   * provisioned exists to boot microVMs, so leaving its config on another
+   * provider would enroll a worker that executes every dispatched run
+   * unsandboxed.
+   */
+  setProvider?: boolean;
 }
 
 /** Runs the setup flow. Resolves to true when the host passes preflight at the end. */
 export async function runSetup({
   standalone = true,
   assumeYes = false,
+  skipNetwork = false,
+  setProvider = false,
 }: RunSetupOptions = {}): Promise<boolean> {
   if (!assumeYes && (!process.stdin.isTTY || !process.stdout.isTTY)) {
     console.error(pc.red("✖ brevi setup is interactive and this terminal is not."));
@@ -141,9 +172,13 @@ export async function runSetup({
   ({ firecracker, config } = await ensureFirecrackerBinary(firecracker, config, arch));
   await ensureKernel(firecracker, arch);
   await ensureRootfsImage(firecracker, assumeYes);
-  await ensureNetwork(config, missingTools, assumeYes);
+  if (skipNetwork) {
+    log.info("Skipping microVM network setup; it is managed elsewhere (the installer's brevi-network.service unit).");
+  } else {
+    await ensureNetwork(config, missingTools, assumeYes);
+  }
 
-  return verify(firecracker, config, kvmReloginGroup, standalone, assumeYes);
+  return verify(firecracker, config, kvmReloginGroup, standalone, assumeYes, setProvider);
 }
 
 async function loadExisting(): Promise<BreviConfig | undefined> {
@@ -625,6 +660,7 @@ async function verify(
   kvmReloginGroup: string | undefined,
   standalone: boolean,
   assumeYes: boolean,
+  setProvider: boolean,
 ): Promise<boolean> {
   const taps = Math.max(16, config?.sandbox.concurrency ?? 1);
   const problems = [
@@ -633,7 +669,24 @@ async function verify(
   ];
 
   if (problems.length === 0) {
-    if (config && config.sandbox.provider === "process") {
+    if (setProvider) {
+      // --set-provider decides outright, and from schema defaults when there is no
+      // config at all: the Linux worker installer runs this as a freshly created
+      // service user whose home is empty, and the default provider ("auto") silently
+      // falls back to the process provider whenever a firecracker preflight fails,
+      // which on that machine would mean running dispatched runs unsandboxed. The
+      // provisioned firecracker settings ride along, since the pinned binary this run
+      // installed under ~/.brevi/bin exists only in memory until something saves it.
+      const base = config ?? CONFIG_DEFAULTS;
+      if (
+        config === undefined ||
+        base.sandbox.provider !== "firecracker" ||
+        base.sandbox.firecracker.binary !== firecracker.binary
+      ) {
+        await saveConfig({ ...base, sandbox: { ...base.sandbox, provider: "firecracker", firecracker } });
+        log.info(`Set sandbox.provider to "firecracker" in ${CONFIG_PATH} (firecracker binary: ${firecracker.binary}).`);
+      }
+    } else if (config && config.sandbox.provider === "process") {
       const switchProvider = await ask(
         { message: `sandbox.provider is "process"; switch it to "firecracker"?`, initialValue: true },
         assumeYes,
