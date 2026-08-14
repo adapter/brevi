@@ -9,6 +9,8 @@ export interface ProvisionedCredentials {
   profilePath: string;
   /** Stable Codex state directory (auth.json when a ChatGPT login is connected, rollout/session history). */
   codexHome: string;
+  /** Stable Grok state directory (auth.json when a Grok CLI login is connected). */
+  grokHome: string;
 }
 
 /**
@@ -27,6 +29,8 @@ export async function provisionCredentials(options: {
   env: Record<string, string>;
   /** Raw Codex ChatGPT auth.json contents, when that credential is connected. */
   codexAuthJson?: string;
+  /** Raw Grok CLI auth.json contents, when that credential is connected. */
+  grokAuthJson?: string;
   /**
    * Connected GitHub token, installed as a git askpass helper so attached
    * shells can push. Passed by the attach flow only, never at run time: the
@@ -34,7 +38,7 @@ export async function provisionCredentials(options: {
    */
   githubToken?: string;
 }): Promise<ProvisionedCredentials> {
-  const { sandbox, runId, env, codexAuthJson, githubToken } = options;
+  const { sandbox, runId, env, codexAuthJson, grokAuthJson, githubToken } = options;
   // The attach flow's runId originates in a client request; re-checked here
   // (the server and store boundaries validate it too) so a hostile id can
   // never be joined into a host-side path that escapes WORKSPACES_DIR.
@@ -50,6 +54,7 @@ export async function provisionCredentials(options: {
   // shell profile.
   const profilePath = ssh ? "/etc/profile.d/brevi-credentials.sh" : join(WORKSPACES_DIR, runId, "brevi-credentials.sh");
   const codexHome = ssh ? "/root/.codex" : join(WORKSPACES_DIR, runId, "codex-home");
+  const grokHome = ssh ? "/root/.grok" : join(WORKSPACES_DIR, runId, "grok-home");
   const askpassPath = ssh ? "/root/brevi-git-askpass.sh" : join(WORKSPACES_DIR, runId, "brevi-git-askpass.sh");
 
   // The Codex home always exists and is always exported, even without a
@@ -71,6 +76,19 @@ export async function provisionCredentials(options: {
     await sandbox.exec("chmod", ["700", codexHome]);
   }
 
+  // Same isolation as CODEX_HOME: an unset GROK_HOME on the process provider
+  // would fall back to the host's real ~/.grok.
+  const grokAuthPath = `${grokHome}/auth.json`;
+  if (grokAuthJson) {
+    await sandbox.writeFile(grokAuthPath, grokAuthJson);
+    await sandbox.exec("chmod", ["700", grokHome]);
+    await sandbox.exec("chmod", ["600", grokAuthPath]);
+  } else {
+    await sandbox.exec("rm", ["-f", grokAuthPath]);
+    await sandbox.exec("mkdir", ["-p", grokHome]);
+    await sandbox.exec("chmod", ["700", grokHome]);
+  }
+
   if (githubToken) {
     await sandbox.writeFile(askpassPath, buildGitAskpass(githubToken));
     await sandbox.exec("chmod", ["700", askpassPath]);
@@ -82,9 +100,15 @@ export async function provisionCredentials(options: {
 
   await sandbox.writeFile(
     profilePath,
-    buildCredentialProfile({ env, profilePath, codexHome, gitAskpassPath: githubToken ? askpassPath : undefined }),
+    buildCredentialProfile({
+      env,
+      profilePath,
+      codexHome,
+      grokHome,
+      gitAskpassPath: githubToken ? askpassPath : undefined,
+    }),
   );
   await sandbox.exec("chmod", ["600", profilePath]);
 
-  return { profilePath, codexHome };
+  return { profilePath, codexHome, grokHome };
 }

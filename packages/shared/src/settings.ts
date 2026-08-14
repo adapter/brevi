@@ -20,7 +20,7 @@ export const CONFIG_DEFAULTS: BreviConfig = configSchema.parse({});
 /**
  * Credential fields the settings endpoint refuses to change. They are owned by
  * the Connect flows (`PUT /api/settings/credentials`), which verify each key
- * with its provider; `apiKey`, `refreshToken`, and the four `agent.*` keys are
+ * with its provider; `apiKey`, `refreshToken`, and the six `agent.*` keys are
  * also masked in every read, so accepting them from a form would let the mask
  * round-trip over a live secret. `linear.tokenExpiresAt` is not itself secret,
  * it is refused because the OAuth flow maintains it.
@@ -39,6 +39,8 @@ export const SETTINGS_SECRET_PATHS = [
   "agent.claudeCodeOauthToken",
   "agent.codexApiKey",
   "agent.codexAuthJson",
+  "agent.xaiApiKey",
+  "agent.grokAuthJson",
 ];
 
 /** What redactConfig substitutes for a set secret. Never accepted as a value. */

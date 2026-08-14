@@ -185,6 +185,13 @@ export const configSchema = z.object({
        * accounts without an API key. Mounted into the sandbox via CODEX_HOME.
        */
       codexAuthJson: z.string().default(""),
+      /** Passed to the sandboxed agent as XAI_API_KEY (for Grok agents). */
+      xaiApiKey: z.string().default(""),
+      /**
+       * Grok CLI login (the contents of ~/.grok/auth.json), for accounts
+       * without an API key. Mounted into the sandbox via GROK_HOME.
+       */
+      grokAuthJson: z.string().default(""),
       /**
        * Adversarial Codex review of implementation runs: after the coding
        * agent finishes, parallel Codex reviewers judge the diff against the
@@ -372,6 +379,8 @@ export function redactConfig(config: BreviConfig): BreviConfig {
       claudeCodeOauthToken: mask(config.agent.claudeCodeOauthToken),
       codexApiKey: mask(config.agent.codexApiKey),
       codexAuthJson: mask(config.agent.codexAuthJson),
+      xaiApiKey: mask(config.agent.xaiApiKey),
+      grokAuthJson: mask(config.agent.grokAuthJson),
     },
     connect: { ...config.connect, linearClientSecret: mask(config.connect.linearClientSecret) },
     // `fleet` holds no secret to mask: enrollment credentials are minted, not

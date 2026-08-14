@@ -1,6 +1,6 @@
 ---
 title: Connections
-description: How brevi's one-click Connect buttons acquire GitHub, Claude, Codex and Linear credentials, how they are validated, and where they are stored.
+description: How brevi's one-click Connect buttons acquire GitHub, Claude, Codex, Grok and Linear credentials, how they are validated, and where they are stored.
 ---
 
 Every credential brevi uses is set from the dashboard's **Configuration** page, opened with the gear button in the nav bar (or directly at `/config`). A small amber dot on the gear means a provider is disconnected. Each provider has one **Connect** button that walks a strategy chain: look for a credential that already exists on this machine, then an OAuth flow, and then, only if both fail, offer manual entry with a reason.
@@ -20,6 +20,8 @@ All of them go into `~/.brevi/config.json`, under the field for their provider:
 | Claude (Claude Code login) | `agent.claudeCodeOauthToken` |
 | Codex (API key) | `agent.codexApiKey` |
 | Codex (ChatGPT login) | `agent.codexAuthJson` |
+| Grok (xAI API key) | `agent.xaiApiKey` |
+| Grok (Grok CLI login) | `agent.grokAuthJson` |
 
 A Linear connection made through OAuth also persists the long-lived refresh token in `linear.refreshToken`, which brevi uses to rotate the access token automatically; it is empty for plain `lin_api_` personal keys. It is a live credential like the others: redacted in every dashboard and API payload, and stored as plaintext in the same file, so the caution below covers it too.
 
@@ -66,6 +68,22 @@ A ChatGPT login can't be probed the same way, so it is validated offline: the to
 At run time a ChatGPT login travels as a *file*, not an environment variable. brevi writes it to a stable `CODEX_HOME` outside the workspace (`/root/.codex` in a Firecracker guest, or a `codex-home` directory beside the workspace in the run's directory for the process provider), which is what the Codex CLI reads. It never sits in the checkout, so it can never reach a branch. It is reinstalled with the currently connected credentials every time you attach to a retained sandbox, and deleted along with the sandbox's disk once the retention window ends.
 
 Connecting Codex only stores the credential; which CLI actually runs is `agent.command`, which defaults to `claude`. See the [configuration reference](/reference/configuration/).
+
+## Grok
+
+An alternative agent key from xAI, including Grok CLI logins that have no API key at all. brevi looks in the same places the Grok CLI does, including a login shell so a GUI-launched orchestrator still sees variables from `~/.zshrc`:
+
+1. `XAI_API_KEY` or `GROK_CODE_XAI_API_KEY`.
+2. `GROK_AUTH`, a JSON login blob in the environment (the same shape as `auth.json`).
+3. `GROK_AUTH_PATH`, then `$GROK_HOME/auth.json`, then `~/.grok/auth.json`, which is a **Grok CLI login**. The whole file is captured, not just a token, and stored in `agent.grokAuthJson`.
+
+API keys are verified with a one-token completion on `grok-4-1-fast-non-reasoning`; if that model isn't available on the account, brevi falls back to an authentication-only check against `/v1/models`.
+
+A Grok CLI login can't be probed the same way, so it is validated offline: the file must parse and contain a session with an access token, and if that token has expired there must be a refresh token. brevi reports who you are from the session: `Connected as you@example.com`.
+
+At run time a Grok CLI login travels as a *file*, not an environment variable. brevi writes it to a stable `GROK_HOME` outside the workspace (`/root/.grok` in a Firecracker guest, or a `grok-home` directory beside the workspace in the run's directory for the process provider), which is what the Grok CLI reads. It never sits in the checkout.
+
+API keys are saved to `agent.xaiApiKey` and exported into the sandbox as `XAI_API_KEY`. Entering a key manually replaces any host-discovered login. Connecting Grok only stores the credential; which CLI actually runs is `agent.command`, which defaults to `claude`.
 
 ## Linear
 
@@ -132,7 +150,7 @@ A Linear OAuth app used this way must register redirect URIs of the form `http:/
 
 Manual entry is always available as a fallback, on every provider. It goes through `PUT /api/settings/credentials`, which validates each field it is given: invalid keys are rejected per field, and valid keys in the same request are still applied and persisted.
 
-Sending an empty string for a field disconnects that provider without validation. Disconnecting Claude or Codex also clears the matching host-discovered login.
+Sending an empty string for a field disconnects that provider without validation. Disconnecting Claude or Codex also clears the matching host-discovered login. Disconnecting Grok clears both `agent.xaiApiKey` and `agent.grokAuthJson`.
 
 ## How credentials reach a run
 
@@ -144,6 +162,8 @@ When a run starts, brevi builds the sandbox environment purely from the config:
 | `agent.claudeCodeOauthToken` | `CLAUDE_CODE_OAUTH_TOKEN` |
 | `agent.codexApiKey` | `OPENAI_API_KEY` |
 | `agent.codexAuthJson` | `$CODEX_HOME/auth.json` |
+| `agent.xaiApiKey` | `XAI_API_KEY` |
+| `agent.grokAuthJson` | `$GROK_HOME/auth.json` |
 
 If none of them is set, the run fails immediately with `no agent credentials configured`.
 

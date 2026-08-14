@@ -22,7 +22,9 @@ const MANAGED_ENV_VARS = [
   "ANTHROPIC_API_KEY",
   "CLAUDE_CODE_OAUTH_TOKEN",
   "OPENAI_API_KEY",
+  "XAI_API_KEY",
   "CODEX_HOME",
+  "GROK_HOME",
   "GIT_ASKPASS",
 ];
 
@@ -32,6 +34,8 @@ export interface BuildCredentialProfileOptions {
   profilePath: string;
   /** Stable directory holding Codex state (auth.json, rollout history), exported as CODEX_HOME. */
   codexHome: string;
+  /** Stable directory holding Grok state (auth.json), exported as GROK_HOME. */
+  grokHome: string;
   /** Git askpass helper carrying the connected GitHub token, exported as GIT_ASKPASS when set. */
   gitAskpassPath?: string;
 }
@@ -44,7 +48,7 @@ export interface BuildCredentialProfileOptions {
  * dashboard/API layer a second time.
  */
 export function buildCredentialProfile(options: BuildCredentialProfileOptions): string {
-  const { env, profilePath, codexHome, gitAskpassPath } = options;
+  const { env, profilePath, codexHome, grokHome, gitAskpassPath } = options;
   const lines = [
     "# brevi agent credentials; reinstalled on every attach, removed with the sandbox",
     // Exact state: the configured credentials replace, never overlay,
@@ -56,6 +60,7 @@ export function buildCredentialProfile(options: BuildCredentialProfileOptions): 
     lines.push(`export ${name}=${quote(value)}`);
   }
   lines.push(`export CODEX_HOME=${quote(codexHome)}`);
+  lines.push(`export GROK_HOME=${quote(grokHome)}`);
   if (gitAskpassPath) lines.push(`export GIT_ASKPASS=${quote(gitAskpassPath)}`);
   // POSIX sh sources $ENV for interactive shells, so a plain `sh` opened
   // beside the resumed conversation re-sources this profile (and a host ENV

@@ -118,7 +118,7 @@ export const ticketSchema = z.object({
 export type TicketInSync = InSync<z.infer<typeof ticketSchema>, Ticket>;
 
 export const limitInfoSchema = z.object({
-  provider: z.enum(["claude", "codex"]),
+  provider: z.enum(["claude", "codex", "grok"]),
   kind: z.enum(["five-hour", "weekly", "unknown"]),
   resetsAt: z.string().optional(),
   message: z.string(),

@@ -9,8 +9,10 @@ import { validateAnthropicCredential } from "./credentials.js";
 
 /** Which agent a configured command runs, for limit attribution and probing. */
 export function agentProvider(config: BreviConfig): LimitProvider {
-  const command = config.agent.command.split("/").pop() ?? config.agent.command;
-  return command.toLowerCase().includes("codex") ? "codex" : "claude";
+  const command = (config.agent.command.split("/").pop() ?? config.agent.command).toLowerCase();
+  if (command.includes("codex")) return "codex";
+  if (command.includes("grok")) return "grok";
+  return "claude";
 }
 
 /** Thrown by the runner when an attempt died because of a usage limit. */
@@ -177,6 +179,12 @@ export async function probeAgentLimit(config: BreviConfig, provider: LimitProvid
     return { ready: true, detail: `probe inconclusive: ${result.detail}` };
   }
 
+  if (provider === "grok") {
+    const { xaiApiKey } = config.agent;
+    if (!xaiApiKey) return { ready: true, detail: "no probe available for a Grok CLI login" };
+    return probeXaiGeneration(xaiApiKey);
+  }
+
   const { codexApiKey } = config.agent;
   if (!codexApiKey) {
     // A ChatGPT login can't be probed cheaply; trust the schedule instead.
@@ -212,6 +220,37 @@ async function probeOpenAiGeneration(apiKey: string): Promise<ProbeResult> {
   if (res.ok) return { ready: true, detail: `verified with ${OPENAI_PROBE_MODEL}` };
   const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
   const detail = body?.error?.message ?? `OpenAI returned ${res.status}`;
+  if (res.status === 429 || STILL_LIMITED.test(detail)) return { ready: false, detail };
+  return { ready: true, detail: `probe inconclusive: ${detail}` };
+}
+
+/** Cheapest model for the xAI generation probe. */
+const XAI_PROBE_MODEL = "grok-4-1-fast-non-reasoning";
+
+/**
+ * A 1-token generation against xAI that keeps the HTTP status visible.
+ * validateXaiApiKey() is not usable here: its auth-only /v1/models fallback
+ * reports ok while generation is still 429-limited.
+ */
+async function probeXaiGeneration(apiKey: string): Promise<ProbeResult> {
+  let res: Response;
+  try {
+    res = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: XAI_PROBE_MODEL,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 1,
+      }),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ready: true, detail: `probe inconclusive: ${message}` };
+  }
+  if (res.ok) return { ready: true, detail: `verified with ${XAI_PROBE_MODEL}` };
+  const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+  const detail = body?.error?.message ?? `xAI returned ${res.status}`;
   if (res.status === 429 || STILL_LIMITED.test(detail)) return { ready: false, detail };
   return { ready: true, detail: `probe inconclusive: ${detail}` };
 }

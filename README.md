@@ -24,9 +24,10 @@ On a fresh machine this runs the init flow (one question: the sandbox provider),
 - **GitHub**: uses your `gh` CLI login if present, or an OAuth device code (with `connect.githubClientId` configured).
 - **Claude**: found on this machine, either your Claude Code login (Keychain / `~/.claude`) or `ANTHROPIC_API_KEY`.
 - **Codex**: found on this machine, either `OPENAI_API_KEY` or the Codex CLI login (`~/.codex/auth.json`).
+- **Grok**: found on this machine as `XAI_API_KEY` / `GROK_CODE_XAI_API_KEY` / `GROK_AUTH`, or the Grok CLI login (`~/.grok/auth.json`).
 - **Linear**: browser OAuth (with `connect.linearClientId`/`Secret` configured), else a pasted API key.
 
-Every credential is verified live before saving and stored in `~/.brevi/config.json`; agent keys are checked with a 1-token probe on the provider's cheapest model (`claude-haiku-4-5` / `gpt-5-nano`). All brevi state lives under `~/.brevi/`; the orchestrator reads no environment variables. Manual key entry remains as a fallback on every provider. Then pick repositories straight from your GitHub account, assign yourself a Linear issue, and add the `brevi` label.
+Every credential is verified live before saving and stored in `~/.brevi/config.json`; agent keys are checked with a 1-token probe on the provider's cheapest model (`claude-haiku-4-5` / `gpt-5-nano` / `grok-4-1-fast-non-reasoning`). All brevi state lives under `~/.brevi/`; the orchestrator reads no environment variables. Manual key entry remains as a fallback on every provider. Then pick repositories straight from your GitHub account, assign yourself a Linear issue, and add the `brevi` label.
 
 Other commands: `brevi start` (headless, no browser), `brevi stop` (shut down a running instance), `brevi status`, `brevi doctor` (check the whole setup: config, server, sandbox, connectors, CLIs), `brevi update` (update an installed CLI to the latest release on npm, restarting a running instance so the new version takes effect), and `brevi init` (rerun the sandbox provider pick any time).
 

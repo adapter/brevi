@@ -12,7 +12,7 @@ brevi runs on your machine: a CLI, an orchestrator that polls Linear, and a dash
 - **Node.js 18+**.
 - **git**, and a GitHub account with access to the repositories you want brevi to work on.
 - A **Linear** account, with issues you can assign to yourself.
-- A coding agent credential brevi can find or that you can paste: a Claude Code login / Anthropic API key, or a Codex (ChatGPT or OpenAI) login.
+- A coding agent credential brevi can find or that you can paste: a Claude Code login / Anthropic API key, a Codex (ChatGPT or OpenAI) login, or a Grok CLI login / xAI API key.
 - Optional: **Linux with `/dev/kvm`** if you want Firecracker microVM isolation. See [Sandboxes](/guides/sandboxes/). On a Mac, Firecracker isolation is also available on Apple silicon M3 or newer running macOS 15 or newer, via a managed Linux guest VM; see [macOS workers](/guides/macos-worker/).
 
 ## Install
@@ -59,6 +59,7 @@ Prefer a GUI to a terminal? Mission Control is the same brevi as a downloadable,
    - **GitHub**: your `gh` CLI login, otherwise an OAuth device code (a code to type on github.com).
    - **Claude**: a Claude Code login discovered on this machine (macOS Keychain or `~/.claude`), or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` in the orchestrator's environment.
    - **Codex**: `OPENAI_API_KEY`, or the Codex CLI login at `~/.codex/auth.json` (including ChatGPT logins).
+   - **Grok**: `XAI_API_KEY` / `GROK_CODE_XAI_API_KEY` / `GROK_AUTH`, or the Grok CLI login at `~/.grok/auth.json`, or a pasted key from console.x.ai.
    - **Linear**: a browser OAuth round trip, otherwise a pasted personal API key.
 
    Every credential is verified against its provider before it is saved, so "Connected" means the agent can actually run. Details in [Connections](/guides/connections/).

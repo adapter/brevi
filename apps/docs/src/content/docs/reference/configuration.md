@@ -53,6 +53,8 @@ A freshly initialised config, with every default filled in:
     "claudeCodeOauthToken": "",
     "codexApiKey": "",
     "codexAuthJson": "",
+    "xaiApiKey": "",
+    "grokAuthJson": "",
     "codexReview": true,
     "reviewModel": "gpt-5.6-sol",
     "reviewEffort": "high"
@@ -185,6 +187,8 @@ The coding agent executed inside the sandbox.
 | `claudeCodeOauthToken` | string | `""` | Claude Code login, exported as `CLAUDE_CODE_OAUTH_TOKEN`. |
 | `codexApiKey` | string | `""` | Exported as `OPENAI_API_KEY`. |
 | `codexAuthJson` | string | `""` | Whole contents of `~/.codex/auth.json` for a ChatGPT login; written into the sandbox and reached via `CODEX_HOME`. |
+| `xaiApiKey` | string | `""` | Exported as `XAI_API_KEY` for Grok agents. |
+| `grokAuthJson` | string | `""` | Whole contents of `~/.grok/auth.json` for a Grok CLI login; written into the sandbox and reached via `GROK_HOME`. |
 | `codexReview` | boolean | `true` | Whether an adversarial Codex review runs after the implementation pass. Claude-primary runs only: when `command` is already Codex the review is skipped, so a run never reviews itself with its own provider. Also requires a Codex credential (`codexApiKey` or `codexAuthJson`); without one the review is skipped even when true. See [Codex review](#codex-review) below. |
 | `reviewModel` | string | `"gpt-5.6-sol"` | Model the Codex review runs on. |
 | `reviewEffort` | `"minimal"` \| `"low"` \| `"medium"` \| `"high"` | `"high"` | Reasoning effort for Codex review executions, passed as `-c model_reasoning_effort=<value>`. |
@@ -203,7 +207,7 @@ Under the Firecracker provider, the review runs the Codex CLI inside the sandbox
 
 Live per-model cost sampling during Claude runs likewise needs `ccusage` in the rootfs image under the Firecracker provider: hosts on an older image get it the same way, by downloading the current prebuilt image (or rebuilding from source). Without it, runs still work and cost falls back to today's end-of-run, stream-parsed behavior.
 
-At least one of the four credential fields (`anthropicApiKey`, `claudeCodeOauthToken`, `codexApiKey`, `codexAuthJson`) must be set or every run fails at startup with `no agent credentials configured`. Populate them from the dashboard's Configuration page rather than by hand; the dashboard verifies keys before saving.
+At least one of the six credential fields (`anthropicApiKey`, `claudeCodeOauthToken`, `codexApiKey`, `codexAuthJson`, `xaiApiKey`, `grokAuthJson`) must be set or every run fails at startup with `no agent credentials configured`. Populate them from the dashboard's Configuration page rather than by hand; the dashboard verifies keys before saving.
 
 ## `memory`
 
@@ -314,4 +318,4 @@ Integer, minimum `10`, default `60`. How often brevi polls Linear for eligible t
 
 ## Redaction
 
-When the config is read back over the API or the WebSocket, `linear.apiKey`, `linear.refreshToken`, `github.token`, all four `agent` credential fields, and `connect.linearClientSecret` are replaced with `"***"`. Empty strings stay empty so the dashboard can distinguish "not connected" from "connected".
+When the config is read back over the API or the WebSocket, `linear.apiKey`, `linear.refreshToken`, `github.token`, all six `agent` credential fields, and `connect.linearClientSecret` are replaced with `"***"`. Empty strings stay empty so the dashboard can distinguish "not connected" from "connected".

@@ -142,7 +142,7 @@ export function isHealthResponse(value: unknown): value is HealthResponse {
 }
 
 /** Credential providers configurable from the dashboard. */
-export type CredentialProvider = "linear" | "github" | "anthropic" | "codex";
+export type CredentialProvider = "linear" | "github" | "anthropic" | "codex" | "grok";
 
 /** Only provided fields are touched; empty string disconnects that provider. */
 export interface CredentialsUpdateRequest {
@@ -150,6 +150,7 @@ export interface CredentialsUpdateRequest {
   githubToken?: string;
   anthropicApiKey?: string;
   codexApiKey?: string;
+  xaiApiKey?: string;
 }
 
 export interface CredentialResult {

@@ -11,6 +11,7 @@ import type { CredentialResult } from "@brevi/shared";
 /** Cheapest models used for liveness probes. */
 const ANTHROPIC_PROBE_MODEL = "claude-haiku-4-5";
 const OPENAI_PROBE_MODEL = "gpt-5-nano";
+const XAI_PROBE_MODEL = "grok-4-1-fast-non-reasoning";
 
 async function attempt(probe: () => Promise<string>): Promise<CredentialResult> {
   try {
@@ -180,4 +181,69 @@ export function validateCodexApiKey(apiKey: string): Promise<CredentialResult> {
     if (!list.ok) throw new Error(`OpenAI returned ${list.status}`);
     return "API key verified";
   });
+}
+
+/**
+ * Verify an xAI/Grok key with a 1-token completion on the cheapest model;
+ * accounts without that model fall back to a plain auth check.
+ */
+export function validateXaiApiKey(apiKey: string): Promise<CredentialResult> {
+  return attempt(async () => {
+    const res = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: XAI_PROBE_MODEL,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 1,
+      }),
+    });
+    if (res.status === 401) throw new Error("xAI rejected this API key");
+    if (res.ok) return `Verified with ${XAI_PROBE_MODEL}`;
+    const list = await fetch("https://api.x.ai/v1/models", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (list.status === 401) throw new Error("xAI rejected this API key");
+    if (!list.ok) throw new Error(`xAI returned ${list.status}`);
+    return "API key verified";
+  });
+}
+
+/**
+ * Validate a Grok CLI login (the raw ~/.grok/auth.json contents). There is
+ * no stable API to probe with an OIDC session, so this checks the token set
+ * offline: a session with a usable access token, and expiry/refreshability.
+ */
+export function validateGrokAuth(raw: string): CredentialResult {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false, detail: "Could not parse the Grok login file." };
+    }
+    const sessions = Object.values(parsed).filter(
+      (value): value is { key?: string; refresh_token?: string; expires_at?: string; email?: string } =>
+        value !== null && typeof value === "object" && !Array.isArray(value),
+    );
+    const session = sessions.find((entry) => typeof entry.key === "string" && entry.key.length > 0);
+    if (!session?.key) {
+      return { ok: false, detail: "This Grok login has no usable tokens. Run `grok login` again." };
+    }
+    const access = jwtPayload(session.key);
+    const jwtExpired = typeof access?.exp === "number" && access.exp * 1000 < Date.now();
+    const stamp = session.expires_at ? Date.parse(session.expires_at) : Number.NaN;
+    const stampExpired = Number.isFinite(stamp) && stamp < Date.now();
+    const expired = jwtExpired || stampExpired;
+    if (expired && !session.refresh_token) {
+      return {
+        ok: false,
+        detail: "The Grok login has expired and has no refresh token. Run `grok login` again.",
+      };
+    }
+    const email = typeof session.email === "string" ? session.email : undefined;
+    const who = email ? `Connected as ${email}` : "Grok login verified";
+    const expiryNote = expired ? "; the token expired but Grok will refresh it on first run" : "";
+    return { ok: true, detail: `${who}${expiryNote}` };
+  } catch {
+    return { ok: false, detail: "Could not parse the Grok login file." };
+  }
 }

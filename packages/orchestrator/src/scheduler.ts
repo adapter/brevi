@@ -50,6 +50,7 @@ import {
   discoverAnthropicCredential,
   discoverCodexCredential,
   discoverGithubToken,
+  discoverXaiCredential,
   exchangeLinearCode,
   githubClientId,
   hostedApiReachable,
@@ -70,6 +71,8 @@ import {
   validateCodexChatgptAuth,
   validateGithubToken,
   validateLinearApiKey,
+  validateGrokAuth,
+  validateXaiApiKey,
 } from "./credentials.js";
 import { FleetStore, sanitizeWorkerName } from "./fleet.js";
 import { branchNameFor, fetchPrStatus, fetchPullRequestState, findPullRequestForBranch, listRepos } from "./github.js";
@@ -938,7 +941,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       return result;
     };
 
-    const [linear, github, anthropic, codex] = await Promise.all([
+    const [linear, github, anthropic, codex, grok] = await Promise.all([
       apply(request.linearApiKey, validateLinearApiKey, (key) => {
         this.config.linear.apiKey = key;
         // A manually pasted key (or a disconnect) replaces any OAuth grant;
@@ -964,11 +967,17 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         // A manual key (or a disconnect) replaces any host-discovered login.
         this.config.agent.codexAuthJson = "";
       }),
+      apply(request.xaiApiKey, validateXaiApiKey, (key) => {
+        this.config.agent.xaiApiKey = key;
+        // A manual key (or a disconnect) replaces any host-discovered login.
+        this.config.agent.grokAuthJson = "";
+      }),
     ]);
     if (linear) results.linear = linear;
     if (github) results.github = github;
     if (anthropic) results.anthropic = anthropic;
     if (codex) results.codex = codex;
+    if (grok) results.grok = grok;
 
     const anyApplied = Object.values(results).some((r) => r.ok);
     if (anyApplied) {
@@ -1133,6 +1142,41 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         await this.#saveCredential(() => {
           if (found.kind === "chatgpt") this.config.agent.codexAuthJson = found.value;
           else this.config.agent.codexApiKey = found.value;
+        });
+        return {
+          status: "connected",
+          provider,
+          detail: `${result.detail} (from ${found.source})`,
+          config: redactConfig(this.config),
+        };
+      }
+      case "grok": {
+        const found = await discoverXaiCredential();
+        if (!found) {
+          return {
+            status: "manual",
+            provider,
+            reason:
+              "No Grok credential found on this machine (checked XAI_API_KEY, GROK_CODE_XAI_API_KEY, GROK_AUTH, and ~/.grok/auth.json). Log in with `grok login` and connect again, or paste an xAI API key.",
+          };
+        }
+        const result =
+          found.kind === "grok" ? validateGrokAuth(found.value) : await validateXaiApiKey(found.value);
+        if (!result.ok) {
+          return {
+            status: "manual",
+            provider,
+            reason: `Found a credential from ${found.source}, but it failed: ${result.detail}`,
+          };
+        }
+        await this.#saveCredential(() => {
+          if (found.kind === "grok") {
+            this.config.agent.grokAuthJson = found.value;
+            this.config.agent.xaiApiKey = "";
+          } else {
+            this.config.agent.xaiApiKey = found.value;
+            this.config.agent.grokAuthJson = "";
+          }
         });
         return {
           status: "connected",
