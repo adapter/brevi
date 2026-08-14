@@ -85,7 +85,7 @@ export function AgentSection({
               path="agent.command"
               draft={models}
               wide
-              help="Coding agent CLI brevi executes. It has to be available where the run executes: on this host's PATH under the process provider, baked into the rootfs image under Firecracker."
+              help="Coding agent CLI brevi executes. It has to be on the worker host's PATH; bwrap bind-mounts those binaries into the sandbox."
             />
             <TagField
               label="Args"

@@ -41,19 +41,16 @@ const ticket: Ticket = {
 const repo = repoConfigSchema.parse({ remote: "adapter/brevi" });
 
 interface CapabilitiesOverrides {
-  provider?: "firecracker" | "process";
+  provider?: "bwrap";
   maxConcurrency?: number;
-  vmSizes?: ("small" | "medium" | "large")[];
 }
 
 function capabilities(overrides: CapabilitiesOverrides = {}) {
   return {
     os: "linux",
     arch: "x64",
-    provider: overrides.provider ?? "firecracker",
-    kvm: true,
+    provider: overrides.provider ?? "bwrap",
     maxConcurrency: overrides.maxConcurrency ?? 2,
-    vmSizes: overrides.vmSizes ?? (["small", "medium", "large"] as ("small" | "medium" | "large")[]),
     version: "0.5.0",
   };
 }
@@ -170,7 +167,7 @@ describe("WorkerRegistry", () => {
     return store.createRun(ticket);
   }
 
-  function dispatch(run: Run, vmSize?: "small" | "medium" | "large") {
+  function dispatch(run: Run) {
     return registry.dispatch({
       kind: "implementation",
       run,
@@ -178,7 +175,6 @@ describe("WorkerRegistry", () => {
       repo,
       config,
       prompts: { prDescription: "concise", memories: [], recordMemories: false },
-      vmSize,
     });
   }
 
@@ -309,12 +305,12 @@ describe("WorkerRegistry", () => {
       type: "run-patch",
       leaseId: lease.id,
       runId: run.id,
-      patch: { status: "running", sandbox: { provider: "firecracker", id: "vm-1" } },
+      patch: { status: "running", sandbox: { provider: "bwrap", id: "sbx-1" } },
     });
     await flush();
     expect(store.get(run.id)?.sandbox).toMatchObject({
-      provider: "firecracker",
-      id: "vm-1",
+      provider: "bwrap",
+      id: "sbx-1",
       workerId,
     });
 
@@ -322,8 +318,8 @@ describe("WorkerRegistry", () => {
     // the provider the worker reported stay exactly as they were.
     socket.receive({ type: "run-patch", leaseId: lease.id, runId: run.id, patch: { sandbox: { id: null } } });
     await flush();
-    expect(store.get(run.id)?.sandbox).toEqual({ provider: "firecracker", workerId });
-    socket.receive({ type: "run-patch", leaseId: lease.id, runId: run.id, patch: { sandbox: { id: "vm-1" } } });
+    expect(store.get(run.id)?.sandbox).toEqual({ provider: "bwrap", workerId });
+    socket.receive({ type: "run-patch", leaseId: lease.id, runId: run.id, patch: { sandbox: { id: "sbx-1" } } });
     await flush();
 
     socket.receive({
@@ -637,21 +633,14 @@ describe("WorkerRegistry", () => {
 
   // --- placement -------------------------------------------------------
 
-  it("prefers a Firecracker worker over a process one, and falls back to the process worker once Firecracker is full", async () => {
-    const fc = await enroll("fc-1", { provider: "firecracker", maxConcurrency: 1 });
-    const proc = await enroll("proc-1", { provider: "process", maxConcurrency: 2, vmSizes: [] });
+  it("places a run on the worker with the most free capacity", async () => {
+    await enroll("tight-1", { maxConcurrency: 1 });
+    const roomy = await enroll("roomy-1", { maxConcurrency: 2 });
 
     const first = await queueRun();
-    expect(dispatch(first)).toEqual({ placed: true, workerId: fc.id, workerName: fc.name });
+    expect(dispatch(first)).toEqual({ placed: true, workerId: roomy.id, workerName: roomy.name });
     await flush();
-    expect(fc.socket.last("dispatch")?.run.id).toBe(first.id);
-
-    // Firecracker is now at capacity (maxConcurrency 1); the process worker
-    // is the only one left with room.
-    const second = await queueRun();
-    expect(dispatch(second)).toEqual({ placed: true, workerId: proc.id, workerName: proc.name });
-    await flush();
-    expect(proc.socket.last("dispatch")?.run.id).toBe(second.id);
+    expect(roomy.socket.last("dispatch")?.run.id).toBe(first.id);
   });
 
   it("respects maxConcurrency, and the outcome's reason names capacity once every connected worker is full", async () => {
@@ -662,13 +651,6 @@ describe("WorkerRegistry", () => {
 
     const second = await queueRun();
     expect(dispatch(second)).toEqual({ placed: false, reason: "all 1 connected worker is at capacity" });
-    await flush();
-  });
-
-  it("refuses a run asking for a vmSize no connected Firecracker worker advertises", async () => {
-    await connect({ provider: "firecracker", vmSizes: ["small"] });
-    const run = await queueRun();
-    expect(dispatch(run, "large")).toEqual({ placed: false, reason: "no connected worker can boot a large VM" });
     await flush();
   });
 

@@ -43,10 +43,8 @@ function capabilities(maxConcurrency = 2) {
   return {
     os: "linux",
     arch: "x64",
-    provider: "process" as const,
-    kvm: false,
-    maxConcurrency,
-    vmSizes: [] as ("small" | "medium" | "large")[],
+    provider: "bwrap" as const,
+        maxConcurrency,
     version: "0.5.0",
   };
 }
@@ -164,7 +162,7 @@ describe("worker enrollment", () => {
     expect(workers).toHaveLength(1);
     expect(workers[0]?.connection).toBe("online");
     expect(workers[0]?.name).toBe("bench-1");
-    expect(workers[0]?.capabilities?.provider).toBe("process");
+    expect(workers[0]?.capabilities?.provider).toBe("bwrap");
     expect(workers[0]?.address).toBe("127.0.0.1");
   });
 
@@ -293,7 +291,7 @@ describe("worker enrollment", () => {
     expect(revived[0]?.connection).toBe("offline");
     // Capabilities are remembered from the last connection, so the Workers
     // page can still say what the machine is while it is offline.
-    expect(revived[0]?.capabilities?.provider).toBe("process");
+    expect(revived[0]?.capabilities?.provider).toBe("bwrap");
 
     // And the credential it kept still authenticates against the reloaded
     // fleet: a restart must not cost the fleet its enrollments.

@@ -113,8 +113,8 @@ export function createAttachSessions(deps: AttachSessionsDeps): AttachSessions {
       fail("no agent session id was captured for this run; interactive resume supports Claude runs only");
       return;
     }
-    if (run.sandbox.provider !== provider.name) {
-      fail(`this run's sandbox provider (${run.sandbox.provider ?? "unknown"}) is no longer the active one (${provider.name})`);
+    if (run.sandbox.provider && run.sandbox.provider !== "bwrap") {
+      fail(`this run's sandbox (${run.sandbox.provider}) cannot be reattached; only bwrap sandboxes are supported`);
       return;
     }
 
@@ -137,9 +137,7 @@ export function createAttachSessions(deps: AttachSessionsDeps): AttachSessions {
         grokAuthJson: config.agent.grokAuthJson || undefined,
         githubToken: config.github.token || undefined,
       });
-      const connection = sandbox.connection();
-      const scriptPath =
-        connection.kind === "ssh" ? "/root/brevi-resume.sh" : join(WORKSPACES_DIR, runId, "brevi-resume.sh");
+      const scriptPath = join(WORKSPACES_DIR, runId, "brevi-resume.sh");
       await sandbox.writeFile(
         scriptPath,
         buildResumeScript({
@@ -151,34 +149,24 @@ export function createAttachSessions(deps: AttachSessionsDeps): AttachSessions {
       );
       await sandbox.exec("chmod", ["755", scriptPath]);
 
-      const [file, args] =
-        connection.kind === "local"
-          ? ["/bin/sh", [scriptPath]]
-          : [
-              "ssh",
-              [
-                // -t forces the remote pty for the interactive agent; the local
-                // pty this spawn provides is what lets ssh forward resizes.
-                "-t",
-                "-i",
-                connection.keyPath,
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "LogLevel=ERROR",
-                `${connection.user}@${connection.host}`,
-                scriptPath,
-              ],
-            ];
+      const launch = sandbox.wrap("/bin/sh", [scriptPath], undefined, { newSession: false });
+      const file = launch.file;
+      const args = launch.args;
 
       if (!sessions.has(attachId)) {
         // attach-close raced the boot; nothing left to spawn into.
         releaseSession(session);
         return;
       }
-      session.pty = spawn(file, args, { name: "xterm-256color", cols, rows });
+      // launch.env is the same allowlist exec uses (no worker credential, HOME
+      // is the workspace). wrap also --clearenv/--setenv so a forgotten env
+      // here cannot leak the host environment into the session.
+      session.pty = spawn(file, args, {
+        name: "xterm-256color",
+        cols,
+        rows,
+        env: { ...launch.env, TERM: "xterm-256color" },
+      });
       session.pty.onData((data) => send({ type: "attach-data", attachId, data }));
       session.pty.onExit(({ exitCode }) => {
         session.pty = undefined;

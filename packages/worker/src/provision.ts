@@ -43,24 +43,20 @@ export async function provisionCredentials(options: {
   // (the server and store boundaries validate it too) so a hostile id can
   // never be joined into a host-side path that escapes WORKSPACES_DIR.
   if (!isSafePathSegment(runId)) throw new Error(`unsafe run id: ${JSON.stringify(runId)}`);
-  const ssh = sandbox.connection().kind === "ssh";
-  // Firecracker (ssh): VM state in the guest, outside the workspace so the
-  // run's tree stays clean. The guest is Ubuntu, so root login shells source
-  // /etc/profile.d/*.sh, and /root/.codex is the Codex CLI's default
-  // CODEX_HOME, so plain `codex` in a shell finds it even without the export.
-  // Process provider: beside (not inside) the workspace under the run's
-  // directory on the host, so both are removed with the run's directory by
-  // destroy()/discard()/the workspace sweep and never touch the host's real
-  // shell profile.
-  const profilePath = ssh ? "/etc/profile.d/brevi-credentials.sh" : join(WORKSPACES_DIR, runId, "brevi-credentials.sh");
-  const codexHome = ssh ? "/root/.codex" : join(WORKSPACES_DIR, runId, "codex-home");
-  const grokHome = ssh ? "/root/.grok" : join(WORKSPACES_DIR, runId, "grok-home");
-  const askpassPath = ssh ? "/root/brevi-git-askpass.sh" : join(WORKSPACES_DIR, runId, "brevi-git-askpass.sh");
+  // Beside (not inside) the workspace under the run's directory on the host,
+  // so both are removed with the run's directory by destroy()/discard()/the
+  // workspace sweep and never touch the host's real shell profile. bwrap
+  // bind-mounts the whole run directory, so these paths stay visible inside
+  // the sandbox.
+  const profilePath = join(WORKSPACES_DIR, runId, "brevi-credentials.sh");
+  const codexHome = join(WORKSPACES_DIR, runId, "codex-home");
+  const grokHome = join(WORKSPACES_DIR, runId, "grok-home");
+  const askpassPath = join(WORKSPACES_DIR, runId, "brevi-git-askpass.sh");
 
   // The Codex home always exists and is always exported, even without a
-  // ChatGPT login: on the process provider an unset CODEX_HOME would fall
-  // back to the host's real ~/.codex, leaking its login into the sandbox and
-  // the run's rollout history into the host.
+  // ChatGPT login: an unset CODEX_HOME would fall back to the host's real
+  // ~/.codex, leaking its login into the sandbox and the run's rollout
+  // history into the host.
   const authPath = `${codexHome}/auth.json`;
   if (codexAuthJson) {
     await sandbox.writeFile(authPath, codexAuthJson);
@@ -76,8 +72,8 @@ export async function provisionCredentials(options: {
     await sandbox.exec("chmod", ["700", codexHome]);
   }
 
-  // Same isolation as CODEX_HOME: an unset GROK_HOME on the process provider
-  // would fall back to the host's real ~/.grok.
+  // Same isolation as CODEX_HOME: an unset GROK_HOME would fall back to the
+  // host's real ~/.grok.
   const grokAuthPath = `${grokHome}/auth.json`;
   if (grokAuthJson) {
     await sandbox.writeFile(grokAuthPath, grokAuthJson);

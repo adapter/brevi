@@ -9,8 +9,7 @@
         "$TURBO_DEFAULT$",
         "../../packages/*/CHANGELOG.md",
         "../app/CHANGELOG.md",
-        "../../packages/worker/scripts/install.sh",
-        "../../packages/sandbox/scripts/setup-network.sh"
+        "../../packages/worker/scripts/install.sh"
       ],
       "outputs": ["dist/**"]
     }

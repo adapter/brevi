@@ -181,7 +181,7 @@ interface RunCodexExecOptions {
 /**
  * Runs one Codex exec (a reviewer or the synthesis pass) inside the run's
  * sandbox and records its usage. `--dangerously-bypass-approvals-and-sandbox`
- * is safe here because the sandbox itself (Firecracker or process) already
+ * is safe here because the sandbox itself already
  * isolates the run; Codex's own CLI-level sandboxing would just be redundant.
  * Usage is read from ccusage over the run's CODEX_HOME session file when
  * available (real pricing), falling back to the stream-estimated figure.

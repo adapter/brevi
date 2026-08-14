@@ -21,7 +21,7 @@ const results: unknown[] = [];
 for (const entry of ops) {
   if (entry.op === "ensure") {
     const { config, firstLaunch } = await ensureConfig();
-    results.push({ firstLaunch, provider: config.sandbox.provider });
+    results.push({ firstLaunch, concurrency: config.sandbox.concurrency });
   }
 }
 

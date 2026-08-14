@@ -11,7 +11,7 @@ A local sandbox and orchestrator for coding agents.
 
 Connect your machine to Linear and GitHub, add the **`brevi`** label to a ticket, and brevi picks it up: it runs a coding agent on a checkout of the mapped repo, pushes a branch, and opens a GitHub PR. A demo (screenshots or a screen recording) captured by the agent is kept with the run in the local dashboard.
 
-Every execution runs in an isolated sandbox. On Linux with KVM, sandboxes are [Firecracker](https://firecracker-microvm.github.io/) microVMs; elsewhere a local process sandbox is used for development. On Apple silicon M3+ running macOS 15+, `brevi mac install` manages a Linux guest VM so a Mac gets the same Firecracker isolation; see the docs for [macOS workers](https://brevi.dev/guides/macos-worker/).
+Every execution runs in an isolated [bubblewrap](https://github.com/containers/bubblewrap) sandbox on Linux. A Mac (or any host without `bwrap`) is a scheduler only: runs wait for a Linux worker.
 
 ## Quick start
 
@@ -56,7 +56,7 @@ Linear (assigned issues with the brevi label)
 orchestrator ──► queue eligible tickets
    │
    ▼
-sandbox (Firecracker microVM / process)
+sandbox (bwrap on Linux)
    │  git checkout of the mapped repo + coding agent (Claude Code, headless)
    ▼
 branch + PR (demo stays local)
@@ -72,7 +72,7 @@ Only `@brevi/cli` is published: it bundles the workspace libraries into a single
 | --- | --- |
 | `@brevi/cli` | **Published.** `brevi` / `brevi init` / `brevi start` / `brevi stop` / `brevi status`; bundles everything below |
 | `@brevi/orchestrator` | Linear polling, run pipeline, GitHub PRs, HTTP/WS API, serves the dashboard |
-| `@brevi/sandbox` | Sandbox providers: Firecracker microVMs (Linux + KVM) and local process fallback |
+| `@brevi/sandbox` | Sandbox provider: bubblewrap on Linux |
 | `@brevi/shared` | Domain types, config schema (zod), dashboard API/WebSocket protocol |
 | `@brevi/app` | The dashboard: Vite + React, shadcn/ui on Base UI, live run console, tickets, artifacts |
 | `@brevi/docs` | Documentation site (Astro Starlight), deployed to [brevi.dev](https://brevi.dev) |
@@ -105,7 +105,7 @@ brevi status
 
 After changing CLI/orchestrator code, rerun `bun run build`, because the linked bin runs the built `dist/`.
 
-For Firecracker sandboxes you need a Linux host with `/dev/kvm`, a kernel image, and a rootfs; see `packages/sandbox/README.md` for the one-time image and network setup.
+For isolated sandboxes you need a Linux host with `bwrap` (`apt install bubblewrap`, or `brevi setup`).
 
 ## CI, deploys, and releases
 

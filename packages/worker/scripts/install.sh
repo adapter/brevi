@@ -1,21 +1,19 @@
 #!/bin/sh
 #
-# Hosted installer: turns a stock KVM-enabled Ubuntu/Debian server into a connected
+# Hosted installer: turns a stock Ubuntu/Debian server into a connected
 # `brevi worker`. Published at https://brevi.dev/install.sh.
 #
-# Installs the `brevi` single-file executable, provisions the Firecracker sandbox
-# (kernel, rootfs, ssh key, tap network) for a dedicated `brevi` system user, and
-# runs the daemon as two systemd services: brevi-network.service (tap pool + NAT,
-# so it survives a reboot) and brevi-worker.service (the daemon itself).
+# Installs the `brevi` single-file executable, installs bubblewrap for the
+# dedicated `brevi` system user, and runs the daemon as brevi-worker.service.
 #
 # Usage:
 #   curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- \
 #     --host https://your-host:4400 --token <pairing token>
 #
 # Idempotent: re-run the same command (or `sudo brevi worker update`) to upgrade the
-# binary and images in place without losing enrollment or settings. A re-run restarts
-# both units at the end, so the upgraded binary, settings and tap pool are what is
-# actually running when it reports success. See --help for every option, --check to
+# binary in place without losing enrollment or settings. A re-run restarts the
+# worker unit at the end, so the upgraded binary and settings are what is actually
+# running when it reports success. See --help for every option, --check to
 # preflight without installing, and --uninstall to remove everything this script created.
 #
 # POSIX sh only (runs under dash); no bashisms.
@@ -29,7 +27,6 @@ HOST=""
 TOKEN=""
 NAME=""
 CONCURRENCY=""
-TAPS=""
 VERSION=""
 BINARY=""
 CHECK=0
@@ -41,7 +38,7 @@ IMAGES_URL="https://images.brevi.dev"
 # Matches sandbox.concurrency's ceiling in packages/shared/src/config.ts: what one
 # machine's sandbox provider is expected to run at once, well under the wire protocol's
 # own WORKER_MAX_CONCURRENCY. Validating it here keeps a rejection from landing after
-# the service user, the binary and the network are already installed.
+# the service user and the binary are already installed.
 MAX_CONCURRENCY=16
 
 SERVICE_USER="brevi"
@@ -51,27 +48,25 @@ BIN_PATH="/usr/local/bin/brevi"
 LIB_DIR="/usr/local/lib/brevi"
 ETC_DIR="/etc/brevi"
 ENV_FILE="/etc/brevi/worker.env"
-# The tap count, and nothing else. brevi-network.service runs as root, so it is given
-# its own file rather than the worker's: the privileged unit never reads a setting it
-# has no use for (the host URL, the worker name).
-NETWORK_ENV_FILE="/etc/brevi/network.env"
 # What this installer created rather than found, so --uninstall removes exactly that. A
 # `brevi` account that predates the install is somebody's to administer: it may hold
 # other things, other services may run as it, and deleting it because an unrelated
 # uninstall ran is not a mistake that can be undone. Data, never sourced, like the env
 # files next to it.
 OWNERSHIP_FILE="/etc/brevi/ownership.env"
-NETWORK_START="/usr/local/lib/brevi/network-start.sh"
 WORKER_START="/usr/local/lib/brevi/worker-start.sh"
-NETWORK_UNIT="/etc/systemd/system/brevi-network.service"
 WORKER_UNIT="/etc/systemd/system/brevi-worker.service"
+# Leftovers from the Firecracker installer. New installs never write these; --uninstall
+# still removes them so an upgrade-then-uninstall of an old host is clean.
+NETWORK_ENV_FILE="/etc/brevi/network.env"
+NETWORK_START="/usr/local/lib/brevi/network-start.sh"
+NETWORK_UNIT="/etc/systemd/system/brevi-network.service"
 
 # Filled in as the script runs.
 PROBLEMS=0
 WARNINGS=0
 BREVI_ARCH=""
 RESOLVED_VERSION=""
-KVM_GROUP=""
 REPLY=""
 # Set by --check: preflight then reports, it never installs or changes anything.
 REPORT_ONLY=0
@@ -152,11 +147,11 @@ is_sha256() {
 # ---------------------------------------------------------------------------
 # /etc/brevi/*.env values
 #
-# Both env files exist for systemd's EnvironmentFile=, which parses them as data. Nothing
-# sources them: the wrapper scripts read the environment systemd built, so no value here
-# is ever evaluated as shell, in the worker's unit or in the root network one. What still
-# has to be excluded is anything that would not survive the file format itself, so every
-# value is checked against a whitelist on the way in and read back as data.
+# The worker env file exists for systemd's EnvironmentFile=, which parses it as data.
+# Nothing sources it: the wrapper reads the environment systemd built, so no value here
+# is ever evaluated as shell. What still has to be excluded is anything that would not
+# survive the file format itself, so every value is checked against a whitelist on the
+# way in and read back as data.
 #
 # The worker file is the only one that ever holds a secret, and only briefly: BREVI_TOKEN
 # carries the single-use pairing token until the daemon has redeemed it for the durable
@@ -213,7 +208,7 @@ check_linux() {
   if [ "$os" = "Linux" ]; then
     pass "OS is Linux."
   else
-    fail "this host reports '$os'; Firecracker needs KVM, which is a Linux kernel feature, so brevi worker's sandbox only runs on Linux."
+    fail "this host reports '$os'; bwrap sandboxes need Linux."
   fi
 }
 
@@ -242,20 +237,11 @@ check_systemd() {
   fi
 }
 
-check_kvm() {
-  if [ ! -e /dev/kvm ]; then
-    fail "/dev/kvm does not exist. Load the KVM module for your CPU: 'sudo modprobe kvm_intel' (Intel) or 'sudo modprobe kvm_amd' (AMD). If it still does not appear, enable virtualization (VT-x / AMD-V) in the BIOS; if this host is itself a VM, nested virtualization must be enabled on its hypervisor."
-    return 0
-  fi
-  kvm_group=$(stat -c %G /dev/kvm 2>/dev/null || printf 'kvm')
-  if [ "$(id -u)" -eq 0 ]; then
-    if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
-      pass "/dev/kvm is present and accessible (owning group: $kvm_group)."
-    else
-      fail "/dev/kvm exists but is not readable/writable even as root (owning group: $kvm_group); check its permissions and any SELinux/AppArmor policy."
-    fi
+check_bwrap() {
+  if command -v bwrap >/dev/null 2>&1; then
+    pass "bwrap is on PATH ($(command -v bwrap))."
   else
-    pass "/dev/kvm is present (owning group: $kvm_group). Run as root to verify read/write access; the service user is added to that group during install."
+    advise "bwrap is not on PATH; step 6 installs bubblewrap with apt-get as root."
   fi
 }
 
@@ -277,11 +263,10 @@ check_cgroups() {
 # cgroup v2 being mounted says nothing about that succeeding, so this exercises it for
 # real in a throwaway transient unit carrying the same properties the worker unit will,
 # and reports whatever systemd said when it could not. Once the service user exists (any
-# re-run or upgrade) the unit also runs as that user with the /dev/kvm group and opens
-# the device, which checks the delegation and the group grant in one go.
+# re-run or upgrade) the unit also runs as that user.
 check_service_cgroup() {
   if ! command -v systemd-run >/dev/null 2>&1; then
-    advise "systemd-run is not available, so the cgroup and service-restriction check could not be exercised. brevi-worker.service needs systemd to place it in its own cgroup under User=, SupplementaryGroups= and ProtectControlGroups=."
+    advise "systemd-run is not available, so the cgroup and service-restriction check could not be exercised. brevi-worker.service needs systemd to place it in its own cgroup under User= and ProtectControlGroups=."
     return 0
   fi
   if [ "$(id -u)" -ne 0 ]; then
@@ -299,14 +284,11 @@ check_service_cgroup() {
     --property=ProtectControlGroups=yes \
     --property=RestrictSUIDSGID=yes
 
-  if id -u "$SERVICE_USER" >/dev/null 2>&1 && [ -e /dev/kvm ]; then
-    kvm_group=$(stat -c %G /dev/kvm 2>/dev/null || printf 'kvm')
-    # Opening /dev/kvm read/write is the first thing firecracker does.
+  if id -u "$SERVICE_USER" >/dev/null 2>&1; then
     output=$(systemd-run "$@" \
       --property=User="$SERVICE_USER" \
-      --property=SupplementaryGroups="$kvm_group" \
-      /bin/sh -c 'exec 3<>/dev/kvm' 2>&1) && started=1 || started=0
-    what="as $SERVICE_USER, with the $kvm_group group, opening /dev/kvm"
+      /bin/true 2>&1) && started=1 || started=0
+    what="as $SERVICE_USER, with brevi-worker.service's cgroup and sandboxing properties"
   else
     output=$(systemd-run "$@" /bin/true 2>&1) && started=1 || started=0
     what="with brevi-worker.service's cgroup and sandboxing properties"
@@ -323,7 +305,7 @@ check_service_cgroup() {
 # tool:apt-package pairs. sha256sum/install both ship in coreutils; useradd/userdel/
 # groupadd/groupdel ship in passwd; systemctl ships in systemd.
 # shellcheck disable=SC2034 # documents the mapping the loop below re-derives
-TOOL_LIST="curl:curl ip:iproute2 iptables:iptables tar:tar ssh:openssh-client gzip:gzip sha256sum:coreutils useradd:passwd install:coreutils systemctl:systemd"
+TOOL_LIST="curl:curl tar:tar gzip:gzip sha256sum:coreutils useradd:passwd install:coreutils systemctl:systemd"
 
 check_commands() {
   missing_tools=""
@@ -341,7 +323,7 @@ check_commands() {
     fi
   done
   if [ -z "$missing_tools" ]; then
-    pass "required commands are present: curl, ip, iptables, tar, ssh, gzip, sha256sum, useradd, install, systemctl."
+    pass "required commands are present: curl, tar, gzip, sha256sum, useradd, install, systemctl."
     return 0
   fi
 
@@ -395,10 +377,10 @@ check_disk_space() {
     return 0
   fi
   avail_gb=$((avail_kb / 1024 / 1024))
-  if [ "$avail_kb" -ge $((5 * 1024 * 1024)) ]; then
+  if [ "$avail_kb" -ge $((1 * 1024 * 1024)) ]; then
     pass "free space under /var/lib: ~${avail_gb} GB."
   else
-    fail "only ~${avail_gb} GB free under /var/lib; brevi needs at least 5 GB (the rootfs image alone is ~2 GB, plus a copy-on-write clone per run)."
+    fail "only ~${avail_gb} GB free under /var/lib; brevi needs at least 1 GB for the worker home and run workspaces."
   fi
 }
 
@@ -447,35 +429,13 @@ check_egress() {
     fi
   fi
 
-  # The images host is checked whether or not --binary was given: it serves the prebuilt
-  # rootfs too, and that download happens in step 6, long after the service user and the
-  # network are in place. A firewall found then has already cost the machine a
-  # half-finished install, which is exactly what this preflight exists to prevent.
-  if reachable "$IMAGES_URL/"; then
-    pass "images host is reachable ($IMAGES_URL): prebuilt rootfs, and the worker binary unless --binary was given."
-  else
-    fail "could not reach $IMAGES_URL; step 6 downloads the prebuilt rootfs image from there (and the worker binary too, unless --binary is given). Open egress to it, or pass --images-url if you mirror those artifacts elsewhere."
-  fi
-
-  # firecracker and the guest kernel come from github.com and s3.amazonaws.com (see
-  # packages/cli/src/commands/setup.ts). Skipped, not failed, when this machine already
-  # has them: step 6 only downloads what is missing, and a host that is provisioned
-  # already has no reason to need either.
-  if [ -x "$SERVICE_HOME/.brevi/bin/firecracker" ] || command -v firecracker >/dev/null 2>&1; then
-    pass "firecracker is already installed; no github.com download needed."
-  elif reachable "https://github.com/"; then
-    pass "github.com is reachable (the pinned firecracker release)."
-  else
-    fail "could not reach https://github.com, where step 6 downloads the pinned firecracker binary from."
-  fi
-  # ls, not a name check: the pinned kernel version lives in setup.ts, and duplicating it
-  # here would be one more constant to drift.
-  if ls "$SERVICE_HOME"/.brevi/images/vmlinux-* >/dev/null 2>&1; then
-    pass "a firecracker guest kernel is already installed; no s3.amazonaws.com download needed."
-  elif reachable "https://s3.amazonaws.com/spec.ccfc.min/"; then
-    pass "s3.amazonaws.com is reachable (the firecracker guest kernel)."
-  else
-    fail "could not reach https://s3.amazonaws.com, where step 6 downloads the firecracker guest kernel from."
+  # The images host serves the worker binary. Skipped when --binary is given.
+  if [ -z "$BINARY" ]; then
+    if reachable "$IMAGES_URL/"; then
+      pass "images host is reachable ($IMAGES_URL): the worker binary is published there."
+    else
+      fail "could not reach $IMAGES_URL; the worker binary is downloaded from there unless --binary is given. Open egress to it, or pass --images-url if you mirror those artifacts elsewhere."
+    fi
   fi
 }
 
@@ -485,7 +445,7 @@ run_preflight() {
   check_linux
   check_arch
   check_systemd
-  check_kvm
+  check_bwrap
   check_cgroups
   check_commands
   check_distro
@@ -500,7 +460,7 @@ run_preflight() {
 do_check() {
   REPORT_ONLY=1
   if [ "$(id -u)" -ne 0 ]; then
-    advise "not running as root; some checks (notably /dev/kvm read/write access) cannot be fully verified."
+    advise "not running as root; the transient-unit cgroup check cannot be fully verified."
   fi
   # So the egress checks look for already-provisioned artifacts where they would really
   # be, on a machine whose brevi account predates this installer.
@@ -555,16 +515,7 @@ do_uninstall() {
   fi
   info "Removed systemd units."
 
-  if [ -x "$LIB_DIR/setup-network.sh" ]; then
-    info "Removing tap devices, iptables rules and /etc/sysctl.d/99-brevi.conf, and restoring net.ipv4.ip_forward"
-    if ! "$LIB_DIR/setup-network.sh" --clean; then
-      err "setup-network.sh --clean exited non-zero (see above); network state may remain. Inspect it with: ip -o link show | grep brevi-tap; iptables -t nat -S POSTROUTING; iptables -S FORWARD"
-      LEFTOVERS=$((LEFTOVERS + 1))
-    fi
-  elif network_state_remains; then
-    err "$LIB_DIR/setup-network.sh is missing, so the tap devices, iptables rules and /etc/sysctl.d/99-brevi.conf this host still carries could not be removed. Fetch the script and run it: curl -fsSL $BASE_URL/setup-network.sh -o /tmp/setup-network.sh && sudo bash /tmp/setup-network.sh --clean"
-    LEFTOVERS=$((LEFTOVERS + 1))
-  fi
+  clean_legacy_network
 
   for path in "$BIN_PATH" "$LIB_DIR" "$ETC_DIR"; do
     if [ -e "$path" ]; then
@@ -576,13 +527,13 @@ do_uninstall() {
   if [ "$OWNED_USER" = "1" ]; then
     if [ -e "$SERVICE_HOME" ]; then
       rm -rf "$SERVICE_HOME"
-      info "Removed $SERVICE_HOME (config, enrollment, images, rootfs cache, workspaces)."
+      info "Removed $SERVICE_HOME (config, enrollment, workspaces)."
     fi
   elif [ -e "$SERVICE_HOME/.brevi" ]; then
     # The account is not this installer's to empty out, so only brevi's own directory
     # inside its home goes, not the home itself.
     rm -rf "$SERVICE_HOME/.brevi"
-    info "Removed $SERVICE_HOME/.brevi (config, enrollment, images, rootfs cache, workspaces); left the rest of $SERVICE_HOME alone."
+    info "Removed $SERVICE_HOME/.brevi (config, enrollment, workspaces); left the rest of $SERVICE_HOME alone."
   fi
 
   if id -u "$SERVICE_USER" >/dev/null 2>&1; then
@@ -617,7 +568,35 @@ do_uninstall() {
   info "brevi worker is fully removed from this host."
 }
 
-# True when this host still carries network state only setup-network.sh --clean removes.
+# Best-effort removal of leftover Firecracker tap/NAT state from an older install.
+# Never fetches setup-network.sh; uses the local copy if this host still has one.
+clean_legacy_network() {
+  if [ -x "$LIB_DIR/setup-network.sh" ]; then
+    info "Removing leftover Firecracker tap devices and NAT rules"
+    if ! "$LIB_DIR/setup-network.sh" --clean; then
+      err "setup-network.sh --clean exited non-zero (see above); network state may remain. Inspect it with: ip -o link show | grep brevi-tap"
+      LEFTOVERS=$((LEFTOVERS + 1))
+    fi
+    return
+  fi
+  if ! network_state_remains; then
+    return
+  fi
+  info "Removing leftover Firecracker tap devices (best effort; setup-network.sh is not present)"
+  if command -v ip >/dev/null 2>&1; then
+    ip -o link show 2>/dev/null | awk -F': ' '/brevi-tap/{print $2}' | while read -r iface; do
+      iface=${iface%%@*}
+      [ -n "$iface" ] || continue
+      ip link delete "$iface" 2>/dev/null || true
+    done
+  fi
+  rm -f /var/lib/brevi-network.state /etc/sysctl.d/99-brevi.conf
+  if network_state_remains; then
+    advise "leftover tap/NAT state may remain. Inspect it with: ip -o link show | grep brevi-tap"
+  fi
+}
+
+# True when this host still carries network state from an older Firecracker install.
 network_state_remains() {
   [ -e /var/lib/brevi-network.state ] && return 0
   [ -e /etc/sysctl.d/99-brevi.conf ] && return 0
@@ -710,17 +689,6 @@ create_service_user() {
 
   mkdir -p "$SERVICE_HOME"
   chown "$SERVICE_USER:$SERVICE_GROUP" "$SERVICE_HOME"
-
-  if [ -e /dev/kvm ]; then
-    KVM_GROUP=$(stat -c %G /dev/kvm 2>/dev/null || printf 'kvm')
-    if ! id -nG "$SERVICE_USER" | tr ' ' '\n' | grep -qx "$KVM_GROUP"; then
-      usermod -aG "$KVM_GROUP" "$SERVICE_USER"
-      info "Added $SERVICE_USER to group $KVM_GROUP (owns /dev/kvm)"
-    fi
-  else
-    KVM_GROUP="kvm"
-    advise "/dev/kvm not found; the preflight above should already have caught this. Defaulting the service's supplementary group to \"kvm\"."
-  fi
 
   mkdir -p "$ETC_DIR" "$LIB_DIR"
 }
@@ -827,49 +795,12 @@ ensure_host() {
   validate_host "$HOST"
 }
 
-install_network_script() {
-  repo_script=""
-  if [ -f "$0" ]; then
-    self_dir=$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd) || self_dir=""
-    if [ -n "$self_dir" ] && [ -f "$self_dir/../../sandbox/scripts/setup-network.sh" ]; then
-      repo_script="$self_dir/../../sandbox/scripts/setup-network.sh"
-    fi
-  fi
-  if [ -n "$repo_script" ]; then
-    info "Using this checkout's setup-network.sh ($repo_script)"
-    install -m 0755 "$repo_script" "$LIB_DIR/setup-network.sh"
-  else
-    url="$BASE_URL/setup-network.sh"
-    info "Fetching setup-network.sh from $url"
-    curl -fsSL --max-time 20 -o "$LIB_DIR/setup-network.sh" "$url" || die "could not fetch $url"
-    chmod 0755 "$LIB_DIR/setup-network.sh"
-  fi
-}
-
 install_wrapper_scripts() {
-  # The units carry EnvironmentFile=, so systemd (which parses those files as data, and
-  # is the only thing that reads them) hands the settings to these wrappers through the
+  # The unit carries EnvironmentFile=, so systemd (which parses that file as data, and
+  # is the only thing that reads it) hands the settings to this wrapper through the
   # environment. Changing a setting rewrites only the env file, never a unit, so a
-  # settings change needs no daemon-reload; the units themselves change at most when
+  # settings change needs no daemon-reload; the unit itself changes at most when
   # this script does.
-  cat >"$LIB_DIR/network-start.sh" <<'EOF'
-#!/bin/sh
-# Wrapper exec'd by brevi-network.service. BREVI_TAPS comes from
-# /etc/brevi/network.env via the unit's EnvironmentFile=. That file holds the tap
-# count and nothing else: this service runs as root, so it is never handed a
-# setting it has no use for, and it sources nothing.
-set -eu
-taps="${BREVI_TAPS:-16}"
-case "$taps" in
-  '' | *[!0-9]*)
-    echo "BREVI_TAPS='$taps' is not a positive integer; falling back to 16" >&2
-    taps=16
-    ;;
-esac
-exec /usr/local/lib/brevi/setup-network.sh --taps "$taps" --user brevi
-EOF
-  chmod 0755 "$LIB_DIR/network-start.sh"
-
   cat >"$LIB_DIR/worker-start.sh" <<'EOF'
 #!/bin/sh
 # Wrapper exec'd by brevi-worker.service. BREVI_HOST, BREVI_WORKER_NAME,
@@ -892,13 +823,11 @@ EOF
   chmod 0755 "$LIB_DIR/worker-start.sh"
 }
 
-# Writes /etc/brevi/worker.env and /etc/brevi/network.env, keeping whatever is already
-# there for any setting not given on this run, so re-running the installer to upgrade
-# never loses config.
+# Writes /etc/brevi/worker.env, keeping whatever is already there for any setting
+# not given on this run, so re-running the installer to upgrade never loses config.
 write_env_files() {
   existing_name=$(env_file_value "$ENV_FILE" BREVI_WORKER_NAME)
   existing_concurrency=$(env_file_value "$ENV_FILE" BREVI_CONCURRENCY)
-  existing_taps=$(env_file_value "$NETWORK_ENV_FILE" BREVI_TAPS)
   # Carried over only when an earlier run never got as far as confirming the worker
   # connected: a redeemed token is deleted from this file the moment it is confirmed.
   existing_token=$(env_file_value "$ENV_FILE" BREVI_TOKEN)
@@ -906,16 +835,7 @@ write_env_files() {
   final_name="${NAME:-$existing_name}"
   final_concurrency="${CONCURRENCY:-$existing_concurrency}"
   final_token="${TOKEN:-$existing_token}"
-  if [ -n "$TAPS" ]; then
-    final_taps="$TAPS"
-  elif [ -n "$existing_taps" ]; then
-    final_taps="$existing_taps"
-  else
-    final_taps=16
-  fi
 
-  # Values carried over from an earlier install are validated again rather than trusted:
-  # this file is the input to two services, one of them privileged.
   validate_host "$HOST"
   if [ -n "$final_name" ]; then
     require_plain_value "--name" "$final_name" '^[A-Za-z0-9._@:/+ -]+$' \
@@ -928,20 +848,8 @@ write_env_files() {
     require_plain_value "--token" "$final_token" '^[A-Za-z0-9._~+/=-]+$' \
       "A pairing token is the opaque string the host's Workers page minted; copy it verbatim."
   fi
-  require_positive_int "--taps" "$final_taps"
-  if [ -n "$final_concurrency" ] && [ "$final_taps" -lt "$final_concurrency" ]; then
-    final_taps="$final_concurrency"
-  fi
-  # `brevi setup`'s own preflight (step 6) checks for max(16, sandbox.concurrency) tap
-  # devices and fails the install if it finds fewer, so a smaller pool is not a smaller
-  # install, it is a broken one. Raised rather than rejected: --taps asks for capacity,
-  # and the floor costs nothing but a few unused devices.
-  if [ "$final_taps" -lt 16 ]; then
-    warnc "--taps $final_taps is below the 16 devices brevi setup checks for; provisioning 16 instead."
-    final_taps=16
-  fi
 
-  info "Writing $ENV_FILE and $NETWORK_ENV_FILE"
+  info "Writing $ENV_FILE"
   # Restored right after the redirection: leaving the umask narrowed would
   # silently change the mode of every file written later in the install.
   previous_umask=$(umask)
@@ -952,43 +860,21 @@ write_env_files() {
     printf 'BREVI_CONCURRENCY=%s\n' "$final_concurrency"
     [ -z "$final_token" ] || printf 'BREVI_TOKEN=%s\n' "$final_token"
   } >"$ENV_FILE"
-  printf 'BREVI_TAPS=%s\n' "$final_taps" >"$NETWORK_ENV_FILE"
   umask "$previous_umask"
   chmod 0640 "$ENV_FILE"
   chown "root:$SERVICE_GROUP" "$ENV_FILE"
-  # No secrets and a root-only consumer, so this one stays root-owned and world-readable.
-  chmod 0644 "$NETWORK_ENV_FILE"
-  chown root:root "$NETWORK_ENV_FILE"
 }
 
 write_units() {
-  info "Writing systemd units"
-  cat >"$NETWORK_UNIT" <<EOF
-[Unit]
-Description=brevi Firecracker network setup (tap pool + NAT)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-EnvironmentFile=$NETWORK_ENV_FILE
-ExecStart=$NETWORK_START
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
+  info "Writing systemd unit"
   cat >"$WORKER_UNIT" <<EOF
 [Unit]
 Description=brevi worker
-After=network-online.target brevi-network.service
-Requires=brevi-network.service
+After=network-online.target
 
 [Service]
 User=$SERVICE_USER
 Group=$SERVICE_GROUP
-SupplementaryGroups=$KVM_GROUP
 EnvironmentFile=$ENV_FILE
 ExecStart=$WORKER_START
 Restart=on-failure
@@ -997,10 +883,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=brevi-worker
 
-# No AmbientCapabilities are granted, deliberately: firecracker only ever needs
-# read/write on /dev/kvm (granted via SupplementaryGroups above) and on tap devices
-# that brevi-network.service has already created and chowned to $SERVICE_USER, so
-# this daemon needs no ambient capability at all.
+# No AmbientCapabilities are granted: bwrap uses unprivileged user namespaces.
 NoNewPrivileges=yes
 ProtectSystem=full
 ProtectControlGroups=yes
@@ -1012,20 +895,27 @@ WantedBy=multi-user.target
 EOF
 }
 
-configure_network_and_units() {
-  step 5 "Network script, wrapper scripts, config and units"
-  install_network_script
+# Drop leftover Firecracker network units from an earlier install so an upgrade
+# does not keep a oneshot that fetches a deleted script.
+retire_legacy_network_unit() {
+  if [ ! -f "$NETWORK_UNIT" ] && [ ! -f "$NETWORK_START" ] && [ ! -f "$NETWORK_ENV_FILE" ]; then
+    return
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop brevi-network.service >/dev/null 2>&1 || true
+    systemctl disable brevi-network.service >/dev/null 2>&1 || true
+  fi
+  rm -f "$NETWORK_UNIT" "$NETWORK_START" "$NETWORK_ENV_FILE" "$LIB_DIR/setup-network.sh"
+  info "Removed leftover brevi-network.service from an earlier Firecracker install."
+}
+
+configure_units() {
+  step 5 "Wrapper scripts, config and units"
   install_wrapper_scripts
   write_env_files
   write_units
+  retire_legacy_network_unit
   systemctl daemon-reload
-  systemctl enable brevi-network.service
-  # restart, not `enable --now`: on a re-run the unit is already active, and
-  # RemainAfterExit means `start` would be a no-op. Only a restart re-runs ExecStart,
-  # which is what picks up a new tap count, a new egress interface, or the newly
-  # installed setup-network.sh.
-  systemctl restart brevi-network.service
-  info "brevi-network.service enabled and (re)run: the tap pool and NAT are in place and survive a reboot"
 }
 
 # Safely quotes argv into a single string, for `su -c` which only takes one.
@@ -1046,15 +936,23 @@ run_as_service_user() {
   fi
 }
 
-provision_images() {
-  step 6 "Provisioning firecracker images (kernel, rootfs, ssh key) as $SERVICE_USER"
-  # --set-provider writes sandbox.provider = "firecracker" into the service user's own
-  # config: the machine exists to boot microVMs, and a worker reads its provider from
-  # that config alone (never from the host), so leaving the default would enroll a
-  # worker that runs every dispatched run unsandboxed on this box.
-  if ! run_as_service_user "$BIN_PATH" setup --yes --skip-network --set-provider; then
-    die "'brevi setup --yes --skip-network --set-provider' failed (output above); fix the issue and re-run the installer."
+install_bubblewrap() {
+  step 6 "Installing bubblewrap"
+  if ! command -v bwrap >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      info "Running: apt-get update && apt-get install -y bubblewrap"
+      apt-get update >&2 && apt-get install -y bubblewrap >&2 || die "apt-get install bubblewrap failed"
+    else
+      die "bwrap is not on PATH and apt-get is not available; install bubblewrap yourself."
+    fi
+  else
+    info "bwrap is already on PATH ($(command -v bwrap))"
   fi
+  bwrap_bin=$(command -v bwrap)
+  if ! run_as_service_user "$bwrap_bin" --unshare-user --unshare-pid true; then
+    die "bwrap cannot create unprivileged user namespaces as $SERVICE_USER. Enable kernel.unprivileged_userns_clone=1 (and check AppArmor)."
+  fi
+  info "bwrap works as $SERVICE_USER"
 }
 
 # True when this machine already holds a durable credential for $HOST from an earlier
@@ -1210,7 +1108,7 @@ do_install() {
   # than halfway through, so the egress check probes the host this worker will dial and a
   # blocked one is reported before the machine has been touched. The token prompt sits
   # here for the same reason, and because an interactive install should ask for
-  # everything it needs before the multi-GB image download, not after it.
+  # everything it needs before the bubblewrap install, not after it.
   ensure_host
   ensure_token
 
@@ -1230,8 +1128,8 @@ do_install() {
   # The units and the env file (the pairing token included) are written before
   # provisioning: enrollment itself happens on the daemon's first connection, which
   # is the last step, so everything it needs has to be on disk before then.
-  configure_network_and_units
-  provision_images
+  configure_units
+  install_bubblewrap
   start_worker_and_confirm
   print_summary
 }
@@ -1244,7 +1142,7 @@ usage() {
   cat <<EOF
 Usage: install.sh [options]
 
-Turns a stock KVM-enabled Ubuntu/Debian server into a connected brevi worker.
+Turns a stock Ubuntu/Debian server into a connected brevi worker (bwrap sandboxes).
 
   curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- --host https://your-host:4400 --token <pairing token>
 
@@ -1255,13 +1153,11 @@ Pairing:
 Worker settings:
   --name <name>          name shown on the host's dashboard (default: this machine's hostname)
   --concurrency <n>      dispatched runs to execute at once (1 to $MAX_CONCURRENCY)
-  --taps <n>             tap devices to provision (16 is both the default and the floor,
-                         raised further to match --concurrency)
 
 Install source:
   --version <v>           exact @brevi/cli version to install (default: latest on npm)
   --binary <path>         install this local brevi executable instead of downloading one
-  --base-url <url>        where setup-network.sh is fetched from (default https://brevi.dev)
+  --base-url <url>        used in printed install/uninstall commands (default https://brevi.dev)
   --images-url <url>      where the worker binary is published (default https://images.brevi.dev)
 
 Modes:
@@ -1272,7 +1168,7 @@ Modes:
   --yes                    never prompt (fail instead when a value is missing)
   -h, --help               show this help
 
-Safe to re-run: re-running with the same or new flags upgrades the binary and images in
+Safe to re-run: re-running with the same or new flags upgrades the binary in
 place and keeps any setting not passed again.
 EOF
 }
@@ -1308,10 +1204,7 @@ parse_args() {
         ;;
       --taps)
         [ $# -ge 2 ] || die "--taps requires a value"
-        TAPS="$2"
-        case "$TAPS" in
-          '' | *[!0-9]*) die "--taps must be a positive integer, got '$TAPS'" ;;
-        esac
+        warnc "--taps is ignored: bwrap workers do not use tap devices."
         shift 2
         ;;
       --version)

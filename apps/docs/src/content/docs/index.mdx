@@ -27,7 +27,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 You connect your machine to Linear and GitHub, then add the **`brevi`** label to a ticket and assign it to yourself. brevi polls Linear, picks the ticket up, and runs a coding agent against a checkout of the mapped repository inside a sandbox. A branch `brevi/<ticket-id>` is force-pushed and a pull request is opened; the demo the agent captured (screenshots or a recording) stays with the run in the dashboard.
 
-Everything runs locally. All state lives under `~/.brevi/`: config, run history, artifacts, and VM images.
+Everything runs locally. All state lives under `~/.brevi/`: config, run history, artifacts, and workspaces.
 
 <CardGrid>
 	<Card title="One-click connections" icon="approve-check">
@@ -36,8 +36,8 @@ Everything runs locally. All state lives under `~/.brevi/`: config, run history,
 		keys, no environment variables.
 	</Card>
 	<Card title="Real isolation" icon="seti:shell">
-		On Linux with KVM each run boots its own Firecracker microVM with a private
-		network. Elsewhere a process sandbox keeps development moving.
+		On Linux each run executes inside a bubblewrap sandbox. A host that
+		cannot run bwrap schedules work onto a Linux worker.
 	</Card>
 	<Card title="Demos, not just diffs" icon="laptop">
 		Runs are required to produce evidence under `.brevi/demo/` (real screenshots
@@ -54,7 +54,7 @@ Everything runs locally. All state lives under `~/.brevi/`: config, run history,
 <LinkCard
 	title="Getting started"
 	href="/getting-started/"
-	description="Install brevi from the repo, pick a sandbox provider, connect your accounts, and run your first ticket."
+	description="Install brevi, connect your accounts, and run your first ticket."
 />
 <LinkCard
 	title="Download"

@@ -4,7 +4,7 @@ import { realpath } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BREVI_HOME, LOGS_DIR, type HostExecution } from "@brevi/shared";
-import { loadMacVmSettings } from "../mac/state.js";
+import { bwrapAvailable } from "@brevi/sandbox";
 import { isStandaloneBinary } from "./worker-binary.js";
 
 /**
@@ -32,22 +32,17 @@ const STOP_GRACEFUL_TIMEOUT_MS = 35_000;
 // -- host execution ---------------------------------------------------------
 
 /** Pure form of resolveHostExecution's decision, testable without the filesystem or process.platform. */
-export function decideHostExecution(platform: NodeJS.Platform, macVmInstalled: boolean): HostExecution {
-  if (platform === "linux") return { kind: "local-worker" };
-  if (platform === "darwin") {
-    return macVmInstalled ? { kind: "mac-vm" } : { kind: "none", reason: "macos-vm-not-installed" };
+export function decideHostExecution(platform: NodeJS.Platform, canBwrap: boolean): HostExecution {
+  if (platform === "linux") {
+    return canBwrap ? { kind: "local-worker" } : { kind: "none", reason: "bwrap-unavailable" };
   }
   return { kind: "none", reason: "unsupported-platform" };
 }
 
-/**
- * What this machine can execute runs through. "Installed" mirrors `brevi mac
- * status`/`uninstall`: mac-vm.json exists and parses, whether or not the VM
- * is running right now.
- */
+/** What this machine can execute runs through: a local bwrap worker, or nothing. */
 export async function resolveHostExecution(): Promise<HostExecution> {
-  const macVmInstalled = process.platform === "darwin" ? (await loadMacVmSettings()) !== undefined : false;
-  return decideHostExecution(process.platform, macVmInstalled);
+  const canBwrap = process.platform === "linux" ? await bwrapAvailable() : false;
+  return decideHostExecution(process.platform, canBwrap);
 }
 
 // -- crash backoff ------------------------------------------------------

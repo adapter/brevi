@@ -98,7 +98,7 @@ export function buildImplementationPrompt(
       : "`.brevi/summary.md`: a pull-request-ready description of the change covering what changed and why, how you verified it, and anything reviewers should pay attention to.";
 
   const playwrightNote =
-    "A Chromium browser for playwright is already provisioned: `PLAYWRIGHT_BROWSERS_PATH` points at a shared browser cache, so do not reinstall it per run. Only if launching fails, run `npx playwright install chromium` once; it installs into that shared cache.";
+    "A Chromium browser for playwright may already be at `PLAYWRIGHT_BROWSERS_PATH` (a shared, read-only cache). If launching fails, install into `/tmp/ms-playwright` and set `PLAYWRIGHT_BROWSERS_PATH=/tmp/ms-playwright` for that session. Do not write into the shared cache. Chromium inside the sandbox needs `--no-sandbox` (`PLAYWRIGHT_CHROMIUM_SANDBOX` is already 0).";
   const demoInstructions = repo.devCommand
     ? [
         `- This repo has a dev server. Start it with \`${repo.devCommand}\`${

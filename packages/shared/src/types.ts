@@ -70,7 +70,8 @@ export interface RunAttempt {
   limit?: LimitInfo;
 }
 
-export type SandboxProviderName = "firecracker" | "process";
+/** Active sandboxes are always bwrap. Historical run records may still say firecracker or process. */
+export type SandboxProviderName = "bwrap" | "firecracker" | "process";
 
 export interface ArtifactRef {
   /** File name within the run's artifact directory. */

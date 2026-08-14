@@ -15,7 +15,6 @@ import {
   type AttachExitMessage,
   type BreviConfig,
   type DispatchPrompts,
-  type FirecrackerVmSize,
   type FleetWorkerDemand,
   type HostMessage,
   type RegisterMessage,
@@ -198,8 +197,6 @@ export interface DispatchRequest {
   /** The full live config: per-run credentials travel with the dispatch, not just what the run needs. */
   config: BreviConfig;
   prompts: DispatchPrompts;
-  /** Firecracker size preset this run asked for; only workers that can boot it qualify. */
-  vmSize?: FirecrackerVmSize;
 }
 
 /** Where a dispatch landed, or why nothing could take it (surfaced on the run card as the queue reason). */
@@ -549,8 +546,8 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       };
       if (record.local) view.local = true;
       // What the worker reported on this connection beats what it reported on
-      // its last one: a worker that gained /dev/kvm, or was restarted with a
-      // different concurrency, says so at register time.
+      // its last one: a worker restarted with a different concurrency says so
+      // at register time.
       const capabilities = live?.capabilities ?? record.capabilities;
       if (capabilities) view.capabilities = capabilities;
       if (live) view.connectedAt = live.connectedAt;
@@ -731,7 +728,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
    * dispatching it a second time while the first worker was still on it.
    */
   dispatch(payload: DispatchRequest): DispatchOutcome {
-    const placement = this.#placeWorker(payload.vmSize);
+    const placement = this.#placeWorker();
     if ("reason" in placement)
       return { placed: false, reason: placement.reason };
     const target = placement.worker;
@@ -780,7 +777,6 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
             repo: payload.repo,
             config: payload.config,
             prompts: payload.prompts,
-            vmSize: payload.vmSize,
           });
         },
         (error: unknown) => {
@@ -1026,21 +1022,15 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   /**
    * Choose where a dispatch lands, or say why nothing can take it right now.
    * In order: no worker connected at all; every connected worker drained out
-   * of rotation; every remaining worker at capacity; (when the run asked for
-   * a Firecracker size) no connected Firecracker worker advertises it, though
-   * a worker on another provider is still allowed through, since it is the
-   * unisolated fallback the process provider always was and cannot honor a
-   * size at all. What's left is ranked isolation first (Firecracker before
-   * process, as the ticket asks), then most free capacity, then worker id, so
-   * the choice is stable and testable, and the first one wins.
+   * of rotation; every remaining worker at capacity. What's left is ranked
+   * by most free capacity, then worker id, so the choice is stable and
+   * testable, and the first one wins.
    *
    * Draining workers never appear among the candidates: they keep the leases
    * they already hold and report them normally, they are simply never handed
    * anything new (see #isDraining).
    */
-  #placeWorker(
-    vmSize: FirecrackerVmSize | undefined,
-  ): { worker: ConnectedWorker } | { reason: string } {
+  #placeWorker(): { worker: ConnectedWorker } | { reason: string } {
     if (this.#workers.size === 0) return { reason: "no workers are connected" };
 
     const available = [...this.#workers.values()].filter(
@@ -1068,20 +1058,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       return { reason };
     }
 
-    let candidates = withCapacity;
-    if (vmSize) {
-      candidates = withCapacity.filter(
-        (worker) =>
-          worker.capabilities.provider !== "firecracker" ||
-          worker.capabilities.vmSizes.includes(vmSize),
-      );
-      if (candidates.length === 0)
-        return { reason: `no connected worker can boot a ${vmSize} VM` };
-    }
-
-    const ranked = [...candidates].sort((a, b) => {
-      if (a.capabilities.provider !== b.capabilities.provider)
-        return a.capabilities.provider === "firecracker" ? -1 : 1;
+    const ranked = [...withCapacity].sort((a, b) => {
       const freeDiff = this.#freeCapacity(b) - this.#freeCapacity(a);
       return freeDiff !== 0 ? freeDiff : a.id.localeCompare(b.id);
     });

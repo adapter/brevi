@@ -89,7 +89,6 @@ export type ConfigSection =
   | "connectors"
   | "repositories"
   | "agent"
-  | "sandbox"
   | "workers"
   | "memory"
   | "orchestrator"
@@ -101,7 +100,7 @@ export type Page = "home" | "setup" | `config:${ConfigSection}`;
 function pageFromPath(pathname: string): Page {
   if (/^\/setup\/?$/.test(pathname)) return "setup";
   const match =
-    /^\/config(?:\/(connectors|repositories|agent|sandbox|workers|memory|orchestrator|server))?\/?$/.exec(
+    /^\/config(?:\/(connectors|repositories|agent|workers|memory|orchestrator|server))?\/?$/.exec(
       pathname,
     );
   if (!match) return "home";

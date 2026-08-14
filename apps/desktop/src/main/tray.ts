@@ -74,7 +74,6 @@ export class FleetTray {
       { label: fleetLine(view.counts), enabled: false },
       { label: workerLine(view.supervisor), enabled: false },
     ];
-    if (view.health) header.push({ label: `Sandbox: ${view.health.sandboxProvider}`, enabled: false });
     if (!view.connected) header.push({ label: "Dashboard: offline", enabled: false });
     const update = updateLine(view.update);
     if (update) header.push({ label: update, enabled: false });

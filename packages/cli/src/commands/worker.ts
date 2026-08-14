@@ -1,10 +1,7 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chown, readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
-import { loadConfig } from "@brevi/orchestrator";
-import { installRootfs, locateRootfs, resolveBinary } from "@brevi/sandbox";
-import { CONFIG_PATH, firecrackerConfigSchema, WORKER_MAX_CONCURRENCY, type FirecrackerConfig } from "@brevi/shared";
+import { resolveBinary } from "@brevi/sandbox";
+import { WORKER_MAX_CONCURRENCY } from "@brevi/shared";
 import { enrollmentFor, runWorker } from "@brevi/worker";
 import { Option, type Command } from "commander";
 import pc from "picocolors";
@@ -14,8 +11,6 @@ import { readPackageVersion } from "../lib/version.js";
 import { installWorkerBinary, isStandaloneBinary } from "../lib/worker-binary.js";
 
 const SYSTEMD_UNIT_PATH = "/etc/systemd/system/brevi-worker.service";
-/** The system account the installer (packages/worker/scripts/install.sh) runs the daemon as. */
-const SERVICE_USER = "brevi";
 
 interface WorkerCommandOptions {
   host?: string;
@@ -132,7 +127,7 @@ export function registerWorkerCommand(program: Command): void {
   workerCommand
     .command("update")
     .description(
-      "Upgrade an installed worker's binary and its prebuilt rootfs image in place, without touching ~/.brevi/config.json or ~/.brevi/worker.json, so enrollment survives",
+      "Upgrade an installed worker's binary in place, without touching ~/.brevi/config.json or ~/.brevi/worker.json, so enrollment survives",
     )
     .option("--check", "only report whether a newer version exists, without installing")
     .option("--version <v>", "install this exact @brevi/cli version instead of the latest")
@@ -162,24 +157,17 @@ function parseConcurrency(raw: string): number {
 }
 
 /**
- * Upgrades an installed worker in place: the binary first, then the rootfs image
- * that release expects, then the service.
+ * Upgrades an installed worker in place: the binary first, then the service.
  *
- * The two halves deliberately run in two processes. Replacing the executable does
- * not replace the running one (rename repoints the directory entry; this process
- * keeps its own inode), so everything after the swap would otherwise be the OLD
- * release's code deciding what the NEW release needs. That is wrong the moment a
- * release changes the rootfs contract: the old manifest parser rejects the new
- * image's ROOTFS_VERSION and the update stops with the binary already replaced and
- * no matching image on disk. So once the binary lands, this process re-execs it
+ * The two halves run in two processes. Replacing the executable does not
+ * replace the running one, so once the binary lands this process re-execs it
  * with --resume-after-binary and does nothing further itself.
  */
 async function runWorkerUpdate(options: UpdateCommandOptions): Promise<void> {
   const current = readPackageVersion();
 
   // The re-exec: this process IS the newly installed release, so there is no
-  // version to resolve and no binary step to run, and the restart at the end is
-  // owed regardless of whether the rootfs needed installing too.
+  // version to resolve and no binary step to run.
   if (options.resumeAfterBinary) {
     await finishWorkerUpdate({ installedVersion: current, binaryChanged: true });
     return;
@@ -250,8 +238,8 @@ async function runWorkerUpdate(options: UpdateCommandOptions): Promise<void> {
       process.exit(1);
     }
 
-    // Everything left (which rootfs image this release wants, how to validate it,
-    // when to restart) is the new binary's business, so hand over to it.
+    // Everything left (when to restart the service) is the new binary's
+    // business, so hand over to it.
     process.exit(await resumeInNewBinary(targetPath, target));
   }
 
@@ -271,7 +259,7 @@ function resumeInNewBinary(targetPath: string, version: string): Promise<number>
     child.on("error", (err) => {
       console.error(pc.red(`✖ Could not run the installed binary ${targetPath}: ${errorMessage(err)}`));
       console.error(
-        pc.dim("  The binary is updated but its rootfs image is not; re-run `brevi worker update` to finish."),
+        pc.dim("  The binary is updated; re-run `brevi worker update` to finish the service restart."),
       );
       resolve(1);
     });
@@ -280,9 +268,8 @@ function resumeInNewBinary(targetPath: string, version: string): Promise<number>
 }
 
 /**
- * The half of the update that must run as the release being installed: resolve
- * the service user's paths, make sure that release's rootfs image is present,
- * and restart the daemon so it picks both up.
+ * The half of the update that must run as the release being installed:
+ * restart the daemon so it picks the new binary up.
  */
 async function finishWorkerUpdate({
   installedVersion,
@@ -291,98 +278,15 @@ async function finishWorkerUpdate({
   installedVersion: string;
   binaryChanged: boolean;
 }): Promise<void> {
-  const service = await resolveServiceContext();
-  if (service !== undefined) {
-    console.log(pc.dim(`  Acting on the ${SERVICE_USER} service user: ${service.configPath}, ${service.cacheDir}`));
-  }
-
-  const config = await loadConfig(service?.configPath).catch(() => undefined);
-  const firecracker: FirecrackerConfig = config?.sandbox.firecracker ?? firecrackerConfigSchema.parse({});
-
-  let rootfsChanged = false;
-  const located = await locateRootfs(firecracker, {
-    cliVersion: installedVersion,
-    cacheDir: service?.cacheDir,
-    defaultRootfsPath: service?.defaultRootfsPath,
-  });
-  if (located.path !== undefined) {
-    console.log(pc.green(`✔ rootfs image for brevi ${installedVersion} is installed (${located.path})`));
-  } else if (firecracker.rootfs !== "") {
-    // A non-empty sandbox.firecracker.rootfs pins the image: locateRootfs checks that
-    // path and nothing else, and the daemon boots from it or not at all. Downloading a
-    // managed image here would satisfy nobody, since the cache is never consulted while
-    // that setting is set: the worker would still refuse to start, only after this
-    // command had reported success, restarted it, and spent a multi-gigabyte download
-    // on a file nothing reads. An operator who pinned an image owns replacing it, so
-    // this refuses rather than quietly overriding the config it was pointed at.
-    console.error(
-      pc.red(`✖ sandbox.firecracker.rootfs pins ${firecracker.rootfs}, which brevi ${installedVersion} cannot use:`),
-    );
-    for (const problem of located.problems) console.error(pc.red(`  - ${problem}`));
-    console.error(pc.dim(`\n  Nothing was downloaded and the service was not restarted. Either:`));
-    console.error(pc.dim(`  - rebuild or replace that image for brevi ${installedVersion}, or`));
-    console.error(
-      pc.dim(
-        `  - clear sandbox.firecracker.rootfs in ${service?.configPath ?? CONFIG_PATH} to let brevi manage the image, which lets this command download the one this release ships with,`,
-      ),
-    );
-    console.error(pc.dim("  then run `brevi worker update` again."));
-    if (binaryChanged) {
-      console.error(
-        pc.dim(`\n  The binary on disk is already brevi ${installedVersion}; the running daemon keeps its old one until`),
-      );
-      console.error(pc.dim("  the service is restarted, so it stays up on the image it booted with in the meantime."));
-    }
-    process.exit(1);
-  } else {
-    console.log(`Downloading rootfs image for brevi ${installedVersion}...`);
-    let lastMib = -1;
-    try {
-      const path = await installRootfs({
-        cliVersion: installedVersion,
-        baseUrl: firecracker.rootfsBaseUrl,
-        cacheDir: service?.cacheDir,
-        onProgress: (bytes, totalBytes) => {
-          const mib = Math.floor(bytes / (1024 * 1024));
-          if (mib !== lastMib) {
-            lastMib = mib;
-            const total = totalBytes !== undefined ? ` of ${Math.floor(totalBytes / (1024 * 1024))}` : "";
-            console.log(pc.dim(`  ...${mib}${total} MiB`));
-          }
-        },
-      });
-      rootfsChanged = true;
-      console.log(pc.green(`✔ Installed rootfs image to ${path}`));
-
-      // installRootfs just ran as root; chown the version directory it wrote (the image
-      // plus its .manifest.json sidecar) to the service user so the daemon, which runs as
-      // that user, can still verify, prune, and eventually replace it.
-      if (service !== undefined) {
-        const versionDir = join(service.cacheDir, installedVersion);
-        try {
-          await chownRecursive(versionDir, service.uid, service.gid);
-        } catch (err) {
-          console.error(pc.red(`✖ Could not chown ${versionDir} to ${SERVICE_USER}: ${errorMessage(err)}`));
-        }
-      }
-    } catch (err) {
-      console.error(pc.red(`✖ Could not install the rootfs image: ${errorMessage(err)}`));
-      process.exit(1);
-    }
-  }
-
-  if (binaryChanged || rootfsChanged) {
-    await restartServiceIfPresent();
-  }
+  if (binaryChanged) await restartServiceIfPresent();
 
   console.log(pc.bold("\nSummary:"));
   console.log(`  binary: ${binaryChanged ? `updated to ${pc.bold(installedVersion)}` : "unchanged"}`);
-  console.log(`  rootfs: ${rootfsChanged ? `installed for ${pc.bold(installedVersion)}` : "unchanged"}`);
 }
 
 /**
  * Restarts brevi-worker.service when this machine runs one, as root; otherwise prints the
- * command to run. A restart that fails leaves the daemon running the old binary/image
+ * command to run. A restart that fails leaves the daemon running the old binary
  * despite the update having downloaded the new one, so that case exits the process instead
  * of returning: the caller's success summary must never print over it.
  */
@@ -416,80 +320,3 @@ function runSystemctl(args: string[]): Promise<number> {
   });
 }
 
-interface ServiceIdentity {
-  home: string;
-  uid: number;
-  gid: number;
-}
-
-/**
- * Looks up the service account's uid, gid, and home via `getent passwd`, so a root run can
- * resolve its real ~/.brevi instead of guessing at /var/lib/brevi (an install detail of
- * packages/worker/scripts/install.sh, not something this command should hardcode).
- * Undefined when the account doesn't exist or getent isn't available.
- */
-function resolveServiceIdentity(): Promise<ServiceIdentity | undefined> {
-  return new Promise((resolve) => {
-    execFile("getent", ["passwd", SERVICE_USER], { timeout: 10_000 }, (err, stdout) => {
-      if (err) {
-        resolve(undefined);
-        return;
-      }
-      // name:passwd:uid:gid:gecos:home:shell
-      const fields = stdout.trim().split(":");
-      const uid = Number(fields[2]);
-      const gid = Number(fields[3]);
-      const home = fields[5];
-      resolve(Number.isInteger(uid) && Number.isInteger(gid) && home ? { home, uid, gid } : undefined);
-    });
-  });
-}
-
-interface ServiceContext {
-  configPath: string;
-  cacheDir: string;
-  defaultRootfsPath: string;
-  uid: number;
-  gid: number;
-}
-
-/**
- * `sudo brevi worker update` runs as root, but brevi-worker.service runs as the `brevi`
- * service user with its own ~/.brevi (typically /var/lib/brevi/.brevi). Left alone, a root
- * run would read root's own config and cache the rootfs under root's home: a directory the
- * daemon never looks at and the installer's uninstall path never removes. Detects that
- * situation (the unit is installed and we are root) and resolves the service user's paths
- * to act on instead. Returns undefined for the ordinary case, a standalone binary a normal
- * user updates for themselves, which keeps using its own paths exactly as before.
- */
-async function resolveServiceContext(): Promise<ServiceContext | undefined> {
-  if (!existsSync(SYSTEMD_UNIT_PATH)) return undefined;
-  if (process.getuid?.() !== 0) return undefined;
-
-  const identity = await resolveServiceIdentity();
-  if (identity === undefined) {
-    console.log(
-      pc.yellow(
-        `! brevi-worker.service is installed, but could not resolve the "${SERVICE_USER}" user via getent; using this process's own paths instead.`,
-      ),
-    );
-    return undefined;
-  }
-
-  const breviHome = join(identity.home, ".brevi");
-  return {
-    configPath: join(breviHome, "config.json"),
-    cacheDir: join(breviHome, "cache", "rootfs"),
-    defaultRootfsPath: join(breviHome, "images", "rootfs.ext4"),
-    uid: identity.uid,
-    gid: identity.gid,
-  };
-}
-
-/** Recursively chowns a path (file or directory tree) to uid:gid. */
-async function chownRecursive(path: string, uid: number, gid: number): Promise<void> {
-  await chown(path, uid, gid);
-  const info = await stat(path);
-  if (!info.isDirectory()) return;
-  await Promise.all((await readdir(path)).map((entry) => chownRecursive(join(path, entry), uid, gid)));
-}

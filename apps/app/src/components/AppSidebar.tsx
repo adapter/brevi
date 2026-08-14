@@ -234,22 +234,17 @@ function QueueOnlyNotice({
   reason,
   onOpenWorkers,
 }: {
-  reason: "macos-vm-not-installed" | "unsupported-platform";
+  reason: "bwrap-unavailable" | "unsupported-platform";
   onOpenWorkers: () => void;
 }) {
   return (
     <div className="mx-1 mb-2 rounded-[5px] border border-haze-700/50 bg-haze-600/10 p-3">
       <p className="text-[12px] leading-relaxed text-haze-400">
-        This machine can&apos;t run agents itself. Queued runs will wait for a worker.{" "}
-        {reason === "macos-vm-not-installed" ? (
-          <>
-            Set up the macOS worker (
-            <code className="font-mono text-[11px]">brevi mac install</code>) or enroll another
-            machine from the{" "}
-          </>
-        ) : (
-          "Enroll another machine from the "
-        )}
+        This machine can&apos;t run agents itself. Queued runs will wait for a Linux worker with
+        bubblewrap.{" "}
+        {reason === "bwrap-unavailable"
+          ? "Install bubblewrap (brevi setup) or enroll another machine from the "
+          : "Enroll another machine from the "}
         <Button
           type="button"
           variant="link"

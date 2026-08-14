@@ -189,7 +189,9 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
     // from a new checkout of the PR branch.
     const retainedUntil = run.sandbox.retainedUntil;
     const rehydratable =
-      retainedUntil !== undefined && Date.parse(retainedUntil) > Date.now() && provider.name === run.sandbox.provider;
+      retainedUntil !== undefined &&
+      Date.parse(retainedUntil) > Date.now() &&
+      (run.sandbox.provider === undefined || run.sandbox.provider === "bwrap");
     if (rehydratable) {
       try {
         sandbox = await provider.rehydrate({ id: run.id, env: agentEnv });
@@ -234,8 +236,8 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
         // with an explicit `undefined` is how a sandbox patch clears it (see
         // RunReporter's toRunPatch, which turns that into the wire's null).
         await store.update(run.id, { sandbox: { id: undefined, retainedUntil: undefined } });
-        // destroy() may have taken tempRoot (the process provider's root IS
-        // tempRoot), so the checkout has to be redone.
+        // destroy() may have taken tempRoot (the workspace root IS tempRoot),
+        // so the checkout has to be redone.
         await prepareCheckout();
       }
     }

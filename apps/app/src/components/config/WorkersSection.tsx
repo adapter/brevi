@@ -8,10 +8,6 @@ import type {
   WorkerView,
 } from "@brevi/shared";
 import { DEFAULT_FLEET_PORT, type BreviConfig } from "@brevi/shared/config";
-// Deep import on purpose: the root barrel re-exports paths.ts, which calls
-// homedir() at module scope, and a value import of the barrel would drag that
-// node-only module into the browser bundle. Types are erased, values are not.
-import { MACOS_VM_OS } from "@brevi/shared/worker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -26,15 +22,6 @@ import { Check, Copy, Edit, Warn } from "../Icons";
 import { FieldRow, NumberField, SectionIntro, SettingsCard } from "./Fields";
 
 const ALL_INTERFACES = "0.0.0.0";
-
-/**
- * A worker's `os` capability, humanized: brevi's managed macOS VM reports
- * `macos-vm` rather than the guest's own `linux`, and reads "macOS VM" here.
- * Every other worker shows its raw platform string ("linux", "darwin").
- */
-function humanizeOs(os: string): string {
-  return os === MACOS_VM_OS ? "macOS VM" : os;
-}
 
 function errorText(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
@@ -54,12 +41,12 @@ function emptyFleetCopy(hostExecution: HostExecution | undefined) {
       </>
     );
   }
-  if (hostExecution.reason === "macos-vm-not-installed") {
+  if (hostExecution.reason === "bwrap-unavailable") {
     return (
       <>
-        No workers enrolled yet, and this machine can&apos;t run agents itself. Set up the macOS
-        worker (<code className="font-mono text-[11px]">brevi mac install</code>) or use{" "}
-        <span className="text-haze-400">Add a worker</span> above to enroll another machine.
+        No workers enrolled yet, and this machine can&apos;t run agents itself. Install bubblewrap (
+        <code className="font-mono text-[11px]">brevi setup</code>) or use{" "}
+        <span className="text-haze-400">Add a worker</span> above to enroll a Linux machine.
       </>
     );
   }
@@ -398,23 +385,9 @@ export function WorkersSection({
                             <>
                               <Badge variant="outline">
                                 <span className="font-mono tracking-normal normal-case">
-                                  {humanizeOs(worker.capabilities.os)}/{worker.capabilities.arch}
+                                  {worker.capabilities.os}/{worker.capabilities.arch}
                                 </span>
                               </Badge>
-                              <Badge variant="outline">{worker.capabilities.provider}</Badge>
-                              {worker.capabilities.kvm && <Badge variant="outline">KVM</Badge>}
-                              {/* Only a Firecracker worker reports sizes; a process
-                                  worker sends an empty list, and a badge saying so
-                                  would read as a fault rather than as a provider
-                                  with no such concept. */}
-                              {worker.capabilities.vmSizes.length > 0 && (
-                                <Badge
-                                  variant="outline"
-                                  title="Firecracker VM sizes this worker can boot"
-                                >
-                                  {worker.capabilities.vmSizes.join(" / ")}
-                                </Badge>
-                              )}
                               <Badge variant="outline">
                                 <span className="font-mono tracking-normal normal-case">
                                   v{worker.capabilities.version}

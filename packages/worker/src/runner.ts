@@ -252,10 +252,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     // --include-partial-messages exists only so the stream carries thinking
     // block boundaries; the token-level deltas are reduced to thinking events
     // above and never persisted.
-    // Auto permission mode rather than bypassPermissions: bypass is refused
-    // as root (the firecracker guest runs everything as root), and auto's
-    // classifier blocks exfiltration-shaped actions, which matters because
-    // agents chew on untrusted ticket and repo content.
+    // Auto permission mode rather than bypassPermissions: auto's classifier
+    // blocks exfiltration-shaped actions, which matters because agents chew
+    // on untrusted ticket and repo content.
     const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", "auto"];
     if (model) args.push("--model", model);
     if (effort) args.push("--effort", effort);
@@ -381,9 +380,8 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       throw new Error(`ticket ${ticket.identifier} has no resolved repo mapping`);
     }
     const agentEnv = collectAgentEnv(config);
-    // Chromium for playwright demos lives in a shared location so runs never
-    // re-download it: baked into the Firecracker rootfs, a persistent host
-    // cache for the process provider.
+    // Chromium for playwright demos lives in a shared host cache so runs
+    // never re-download it. bwrap bind-mounts ~/.brevi/cache.
     agentEnv.PLAYWRIGHT_BROWSERS_PATH = await playwrightBrowsersPath(provider.name);
     const branch = branchNameFor(ticket);
 
@@ -680,7 +678,7 @@ export async function finishRunSandbox(options: {
       await store.update(runId, { sandbox: { retainedUntil } });
       log("system", `sandbox retained until ${retainedUntil}; resume with \`brevi attach ${runId}\``);
       // Only the host-side scratch goes; the retained disk lives inside
-      // tempRoot (rootfs.ext4 for firecracker, workspace/ for process).
+      // tempRoot (the per-run directory under ~/.brevi/workspaces).
       await rm(checkoutDir, { recursive: true, force: true }).catch(() => undefined);
       await rm(pulledDir, { recursive: true, force: true }).catch(() => undefined);
     } catch {
@@ -723,19 +721,14 @@ export function implementerAgent(model: string): Record<string, { description: s
   };
 }
 
-/** Where the Firecracker rootfs bakes Playwright browsers (see build-rootfs.sh). */
-const FIRECRACKER_BROWSERS_PATH = "/opt/ms-playwright";
-
-/** The process provider's Playwright cache; doctor checks it read-only. */
+/** Playwright cache under ~/.brevi; doctor checks it read-only. */
 export const PROCESS_PLAYWRIGHT_CACHE_DIR = join(BREVI_HOME, "cache", "ms-playwright");
 
 /**
- * Shared Playwright browser location, so runs never re-download Chromium. The
- * process provider gets a persistent host cache under ~/.brevi; the first run
- * to need a browser installs into it and every later run reuses it.
+ * Shared Playwright browser location, so runs never re-download Chromium.
+ * The first run to need a browser installs into it and every later run reuses it.
  */
-export async function playwrightBrowsersPath(provider: string): Promise<string> {
-  if (provider === "firecracker") return FIRECRACKER_BROWSERS_PATH;
+export async function playwrightBrowsersPath(_provider: string): Promise<string> {
   await mkdir(PROCESS_PLAYWRIGHT_CACHE_DIR, { recursive: true });
   return PROCESS_PLAYWRIGHT_CACHE_DIR;
 }

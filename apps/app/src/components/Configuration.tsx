@@ -5,7 +5,6 @@ import { ConnectorsSection } from "./config/ConnectorsSection";
 import { MemorySection } from "./config/MemorySection";
 import { OrchestratorSection } from "./config/OrchestratorSection";
 import { RepositoriesSection } from "./config/RepositoriesSection";
-import { SandboxSection } from "./config/SandboxSection";
 import { ServerSection } from "./config/ServerSection";
 import { WorkersSection } from "./config/WorkersSection";
 
@@ -13,7 +12,6 @@ const SECTIONS: { id: ConfigSection; label: string }[] = [
   { id: "connectors", label: "Connectors" },
   { id: "repositories", label: "Repositories" },
   { id: "agent", label: "Agent" },
-  { id: "sandbox", label: "Sandbox" },
   { id: "workers", label: "Workers" },
   { id: "memory", label: "Memory" },
   { id: "orchestrator", label: "Orchestrator" },
@@ -107,9 +105,6 @@ export function ConfigurationPage({
           </div>
           <div hidden={section !== "agent"}>
             <AgentSection config={config} onConfig={onConfig} />
-          </div>
-          <div hidden={section !== "sandbox"}>
-            <SandboxSection config={config} health={health} workers={workers} onConfig={onConfig} />
           </div>
           <div hidden={section !== "workers"}>
             <WorkersSection

@@ -1,103 +1,37 @@
 ---
 title: Sandboxes
-description: How brevi picks a sandbox provider, what the Firecracker microVM setup needs on Linux, and the caveats of the process provider.
+description: How brevi isolates each run with bubblewrap on Linux.
 ---
 
-Every run executes inside a sandbox: one sandbox holds one run's workspace. The worker that executes the run creates it, pushes the checkout in, runs the coding agent, pulls artifacts out, and destroys it. Two providers implement the same interface.
+Every run executes inside a [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) sandbox on a Linux worker. There is no provider switch and no process fallback.
 
-| Provider | Isolation | Where it runs |
-| --- | --- | --- |
-| `firecracker` | Separate kernel, own rootfs, own /30 network | Linux with KVM |
-| `process` | None (a plain directory) | Anywhere, including macOS |
+| isolation | where it runs |
+| --------- | ------------- |
+| Linux namespaces (user, mount, pid, ipc, uts) | Linux with `bwrap` on `PATH` |
 
-## Choosing a provider
+A machine that cannot run bwrap (macOS, or Linux without bubblewrap) is a scheduler only. Labeled tickets queue until a Linux worker with bwrap is online.
 
-`brevi init` writes your choice to `sandbox.provider`:
+## What the sandbox can see
 
-- **`auto`** (recommended): Firecracker when the host passes the full preflight, the same checks `brevi start` runs for an explicit `firecracker` provider: Linux, `/dev/kvm` readable and writable, the firecracker binary resolving on `PATH`, in `~/.brevi/bin`, or at `sandbox.firecracker.binary`, the kernel and ssh key images in place, a resolvable rootfs image (built from source, or downloaded and cached) whose manifest version matches brevi's, and networking ready (tap devices for `sandbox.concurrency`, IPv4 forwarding enabled). Otherwise the process provider. `auto` never fails; it downgrades.
-- **`firecracker`** / **`process`**: constructed and checked at startup, so a misconfigured host fails immediately with one aggregated, actionable error instead of halfway through a run.
+Each command runs under `bwrap` with a private `/tmp`, `/dev/shm`, `/proc`, and `/dev`, a read-only bind of host binaries (`/usr`, `/bin`, `/lib`, `/etc`) plus any extra `PATH` directories that are not already covered (so a user-local `claude` under `~/.local/bin` or nvm is visible without binding `$HOME`), and a read-write bind of the per-run directory (`~/.brevi/workspaces/<id>/`). The operator's `$HOME` is not bound, so the agent cannot read other checkouts or host secrets. The inner process gets a cleared environment (`HOME` is the workspace). Network is shared with the host so agents can use git, npm, and model APIs.
 
-You can change the provider any time by editing `sandbox.provider` in `~/.brevi/config.json` (or re-running `brevi init`) and restarting brevi.
+Agent CLIs (`claude`, `codex`, `gh`, `wrangler`) come from the worker host's `PATH`.
 
-## Firecracker
+## Setup
 
-On Linux with KVM, each run boots its own microVM: the base rootfs is cloned copy-on-write, a `brevi-tap<N>` device is allocated with a private /30 out of `172.30.0.0/16` so guests cannot see each other, and firecracker is started with its console captured to `firecracker.log`. Boot is typically about a second. Everything after boot goes over ssh as `root@<guest-ip>` using `~/.brevi/images/id_ed25519`; the workspace inside the guest is `/workspace`.
-
-### One-time host setup
-
-Four things are needed once per machine. The recommended path is one command:
+On Linux, `brevi setup` installs bubblewrap when it is missing (`apt install bubblewrap`) and checks that unprivileged user namespaces work. `brevi doctor` reports the same.
 
 ```sh
 brevi setup
 ```
 
-It walks through everything below interactively (see [the CLI reference](/reference/cli/#brevi-setup)), skips whatever is already in place, and prints every `sudo` command before running it. Downloads are sha256-verified against pinned digests, the final check also verifies networking (tap devices and IPv4 forwarding), and setup exits non-zero when the host is not ready. The manual equivalents follow; this is a summary, see `packages/sandbox/README.md` in the repo for the full walkthrough and troubleshooting.
+The [Linux worker installer](/guides/workers/) installs bubblewrap as root (`apt-get install bubblewrap`) and probes user namespaces as the `brevi` service user.
 
-1. **Kernel**: an uncompressed `vmlinux` at `~/.brevi/images/vmlinux`. The Firecracker CI bucket used by their quickstart is the easiest source. Any kernel works if virtio-blk, virtio-net, ext4 and the 8250 serial driver are built in rather than modules.
+## Workers
 
-2. **Rootfs**: `brevi setup` downloads the prebuilt, checksum-verified image (no Docker needed) into a cache at `~/.brevi/cache/rootfs/<version>/`, where `<version>` is the brevi release version. A corrupted cached image is detected, and redownloaded automatically, both at startup and whenever a sandbox is created, rather than failing a run. After an install, cached images unused for 30 days are pruned; the image currently in use is never pruned, so two installed brevi versions keep separate cached images without conflict. Preflight compares the resolved image's manifest version against the version brevi expects: an older image means the host's image needs updating (`brevi setup` again, or a from-source rebuild), a newer image means brevi itself needs updating.
+Every run executes on a `brevi worker` daemon. On Linux, `brevi start` also supervises a local worker on this machine. Add more workers from the Workers page; each one is a bwrap worker.
 
-   Building from source remains supported, for development and air-gapped hosts, and a from-source image at `~/.brevi/images/rootfs.ext4` takes precedence over the cache when present (needs docker and root):
-
-   ```sh
-   sudo packages/sandbox/scripts/build-rootfs.sh --with-kernel
-   ```
-
-   This produces a ~2 GB ext4 image at `~/.brevi/images/rootfs.ext4` with node 22, git, curl, tar, ripgrep, both agent CLIs (`@anthropic-ai/claude-code` and `@openai/codex`, the latter used for the adversarial review step), `ccusage` (used for live cost capture from the Claude Code transcripts), and an sshd. The image no longer depends on a key baked in at build time: brevi injects the host's public key at boot (generated by `brevi setup` if missing), so the same image works on every machine. An image built for an older rootfs contract (which includes any image predating `ccusage`) is rejected by preflight and will not run: download the current prebuilt image (`brevi setup`, or automatically at startup) or rebuild from source before Firecracker will start.
-
-3. **Networking**: pre-create tap devices and the NAT rule:
-
-   ```sh
-   sudo packages/sandbox/scripts/setup-network.sh --taps 16 --user "$(whoami)"
-   ```
-
-   Each concurrent run needs its own tap device, so provision at least as many taps as your `sandbox.concurrency` setting; 16 covers the maximum. brevi never escalates privileges itself: if it has to create a tap device and gets `EPERM`, it fails with a message pointing back at this script. The rules and devices are lost on reboot, so re-run it after restarting; a re-run converges on the pool you ask for, deleting taps beyond `--taps` and re-pointing the NAT rules if the egress interface changed. Every firewall rule it installs is tagged `-m comment --comment brevi-network`, and cleanup only ever deletes rules carrying that tag, so a rule of your own about the same subnet or tap devices is never swept up with them. `--clean` removes everything the script created, whatever interface the rules name, and restores the `net.ipv4.ip_forward` value the first run found.
-
-4. **KVM access**: `/dev/kvm` must be readable and writable by the user running brevi:
-
-   ```sh
-   sudo usermod -aG kvm "$(whoami)"   # log out and back in
-   ```
-
-:::tip
-If a run fails with `firecracker exited before opening its API socket` or `microVM did not accept ssh within 30000ms`, read `~/.brevi/workspaces/<run-id>/firecracker.log`; it holds the guest console and will show a kernel panic, a rootfs that failed to mount, or a tap device with no address.
-:::
-
-## The process provider
-
-The process provider runs agent commands directly on your machine, in `~/.brevi/workspaces/<run-id>/workspace`. It exists so brevi is usable on macOS and on Linux hosts without KVM.
-
-:::caution[No isolation]
-The process provider provides **no isolation whatsoever**. The coding agent runs as your user and can read and write anything you can, and brevi runs agents without interactive permission prompts (Claude Code's auto permission mode, where a classifier reviews actions in the background). Use it for development against repositories you trust, not for unattended work.
-:::
-
-Firecracker requires KVM, which is a Linux kernel feature. There is no macOS port, and Apple's Hypervisor.framework is not a substitute, so on macOS `auto` always selects the process provider. For real isolation, run brevi on a Linux host, or in a Linux VM with nested virtualisation enabled.
-
-On Apple silicon M3 or newer, running macOS 15 or newer, that Linux VM with nested virtualization is exactly what `brevi mac install` sets up for you: it manages a Linux guest where Firecracker runs unchanged, so the Mac becomes a fully isolated worker instead of falling back to the process provider. See [macOS workers](/guides/macos-worker/). Older Apple silicon and Intel Macs don't expose nested virtualization and keep using the process provider described above.
-
-## Timeouts and cleanup
-
-`sandbox.timeoutMinutes` (240, four hours, by default) is a hard wall-clock limit applied per agent execution: the implementation pass, each parallel Codex reviewer, the synthesis pass, and the fix pass each get their own budget, rather than one limit for the whole run. Hitting it kills that command. What that costs depends on which execution it was: an implementation or fix pass that times out fails the run, while a reviewer or the synthesis pass timing out only skips part or all of the best-effort [Codex review](/reference/configuration/#codex-review), and the run carries on to finalizing. A cancelled run's sandbox is destroyed immediately, and its scratch directory under `~/.brevi/workspaces/` is removed. A completed or failed run's sandbox is kept instead, for interactive resume, see below. Artifacts have already been copied into `~/.brevi/runs/` by then either way, so they survive.
-
-## Retention and resuming
-
-When a run completes or fails, brevi doesn't tear its sandbox down: compute stops (the microVM shuts off; nothing uses memory or CPU) but the disk is kept, checkout, installed dependencies and credentials included, for `sandbox.retentionHours` (24 by default, `0` disables retention). The expiry is stored on the run, so it survives an orchestrator restart; a timer reaps disks once their window ends, and any leftovers are also cleaned up on startup and on `brevi stop`.
-
-Resume a retained run from its detail page in the dashboard with the "Open terminal" button, which opens the session in an embedded web terminal (the sandbox boots server-side, so this works even when the orchestrator runs on another machine), or run `brevi attach <runId>` in your own terminal. Either way boots the sandbox back up from its retained disk and opens an interactive `claude --resume` session with the run's full history; detaching releases compute again while the disk keeps counting down. Resume works for completed and failed runs and is Claude-only for now. Once the window passes, the dashboard shows a disabled "Sandbox expired" button and the API answers `410`.
-
-## Running on another machine
-
-Every run executes on a `brevi worker` daemon, so the machine running the orchestrator is a scheduler first: on a single-machine setup it is simply also the machine a worker runs on. A second machine (more sandbox capacity, or a specific host, say one with Firecracker set up) joins the same way, by enrolling as a worker:
-
-1. If the second machine is not this one, turn on the worker channel listener first: Configuration > Workers has a "Worker channel" card, or set `fleet.host` (e.g. `"0.0.0.0"`) directly in `config.json`, then restart brevi. Left at its default (empty), only a worker running on this same machine can enroll. See [Configuration](/reference/configuration/#fleet).
-2. On the Workers page (Configuration > Workers, `/config/workers`), click "Add a worker". This mints a single-use pairing token, good for 15 minutes, and shows a ready-to-copy `brevi worker --host <url> --token <token>` command with the address a worker should dial already filled in.
-3. Run that command on the second machine. It exchanges the pairing token for a durable per-worker credential, saved to `~/.brevi/worker.json` and the only fleet secret that machine keeps, then connects. Later starts are just `brevi worker --host <url>`: no token, since the stored credential authenticates them.
-4. The worker appears on the Workers page as soon as it registers, reporting its own sandbox provider, whether KVM is usable, its concurrency, and its brevi version. From then on the host dispatches queued runs to it, and the run's sandbox lives on that machine, which is also where `brevi attach` and the dashboard's web terminal reach it, relayed by the host.
-
-A worker's sandbox settings are its own: `sandbox.provider`, the Firecracker image paths and the VM size come from that machine's `~/.brevi/config.json`, never from the host, so a Linux worker can boot microVMs for a host running on a Mac. A machine that only ever runs `brevi worker` needs no config at all; without one it uses the process provider at concurrency 1.
-
-Rename, drain (finish in-flight runs, accept nothing new), re-enable, and revoke are all on the Workers page. Revoking kills the worker's credential immediately: it is disconnected, deletes its stored credential, and needs a fresh pairing token to come back.
-
-On a Linux server, the [one-line installer](/guides/workers/) does step 3 and everything around it for you: it provisions Firecracker, installs the daemon as a systemd service, and hands it the same pairing token to enroll with. On an Apple silicon Mac, [`brevi mac install`](/guides/macos-worker/) does the equivalent inside a managed Linux VM.
-
-See the [CLI reference](/reference/cli/#brevi-worker) for `brevi worker`'s flags and the [API reference](/reference/api/#workers) for the underlying endpoints and worker channel.
+```sh
+curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- \
+  --host https://your-host:4400 --token <pairing-token>
+```

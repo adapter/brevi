@@ -33,7 +33,6 @@ export default defineConfig({
 						{ label: 'Tickets and runs', slug: 'guides/tickets' },
 						{ label: 'Sandboxes', slug: 'guides/sandboxes' },
 						{ label: 'Workers', slug: 'guides/workers' },
-						{ label: 'macOS workers', slug: 'guides/macos-worker' },
 					],
 				},
 				{

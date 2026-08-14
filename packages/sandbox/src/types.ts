@@ -1,4 +1,4 @@
-import type { FirecrackerConfig, SandboxProviderName } from "@brevi/shared";
+import type { SandboxProviderName } from "@brevi/shared";
 
 export interface ExecOptions {
   /** Working directory inside the sandbox. Defaults to the workspace root. */
@@ -29,19 +29,18 @@ export interface ExecResult {
 }
 
 /** How a host process can open an interactive session inside a sandbox. */
-export type SandboxConnection =
-  | {
-      /** Commands run directly on the host (process provider). */
-      kind: "local";
-      workspacePath: string;
-    }
-  | {
-      /** Commands run in the guest over ssh (firecracker provider). */
-      kind: "ssh";
-      host: string;
-      user: string;
-      keyPath: string;
-    };
+export type SandboxConnection = {
+  kind: "local";
+  workspacePath: string;
+};
+
+/** argv to spawn a command inside the sandbox (exec and PTY attach). */
+export interface SandboxLaunch {
+  file: string;
+  args: string[];
+  /** Sanitized environment for the bwrap process and, via --setenv, the inner command. */
+  env: Record<string, string>;
+}
 
 /**
  * A booted, isolated execution environment holding one run's workspace.
@@ -65,9 +64,11 @@ export interface Sandbox {
   readFile(path: string): Promise<string>;
   /** How to open an interactive session inside this sandbox from the host. */
   connection(): SandboxConnection;
+  /** argv that runs `command` inside the sandbox (PTY attach uses the same wrap as exec). */
+  wrap(command: string, args: string[], cwd?: string, options?: { newSession?: boolean }): SandboxLaunch;
   /**
-   * Stop the sandbox's compute (VM, processes) but keep its filesystem on
-   * host disk so provider.rehydrate() can boot it back up later.
+   * Stop the sandbox's compute but keep its filesystem on host disk so
+   * provider.rehydrate() can bring it back later.
    */
   release(): Promise<void>;
   destroy(): Promise<void>;
@@ -94,24 +95,4 @@ export interface SandboxProvider {
   discard(id: string): Promise<void>;
 }
 
-export interface ProviderSelection {
-  requested: "auto" | SandboxProviderName;
-  firecracker: FirecrackerConfig;
-  /**
-   * The @brevi/cli release version; prebuilt rootfs images are published, downloaded, and
-   * cached per release, so this keys both the download URL and the cache directory.
-   */
-  cliVersion: string;
-  /**
-   * The rootfs contract version the dispatching host requires of whatever machine runs
-   * its work. When it is newer than this build's ROOTFS_VERSION, provider selection
-   * refuses with an "update the worker" error instead of downgrading, so an outdated
-   * worker never accepts work whose guest contract it cannot satisfy. Omitted (local,
-   * single-machine use) means this build's own version.
-   */
-  requiredRootfsVersion?: number;
-  /** How many sandboxes may run at once; used to size the network preflight. Defaults to 1. */
-  concurrency?: number;
-  /** Progress/diagnostic lines during provider selection, e.g. a rootfs image download. */
-  log?: (line: string) => void;
-}
+

@@ -13,12 +13,7 @@ import {
 } from "@brevi/orchestrator";
 import { PROCESS_PLAYWRIGHT_CACHE_DIR } from "@brevi/worker";
 import { inspectPidFile, pidListeningOnPort, type PidFileState } from "@brevi/orchestrator/pid";
-import {
-  collectFirecrackerPreflightProblems,
-  fileExists,
-  isReadWritable,
-  resolveBinary,
-} from "@brevi/sandbox";
+import { collectBwrapProblems, fileExists, isReadWritable, resolveBinary } from "@brevi/sandbox";
 import {
   BREVI_HOME,
   CONFIG_PATH,
@@ -429,51 +424,30 @@ async function reconcilePidFile(pidState: PidFileState, port: number): Promise<C
 
 async function checkSandboxSection(config: BreviConfig): Promise<Section> {
   const checks: CheckResult[] = [];
-  const provider = config.sandbox.provider;
-  const runFirecracker = provider === "firecracker" || (provider === "auto" && process.platform === "linux");
-  let runProcess = provider === "process" || (provider === "auto" && process.platform !== "linux");
-
-  if (runFirecracker) {
-    // The same complete preflight provider selection uses: kvm, binary,
-    // kernel, rootfs (present, non-empty, with a current build manifest),
-    // ssh key, tap devices, and IPv4 forwarding.
-    const problems = await collectFirecrackerPreflightProblems(
-      config.sandbox.firecracker,
-      config.sandbox.concurrency,
-      readPackageVersion(),
-    );
-    if (problems.length === 0) {
-      checks.push({
-        name: "firecracker",
-        status: "pass",
-        detail: "ready (kvm, binary, kernel, rootfs, ssh key, network)",
-      });
-    } else if (provider === "firecracker") {
-      checks.push({
-        name: "firecracker",
-        status: "fail",
-        detail: problems.join("; "),
-        hint: "Run `brevi setup` to provision this host.",
-      });
-    } else {
-      checks.push({
-        name: "firecracker",
-        status: "warn",
-        detail: `auto will fall back to the process provider (no isolation): ${problems.join("; ")}`,
-        hint: "Run `brevi setup` for isolated runs.",
-      });
-      runProcess = true;
-    }
-  }
-
-  if (runProcess) {
-    checks.push(...(await checkProcessProvider(config)));
+  const problems = await collectBwrapProblems();
+  if (problems.length === 0) {
+    checks.push({ name: "bwrap", status: "pass", detail: "ready (Linux, bubblewrap, user namespaces)" });
+    checks.push(...(await checkHostTools(config)));
+  } else if (process.platform === "linux") {
+    checks.push({
+      name: "bwrap",
+      status: "fail",
+      detail: problems.join("; "),
+      hint: "Run `brevi setup` to install bubblewrap, or enroll a Linux worker that already has it.",
+    });
+  } else {
+    checks.push({
+      name: "bwrap",
+      status: "warn",
+      detail: problems.join("; "),
+      hint: "This machine cannot execute runs. Enroll a Linux worker with bubblewrap.",
+    });
   }
 
   return { title: "Sandbox", checks };
 }
 
-async function checkProcessProvider(config: BreviConfig): Promise<CheckResult[]> {
+async function checkHostTools(config: BreviConfig): Promise<CheckResult[]> {
   const checks: CheckResult[] = [];
   const command = config.agent.command;
   const resolved = await resolveBinary(command);
@@ -491,7 +465,7 @@ async function checkProcessProvider(config: BreviConfig): Promise<CheckResult[]>
     checks.push({
       name: "agent CLI",
       status: "fail",
-      detail: `"${command}" not found on PATH (the process provider runs the agent directly on this host)`,
+      detail: `"${command}" not found on PATH (bwrap runs the host agent binary inside the sandbox)`,
       hint,
     });
   }
@@ -522,9 +496,9 @@ async function checkProcessProvider(config: BreviConfig): Promise<CheckResult[]>
 }
 
 /**
- * Read-only probe of the Playwright cache the process provider actually uses:
- * runs install browsers into this exact directory, and an existing cache can
- * be read-only even while ~/.brevi itself is writable.
+ * Read-only probe of the Playwright cache used for demo capture: runs install
+ * browsers into this exact directory, and an existing cache can be read-only
+ * even while ~/.brevi itself is writable.
  */
 async function checkPlaywrightCache(): Promise<CheckResult> {
   const dir = PROCESS_PLAYWRIGHT_CACHE_DIR;
@@ -906,7 +880,7 @@ async function checkR2(config: BreviConfig): Promise<CheckResult> {
 // --- External CLIs -----------------------------------------------------------------
 
 const EXTERNAL_TOOLS = [
-  { name: "claude", whyOptional: "runs agents with the process provider and powers `brevi doctor` AI diagnosis" },
+  { name: "claude", whyOptional: "runs agents on a Linux worker and powers `brevi doctor` AI diagnosis" },
   { name: "codex", whyOptional: "runs Codex agents and the review pass" },
   { name: "gh", whyOptional: "enables one-click GitHub connect" },
   { name: "wrangler", whyOptional: "needed for R2 evidence uploads" },

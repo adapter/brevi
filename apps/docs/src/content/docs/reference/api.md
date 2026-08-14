@@ -54,15 +54,15 @@ Errors are `{ "error": string }` with status `400` (invalid), `404` (not found),
 {
   "ok": true,
   "version": "0.1.0",
-  "sandboxProvider": "process",
+  "sandboxProvider": "bwrap",
   "hostMemMib": 16384,
   "hostExecution": { "kind": "local-worker" }
 }
 ```
 
-`sandboxProvider` is the provider actually in use, after `auto` resolution. `hostMemMib` is total host memory in MiB, used by the dashboard's capacity hint (memory per VM times `sandbox.concurrency`, with a warning when it exceeds host memory).
+`sandboxProvider` is the sandbox this orchestrator would use (`bwrap` on current releases). Older orchestrators may still report `firecracker` or `process`. `hostMemMib` is total host memory in MiB (optional; the Sandbox page that used it as a VM capacity hint is gone).
 
-`hostExecution` says whether the machine running the orchestrator can execute runs itself, and through what: `{ kind: "local-worker" }` (Linux; the host spawns and supervises a worker on this machine), `{ kind: "mac-vm" }` (the managed macOS worker VM is installed here), or `{ kind: "none", reason: "macos-vm-not-installed" | "unsupported-platform" }`. On `"none"`, Mission Control explains that queued runs wait for a worker instead of failing. Absent from older orchestrators.
+`hostExecution` says whether the machine running the orchestrator can execute runs itself: `{ kind: "local-worker" }` (Linux with bwrap; the host spawns and supervises a worker on this machine), or `{ kind: "none", reason: "bwrap-unavailable" | "unsupported-platform" }`. On `"none"`, Mission Control explains that queued runs wait for a worker instead of failing. Absent from older orchestrators.
 
 ### Runs and artifacts
 
@@ -75,7 +75,7 @@ interface Run {
   id: string;
   ticket: Ticket;
   status: RunStatus;
-  sandbox: { provider: "firecracker" | "process"; id?: string; retainedUntil?: string };
+  sandbox: { provider?: "bwrap" | "firecracker" | "process"; id?: string; retainedUntil?: string; workerId?: string };
   agentSessionId?: string;  // captured from the Claude stream, powers resume
   createdAt: string;
   queuedAt?: string;
@@ -97,7 +97,9 @@ Cancelling a terminal run is a no-op and returns it unchanged; cancelling a queu
 
 `prUrl` and `prState` are set once a run opens a PR and track it at run level, so a retry (which clears `result`) never loses sight of the PR. `prState` is the last observed GitHub state: refreshed by a lazy background poll (about every 2 minutes, for the most recent runs whose PR hasn't merged or closed, whatever the run's own status) and whenever a run's detail view is opened, and streamed to the dashboard over the WebSocket as a `run-updated` message. The sidebar's PR chip and inline actions render from it.
 
-`queueReason` is set by the scheduler's placement step whenever a `queued` run has no worker to go to (no workers connected, the fleet at capacity, no connected worker able to boot the requested Firecracker VM size) and cleared the moment the run dispatches. The dashboard shows it on the run's card and detail view so a stuck queue explains itself.
+`queueReason` is set by the scheduler's placement step whenever a `queued` run has no worker to go to (no workers connected, every worker draining, the fleet at capacity) and cleared the moment the run dispatches. The dashboard shows it on the run's card and detail view so a stuck queue explains itself.
+
+`sandbox.provider` on a new run is `bwrap`. Historical run records may still say `firecracker` or `process`.
 
 `costs` has one `CostEntry` per agent execution (an attempt, or a future phase/subagent), each carrying `label`, `provider`, an optional `model`, token counts (`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`), an optional `costUsd` (absent when only tokens are known), and `estimated`, true when the cost is computed from a pricing table or modeled on a subscription login rather than reported by the provider. An entry may also carry an optional `breakdown`: an array of per-model `CostModelUsage` rows, each with `model`, its own token counts (`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`), and an optional `costUsd`; the entry's own token and cost figures are the roll-up (sum) of its breakdown rows. `breakdown` is present when the execution spanned several models (e.g. a delegated Claude run with an implementer subagent), whether measured from the agent's transcripts by ccusage inside the sandbox or reconstructed from the output stream; single-model executions stay flat. `costTotals` sums those entries for the whole run, and beyond the run-wide sums it also carries `byModel`: an array of `CostModelTotal` rows, one per distinct model used anywhere in the run, each with summed token counts (`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`), an optional `costUsd`, and an `estimated` flag; a model used by several attempts or phases appears once with summed figures, and the dashboard displays this per-model roll-up rather than the per-execution entries.
 
@@ -113,12 +115,10 @@ interface ResumeRunResponse {
   attach: RunAttachInfo;
 }
 
-type RunAttachInfo =
-  | { kind: "local"; scriptPath: string }
-  | { kind: "ssh"; scriptPath: string; host: string; user: string; keyPath: string };
+type RunAttachInfo = { kind: "worker"; workerId: string; workerName: string };
 ```
 
-`attach` tells the caller how to open the session: `"local"` runs `scriptPath` directly on the host (process sandboxes), `"ssh"` runs it in the guest over ssh with the given `host` / `user` / `keyPath` (Firecracker sandboxes). `brevi attach <runId>` calls this endpoint and opens whichever it gets back.
+`attach` names the worker that holds the retained sandbox. The session itself is never opened on the scheduling host: `brevi attach` and the dashboard web terminal both connect to `WS /ws/runs/:id/attach`, which the host relays to that worker's PTY.
 
 Errors: `404` when the run doesn't exist, `409` when the run hasn't finished yet or the configured sandbox provider has changed since it did, `410` once the retention window has passed and the disk was reclaimed, `400` when the run has no captured agent session id (resume is Claude-only for now; Codex runs don't report one).
 
@@ -182,10 +182,8 @@ interface WorkerView {
 interface WorkerCapabilities {
   os: string;            // process.platform, e.g. "linux" or "darwin"
   arch: string;          // process.arch, e.g. "x64" or "arm64"
-  provider: "firecracker" | "process";
-  kvm: boolean;          // /dev/kvm present and usable
+  provider: "bwrap" | "firecracker" | "process";  // current workers always report "bwrap"
   maxConcurrency: number;  // dispatched runs this worker executes at once, 1 to 64
-  vmSizes: ("small" | "medium" | "large")[];  // empty for a process worker
   version: string;       // brevi version running on the worker
 }
 ```
@@ -379,7 +377,7 @@ The bucket and its public base URL are config fields like any other; set them wi
 {
   "patch": {
     "agent": { "orchestratorModel": "claude-opus-5", "orchestratorEffort": "medium" },
-    "sandbox": { "firecracker": { "size": "large", "vcpus": null, "memMib": null } }
+    "sandbox": { "concurrency": 2 }
   }
 }
 ```
@@ -405,7 +403,7 @@ Credential fields are refused here with `400`: `linear.apiKey`, `linear.refreshT
 
 The check compares credential values on the merged result, not paths in the patch, so deleting a whole section (`{"linear": null}`, which would let the schema defaults refill it with empty strings) is refused the same way as setting the field directly.
 
-`applied` says whether the change is already in effect. Almost everything is read per run or per poll and applies live; `server.port`, `server.host`, and `sandbox.provider` are bound once at startup and answer `"restart"`.
+`applied` says whether the change is already in effect. Almost everything is read per run or per poll and applies live; `server.port`, `server.host`, `fleet.host`, and `fleet.port` are bound once at startup and answer `"restart"`.
 
 `config.json` stays the source of truth in both directions: the orchestrator watches the file and picks up hand edits without a restart, broadcasting the reloaded config over the WebSocket. An external edit that does not validate is logged and ignored, leaving the running settings alone.
 

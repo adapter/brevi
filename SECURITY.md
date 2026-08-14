@@ -19,8 +19,7 @@ Things we especially care about:
 - Credential handling in the CLI/orchestrator: everything is stored locally
   in `~/.brevi/config.json` and must never leave the machine except to the
   provider it authenticates to.
-- Sandbox isolation (`packages/sandbox`): escapes from the Firecracker or
-  process sandbox into the host.
+- Sandbox isolation (`packages/sandbox`): escapes from the bwrap sandbox into the host.
 
 Note that the dashboard and its API have no authentication. They bind
 `127.0.0.1` by default, so only the machine itself can reach them; setting

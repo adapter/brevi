@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Install brevi from npm, pick a sandbox provider, connect Linear, GitHub and a coding agent, and run your first ticket.
+description: Install brevi from npm, connect Linear, GitHub and a coding agent, and run your first ticket.
 ---
 
 import { Steps, Aside } from '@astrojs/starlight/components';
@@ -13,7 +13,7 @@ brevi runs on your machine: a CLI, an orchestrator that polls Linear, and a dash
 - **git**, and a GitHub account with access to the repositories you want brevi to work on.
 - A **Linear** account, with issues you can assign to yourself.
 - A coding agent credential brevi can find or that you can paste: a Claude Code login / Anthropic API key, a Codex (ChatGPT or OpenAI) login, or a Grok CLI login / xAI API key.
-- Optional: **Linux with `/dev/kvm`** if you want Firecracker microVM isolation. See [Sandboxes](/guides/sandboxes/). On a Mac, Firecracker isolation is also available on Apple silicon M3 or newer running macOS 15 or newer, via a managed Linux guest VM; see [macOS workers](/guides/macos-worker/).
+- Optional: **Linux with bubblewrap** (`apt install bubblewrap`, or `brevi setup`) so this machine can execute isolated runs. See [Sandboxes](/guides/sandboxes/). A Mac is a scheduler only until you enroll a Linux worker.
 
 ## Install
 
@@ -44,13 +44,7 @@ Prefer a GUI to a terminal? Mission Control is the same brevi as a downloadable,
 
 1. **Run `brevi`**
 
-   The first launch (no `~/.brevi/config.json` yet) starts with the init flow, which asks a single question, the sandbox provider:
-
-   - `auto` (recommended): Firecracker on Linux with KVM, the process sandbox everywhere else.
-   - `firecracker`: fails fast at startup if the host isn't ready.
-   - `process`: no isolation, development only.
-
-   The orchestrator then binds `http://localhost:4400`, serves the dashboard, and opens it in your browser. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up. To change the sandbox provider later, run `brevi init`; it keeps everything else in the config (credentials, repositories) untouched.
+   The first launch (no `~/.brevi/config.json` yet) starts with the init flow, then the orchestrator binds `http://localhost:4400`, serves the dashboard, and opens it in your browser. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up. On Linux, init offers to install bubblewrap so this machine can execute runs.
 
 2. **Open the Configuration page**
 
@@ -97,7 +91,7 @@ Linear (issues assigned to you with the brevi label)
 orchestrator ──► queue eligible tickets
    │
    ▼
-sandbox (Firecracker microVM / process)
+sandbox (bwrap on Linux)
    │  clone of the mapped repo + the coding agent, headless
    ▼
 branch + PR with demo artifacts
@@ -109,7 +103,6 @@ State lives under `~/.brevi/`:
 | --- | --- |
 | `~/.brevi/config.json` | Everything brevi knows: credentials, repos, sandbox, triggers |
 | `~/.brevi/runs/` | Run history, event logs, and collected artifacts |
-| `~/.brevi/images/` | Firecracker kernel, rootfs, and ssh key |
 | `~/.brevi/workspaces/` | Per-run scratch space (removed when a run ends) |
 
 <Aside type="tip">
@@ -120,5 +113,5 @@ brevi reads no environment variables of its own for configuration: everything is
 
 - [Connections](/guides/connections/): the full strategy chain per provider.
 - [Tickets and runs](/guides/tickets/): eligibility, repo routing, rerun semantics.
-- [Sandboxes](/guides/sandboxes/): provider selection and the Firecracker host setup.
+- [Sandboxes](/guides/sandboxes/): bubblewrap isolation on Linux workers.
 - [Configuration](/reference/configuration/): every config field.

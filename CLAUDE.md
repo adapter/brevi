@@ -1,6 +1,6 @@
 # brevi
 
-A local sandbox and orchestrator for coding agents: label a Linear ticket `brevi`, get back a GitHub PR. Runs execute in Firecracker microVMs (isolated) on Linux with KVM; elsewhere a process provider is used as a fallback, which provides no isolation (commands run directly on the host as the current user).
+A local sandbox and orchestrator for coding agents: label a Linear ticket `brevi`, get back a GitHub PR. Runs execute in bwrap sandboxes (Linux namespaces) on a Linux worker. A host that cannot run bwrap is a scheduler only.
 
 ## Workspaces
 
@@ -11,7 +11,7 @@ Bun workspaces + Turborepo. Each workspace has its own CLAUDE.md with details.
 | `packages/cli` | The `brevi` command line (published entry point, `npx @brevi/cli`) |
 | `packages/orchestrator` | The scheduler: polls Linear, dispatches runs to connected workers, opens PRs, serves the dashboard |
 | `packages/worker` | The `brevi worker` daemon: dials a host and executes the runs it dispatches, in a sandbox on its own machine |
-| `packages/sandbox` | Sandbox providers (`firecracker`, `process`) behind one interface |
+| `packages/sandbox` | Sandbox provider (`bwrap`) |
 | `packages/shared` | Domain types, zod config schema for `~/.brevi/config.json`, dashboard protocol types |
 | `packages/typescript-config` | Internal shared tsconfig (strict NodeNext baseline) |
 | `apps/app` | The dashboard (Vite + React 19); built `dist/` is served by the orchestrator |
