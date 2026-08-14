@@ -5,7 +5,7 @@ Shared domain definitions every other `@brevi` package builds on. No runtime beh
 ## Layout (src/)
 
 - `types.ts`: tickets, runs, run events, artifacts, credentials
-- `config.ts`: the zod schema for `~/.brevi/config.json` (agent command/args/model, repos, sandbox provider, connect client ids, restart policy)
+- `config.ts`: the zod schema for `~/.brevi/config.json` (agent command/args/model, repos, sandbox limits, connect client ids, restart policy)
 - `settings.ts`: the settings-patch layer over that schema (merge, defaults, secret and restart field lists), shared by the orchestrator's write path and the dashboard's forms
 - `protocol.ts`: dashboard HTTP + WebSocket protocol types
 - `fleet.ts`: enrollment (single-use pairing tokens, durable per-worker credentials) and the dashboard's `WorkerView`; no zod and no node builtins, so the browser bundle can import it

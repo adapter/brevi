@@ -42,6 +42,7 @@ const repo = repoConfigSchema.parse({ remote: "adapter/brevi" });
 
 interface CapabilitiesOverrides {
   provider?: "bwrap";
+  agentCommands?: string[];
   maxConcurrency?: number;
 }
 
@@ -50,6 +51,7 @@ function capabilities(overrides: CapabilitiesOverrides = {}) {
     os: "linux",
     arch: "x64",
     provider: overrides.provider ?? "bwrap",
+    agentCommands: overrides.agentCommands ?? ["claude"],
     maxConcurrency: overrides.maxConcurrency ?? 2,
     version: "0.5.0",
   };
@@ -641,6 +643,29 @@ describe("WorkerRegistry", () => {
     expect(dispatch(first)).toEqual({ placed: true, workerId: roomy.id, workerName: roomy.name });
     await flush();
     expect(roomy.socket.last("dispatch")?.run.id).toBe(first.id);
+  });
+
+  it("only places a run on a worker that has its configured agent command", async () => {
+    const claude = await enroll("claude-only", { agentCommands: ["claude"] });
+    const codex = await enroll("codex-only", { agentCommands: ["codex"] });
+    config.agent.command = "codex";
+
+    const run = await queueRun();
+    expect(dispatch(run)).toEqual({ placed: true, workerId: codex.id, workerName: codex.name });
+    await flush();
+    expect(codex.socket.last("dispatch")?.run.id).toBe(run.id);
+    expect(claude.socket.last("dispatch")).toBeUndefined();
+  });
+
+  it("keeps a run queued when no connected worker has its configured agent command", async () => {
+    await connect({ agentCommands: ["claude"] });
+    config.agent.command = "grok";
+
+    const run = await queueRun();
+    expect(dispatch(run)).toEqual({
+      placed: false,
+      reason: 'no connected worker has the agent command "grok"',
+    });
   });
 
   it("respects maxConcurrency, and the outcome's reason names capacity once every connected worker is full", async () => {

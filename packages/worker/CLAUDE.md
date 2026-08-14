@@ -4,7 +4,7 @@ The `brevi worker` daemon. Holds today's execution stack behind the dispatch pro
 
 ## Layout (src/)
 
-- `daemon.ts`: `runWorker()`, the entry point. Loads local config, resolves the sandbox provider, connects, and routes every host message (dispatch, cancel, discard, attach-*) to the right handler until SIGINT/SIGTERM
+- `daemon.ts`: `runWorker()`, the entry point. Loads local config, validates bwrap and the available agent commands, connects, and routes every host message (dispatch, cancel, discard, attach-*) to the right handler until SIGINT/SIGTERM
 - `connection.ts`: the outbound WebSocket client: enrollment (which auth envelope each attempt presents), register, heartbeat, exponential backoff with jitter on a drop, a bounded generic queue for everything else that flushes in order after the next successful registration, and a per-lease replay buffer (with worker-assigned, per-lease sequence numbers) for the five lease-scoped reporting frame types, replayed once the host's `lease-ack` says where it got to
 - `reporter.ts`: `RunReporter`, a `RunSink` that mirrors every run mutation to the host as `run-patch`/`run-event`/`run-artifact` messages instead of writing to a local store
 - `sink.ts`: `RunSink`, the seam `runner.ts`/`followup.ts` were written against instead of the host's `RunStore` directly (see the doc comment there for why)

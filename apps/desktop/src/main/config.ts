@@ -12,8 +12,8 @@ export interface EnsureConfigResult {
  * The config the app and the CLI share. First launch has no file: schema
  * defaults are written to ~/.brevi/config.json so the orchestrator can start,
  * and `firstLaunch` is reported back so the caller can land the window on the
- * /setup route instead of the dashboard; the rest of setup (connections,
- * sandbox provider) happens there.
+ * /setup route instead of the dashboard; the rest of setup (connections)
+ * happens there.
  */
 export async function ensureConfig(): Promise<EnsureConfigResult> {
   // Every top-level key in configSchema has a `.prefault({})`, so saving `{}`

@@ -728,7 +728,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
    * dispatching it a second time while the first worker was still on it.
    */
   dispatch(payload: DispatchRequest): DispatchOutcome {
-    const placement = this.#placeWorker();
+    const placement = this.#placeWorker(payload.config.agent.command);
     if ("reason" in placement)
       return { placed: false, reason: placement.reason };
     const target = placement.worker;
@@ -1022,15 +1022,16 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   /**
    * Choose where a dispatch lands, or say why nothing can take it right now.
    * In order: no worker connected at all; every connected worker drained out
-   * of rotation; every remaining worker at capacity. What's left is ranked
-   * by most free capacity, then worker id, so the choice is stable and
-   * testable, and the first one wins.
+   * of rotation; no remaining worker has the requested agent command; every
+   * compatible worker is at capacity. What's left is ranked by most free
+   * capacity, then worker id, so the choice is stable and testable, and the
+   * first one wins.
    *
    * Draining workers never appear among the candidates: they keep the leases
    * they already hold and report them normally, they are simply never handed
    * anything new (see #isDraining).
    */
-  #placeWorker(): { worker: ConnectedWorker } | { reason: string } {
+  #placeWorker(agentCommand: string): { worker: ConnectedWorker } | { reason: string } {
     if (this.#workers.size === 0) return { reason: "no workers are connected" };
 
     const notDraining = [...this.#workers.values()].filter((worker) => !this.#isDraining(worker.id));
@@ -1049,11 +1050,16 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       return { reason: "no connected worker can execute isolated runs" };
     }
 
-    const withCapacity = available.filter(
+    const withAgent = available.filter((worker) => worker.capabilities.agentCommands.includes(agentCommand));
+    if (withAgent.length === 0) {
+      return { reason: `no connected worker has the agent command "${agentCommand}"` };
+    }
+
+    const withCapacity = withAgent.filter(
       (worker) => this.#freeCapacity(worker) > 0,
     );
     if (withCapacity.length === 0) {
-      const n = available.length;
+      const n = withAgent.length;
       const reason =
         n === 1
           ? "all 1 connected worker is at capacity"

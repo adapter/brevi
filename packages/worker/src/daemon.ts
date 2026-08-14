@@ -252,18 +252,19 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
 
   console.log("[brevi] resolving the bwrap sandbox...");
   const provider: SandboxProvider = await createSandboxProvider();
-  const agentBin = await resolveBinary(config.agent.command);
-  if (agentBin === undefined) {
+  const agentCommands = await availableAgentCommands(config.agent.command);
+  if (agentCommands.length === 0) {
     throw new Error(
-      `the agent command "${config.agent.command}" was not found on PATH; install it on this worker (npm install -g @anthropic-ai/claude-code) before starting brevi worker`,
+      "no supported agent command was found on PATH; install Claude or Codex (npm install -g @anthropic-ai/claude-code @openai/codex) before starting brevi worker",
     );
   }
-  console.log(`[brevi] agent CLI ${config.agent.command} at ${agentBin}`);
+  console.log(`[brevi] agent commands available: ${agentCommands.join(", ")}`);
 
   const capabilities: WorkerCapabilities = {
     os: resolveWorkerOs(process.platform, process.env),
     arch: process.arch,
     provider: provider.name,
+    agentCommands,
     maxConcurrency: concurrency,
     version: VERSION,
   };
@@ -683,6 +684,24 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   );
 
   await stopped;
+}
+
+/**
+ * Commands this worker can accept from the host. Standard commands are
+ * probed even when the worker has no local config, while a configured custom
+ * command opts that executable into placement too. Resolved paths are
+ * advertised as aliases so an explicit host path can still match.
+ */
+async function availableAgentCommands(configured: string): Promise<string[]> {
+  const candidates = new Set(["claude", "codex", "grok", configured]);
+  const available = new Set<string>();
+  for (const command of candidates) {
+    const resolved = await resolveBinary(command);
+    if (resolved === undefined) continue;
+    available.add(command);
+    available.add(resolved);
+  }
+  return [...available].sort();
 }
 
 /**

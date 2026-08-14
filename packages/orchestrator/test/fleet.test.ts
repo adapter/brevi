@@ -13,6 +13,7 @@ const capabilities: WorkerCapabilities = {
   os: "linux",
   arch: "x64",
   provider: "bwrap",
+  agentCommands: ["claude"],
   maxConcurrency: 1,
   version: "0.1.0",
 };

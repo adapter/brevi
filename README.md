@@ -19,7 +19,7 @@ Every execution runs in an isolated [bubblewrap](https://github.com/containers/b
 npx @brevi/cli
 ```
 
-On a fresh machine this runs the init flow (one question: the sandbox provider), then starts the orchestrator and opens the dashboard. Everything else happens in the dashboard's **Connections** panel with one-click **Connect** buttons, with no keys to copy:
+On a fresh machine this writes the default config, then starts the orchestrator and opens the dashboard. Everything else happens in the dashboard's **Connections** panel with one-click **Connect** buttons, with no keys to copy:
 
 - **GitHub**: uses your `gh` CLI login if present, or an OAuth device code (with `connect.githubClientId` configured).
 - **Claude**: found on this machine, either your Claude Code login (Keychain / `~/.claude`) or `ANTHROPIC_API_KEY`.
@@ -29,7 +29,7 @@ On a fresh machine this runs the init flow (one question: the sandbox provider),
 
 Every credential is verified live before saving and stored in `~/.brevi/config.json`; agent keys are checked with a 1-token probe on the provider's cheapest model (`claude-haiku-4-5` / `gpt-5-nano` / `grok-4-1-fast-non-reasoning`). All brevi state lives under `~/.brevi/`; the orchestrator reads no environment variables. Manual key entry remains as a fallback on every provider. Then pick repositories straight from your GitHub account, assign yourself a Linear issue, and add the `brevi` label.
 
-Other commands: `brevi start` (headless, no browser), `brevi stop` (shut down a running instance), `brevi status`, `brevi doctor` (check the whole setup: config, server, sandbox, connectors, CLIs), `brevi update` (update an installed CLI to the latest release on npm, restarting a running instance so the new version takes effect), and `brevi init` (rerun the sandbox provider pick any time).
+Other commands: `brevi start` (headless, no browser), `brevi stop` (shut down a running instance), `brevi status`, `brevi doctor` (check the whole setup: config, server, sandbox, connectors, CLIs), `brevi update` (update an installed CLI to the latest release on npm, restarting a running instance so the new version takes effect), and `brevi init` (review and save the current configuration).
 
 To add a Linux machine to the fleet so runs execute there instead of locally, install brevi as a worker with the one-line installer:
 

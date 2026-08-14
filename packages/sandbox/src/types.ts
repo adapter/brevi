@@ -87,7 +87,8 @@ export interface CreateSandboxOptions {
 }
 
 export interface SandboxProvider {
-  name: SandboxProviderName;
+  /** The only provider available for new execution. */
+  name: "bwrap";
   /** Throws with a human-readable reason if this provider can't run on this host. */
   ensureAvailable(): Promise<void>;
   create(options: CreateSandboxOptions): Promise<Sandbox>;
@@ -99,5 +100,3 @@ export interface SandboxProvider {
   /** Delete a retained sandbox's disk without booting it. Idempotent. */
   discard(id: string): Promise<void>;
 }
-
-

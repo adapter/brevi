@@ -120,7 +120,7 @@ type RunAttachInfo = { kind: "worker"; workerId: string; workerName: string };
 
 `attach` names the worker that holds the retained sandbox. The session itself is never opened on the scheduling host: `brevi attach` and the dashboard web terminal both connect to `WS /ws/runs/:id/attach`, which the host relays to that worker's PTY.
 
-Errors: `404` when the run doesn't exist, `409` when the run hasn't finished yet or the configured sandbox provider has changed since it did, `410` once the retention window has passed and the disk was reclaimed, `400` when the run has no captured agent session id (resume is Claude-only for now; Codex runs don't report one).
+Errors: `404` when the run doesn't exist, `409` when the run hasn't finished yet, another follow-up is starting, or its worker is disconnected, `410` once the retention window has passed and the disk was reclaimed, and `400` when the run has no captured agent session id (resume is Claude-only for now; Codex runs don't report one).
 
 `POST /api/runs/:id/release` stops a resumed sandbox's compute again, keeping its disk until the retention window ends, and returns the updated `Run`. `brevi attach` calls it on detach; it's a no-op when nothing is booted.
 

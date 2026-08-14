@@ -44,7 +44,8 @@ function capabilities(maxConcurrency = 2) {
     os: "linux",
     arch: "x64",
     provider: "bwrap" as const,
-        maxConcurrency,
+    agentCommands: ["claude"],
+    maxConcurrency,
     version: "0.5.0",
   };
 }

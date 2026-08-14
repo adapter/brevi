@@ -313,6 +313,8 @@ export const workerCapabilitiesSchema = z.object({
   arch: z.string(),
   /** Sandbox provider the worker runs. Only bwrap workers may register. */
   provider: z.literal("bwrap"),
+  /** Agent commands this worker resolved on its own PATH at registration time. */
+  agentCommands: z.array(z.string().min(1)).min(1),
   /** How many dispatched runs this worker executes at once. */
   maxConcurrency: z.number().int().min(1).max(WORKER_MAX_CONCURRENCY),
   /** @brevi/cli version the worker runs. */
