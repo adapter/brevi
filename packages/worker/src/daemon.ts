@@ -239,6 +239,19 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   // credential an earlier enrollment on this host left behind, if any.
   const identity = await resolveEnrollment(options);
 
+  // Installed before provider setup, which can download a multi-GB rootfs:
+  // a supervisor that dies during it must still take this process down.
+  // Until shutdown() exists there is nothing to drain, so a bare exit is the
+  // graceful stop; the handler is re-pointed at shutdown() further down.
+  let onSupervisorGone = (): void => {
+    console.log(`[brevi] supervisor process ${options.supervisorPid} is gone; exiting`);
+    process.exit(0);
+  };
+  const stopSupervisorWatch =
+    options.supervisorPid !== undefined
+      ? watchSupervisor(options.supervisorPid, () => onSupervisorGone())
+      : undefined;
+
   console.log(`[brevi] resolving the ${config.sandbox.provider} sandbox provider...`);
   const provider: SandboxProvider = await createSandboxProvider({
     requested: config.sandbox.provider,
@@ -303,8 +316,6 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   let draining = false;
   /** Whether the host has reported this worker's state at least once, so the first report is not mistaken for a transition. */
   let stateReported = false;
-  /** Stops the supervisor watchdog; undefined when none was started or once shutdown stopped it. */
-  let stopSupervisorWatch: (() => void) | undefined;
 
   // A restart forgets every retained disk it can no longer identify (see
   // knownRuns above): nothing points at them anymore from this process's
@@ -621,13 +632,13 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     },
   });
 
-  if (options.supervisorPid !== undefined) {
-    stopSupervisorWatch = watchSupervisor(options.supervisorPid, () => {
-      if (shuttingDown) return;
-      console.log(`[brevi] supervisor process ${options.supervisorPid} is gone; shutting down`);
-      shutdown();
-    });
-  }
+  // The full shutdown path exists now; a dead supervisor drains instead of
+  // exiting outright.
+  onSupervisorGone = () => {
+    if (shuttingDown) return;
+    console.log(`[brevi] supervisor process ${options.supervisorPid} is gone; shutting down`);
+    shutdown();
+  };
 
   attachSessions = createAttachSessions({
     provider,

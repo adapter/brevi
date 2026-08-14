@@ -5,7 +5,9 @@ import { probeHealth, waitForHealth } from "./health.js";
 
 const START_TIMEOUT_MS = 60_000;
 const ATTACHED_POLL_INTERVAL_MS = 5_000;
-const STOP_GRACEFUL_TIMEOUT_MS = 10_000;
+// Above the local worker's 35s drain window inside `brevi start`'s own
+// shutdown, so a busy worker's final frames land before SIGKILL.
+const STOP_GRACEFUL_TIMEOUT_MS = 45_000;
 const LOG_BUFFER_LINES = 200;
 /** How long to wait, while starting, for a server another process is already bringing up to become healthy. */
 const ADOPT_TIMEOUT_MS = 30_000;
@@ -128,8 +130,8 @@ export class OrchestratorSupervisor {
   /**
    * Cancels every timer, and when we own the process sends SIGTERM (the
    * CLI's SIGTERM handler shuts the orchestrator down cleanly), waits up to
-   * 10s, then SIGKILL. When attached it only cancels timers and leaves the
-   * other instance running.
+   * STOP_GRACEFUL_TIMEOUT_MS, then SIGKILL. When attached it only cancels
+   * timers and leaves the other instance running.
    */
   async stop(): Promise<void> {
     this.stopping = true;

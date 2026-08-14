@@ -80,6 +80,7 @@ import { checkWrangler, DEFAULT_EVIDENCE_BUCKET, provisionBucket, startWranglerL
 import { isSafePathSegment } from "./safepath.js";
 import { ACTIVE_STATUSES, RunStore, isTerminal } from "./state.js";
 import {
+  LocalWorkerRefusalError,
   WorkerRegistry,
   type AttachSession,
   type AttachSessionOptions,
@@ -533,7 +534,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     try {
       renamed = (await this.#workers?.rename(id, clean)) ?? false;
     } catch (error) {
-      throw new OrchestratorError("invalid", error instanceof Error ? error.message : String(error));
+      if (error instanceof LocalWorkerRefusalError) throw new OrchestratorError("invalid", error.message);
+      throw error;
     }
     if (!renamed) throw new OrchestratorError("not-found", `no worker ${id}`);
     return { workers: this.listWorkers() };
@@ -555,7 +557,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     try {
       revoked = (await this.#workers?.revoke(id)) ?? false;
     } catch (error) {
-      throw new OrchestratorError("invalid", error instanceof Error ? error.message : String(error));
+      if (error instanceof LocalWorkerRefusalError) throw new OrchestratorError("invalid", error.message);
+      throw error;
     }
     if (!revoked) throw new OrchestratorError("not-found", `no worker ${id}`);
     return { workers: this.listWorkers() };

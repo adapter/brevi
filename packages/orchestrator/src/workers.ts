@@ -252,6 +252,9 @@ interface WorkerRegistryEvents {
 /** What cancel() managed to do: "unknown" when the run has no active lease at all. */
 export type CancelOutcome = "sent" | "pending" | "unknown";
 
+/** A mutation the local worker refuses (rename, revoke). The scheduler maps exactly this to a 400; other failures stay server errors. */
+export class LocalWorkerRefusalError extends Error {}
+
 /** Parse one text frame as JSON, or undefined when it isn't well-formed JSON. */
 function safeJsonParse(raw: unknown): unknown {
   try {
@@ -614,7 +617,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
    */
   async rename(id: string, name: string): Promise<boolean> {
     if (this.#fleet.get(id)?.local) {
-      throw new Error("the local worker cannot be renamed; it always presents as this machine");
+      throw new LocalWorkerRefusalError("the local worker cannot be renamed; it always presents as this machine");
     }
     if (!(await this.#fleet.rename(id, name))) return false;
     this.#emitWorkers();
@@ -648,7 +651,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   async revoke(id: string): Promise<boolean> {
     return this.#serialize(async () => {
       if (this.#fleet.get(id)?.local) {
-        throw new Error("the local worker cannot be revoked; drain it instead");
+        throw new LocalWorkerRefusalError("the local worker cannot be revoked; drain it instead");
       }
       if (!(await this.#fleet.revoke(id))) return false;
       const live = this.#workers.get(id);
