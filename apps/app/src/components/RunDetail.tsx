@@ -1,4 +1,13 @@
-import type { LimitInfo, PrState, PrStatusResponse, Run, RunEvent, WorkerView } from "@brevi/shared";
+import type {
+  HealthResponse,
+  HostExecution,
+  LimitInfo,
+  PrState,
+  PrStatusResponse,
+  Run,
+  RunEvent,
+  WorkerView,
+} from "@brevi/shared";
 import { summarizeCosts } from "@brevi/shared/types";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -7,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api } from "../lib/api";
 import { clock, duration, elapsed } from "../lib/format";
+import { queueOnly } from "../lib/fleet";
 import { isActive, isTerminal } from "../lib/status";
 import { Artifacts } from "./Artifacts";
 import { AttachTerminal } from "./AttachTerminal";
@@ -20,26 +30,38 @@ export function RunDetail({
   run,
   repoName,
   workers,
+  health,
   events,
   now,
   busy,
   onCancel,
   onRetry,
   onFollowUp,
+  onOpenWorkers,
 }: {
   run: Run;
   /** owner/name of the mapped repo, resolved from config. */
   repoName: string | undefined;
   /** The enrolled fleet, to resolve run.sandbox.workerId to a human name. */
   workers: WorkerView[];
+  /** Whether this machine can execute runs itself, for the queued banner. */
+  health: HealthResponse | null;
   events: RunEvent[];
   now: number;
   busy: boolean;
   onCancel: () => void;
   onRetry: () => void;
   onFollowUp: () => void | Promise<void>;
+  /** Opens the Workers config page, for the queued banner's fix. */
+  onOpenWorkers: () => void;
 }) {
   const live = isActive(run.status);
+  // Set only when this machine cannot execute and nothing else is connected,
+  // so the queued banner can add its fix on top of the scheduler's own reason.
+  const queueOnlyExecution =
+    health?.hostExecution?.kind === "none" && queueOnly(health, workers)
+      ? health.hostExecution
+      : undefined;
   const hasOutcome = isTerminal(run.status) || Boolean(run.result || run.error);
   const retryable = run.status === "failed" || run.status === "cancelled";
   // The header chip renders from the run-level PR metadata streamed by the
@@ -197,7 +219,13 @@ export function RunDetail({
             />
           )}
 
-          {run.status === "queued" && run.queueReason && <QueuedBanner reason={run.queueReason} />}
+          {run.status === "queued" && run.queueReason && (
+            <QueuedBanner
+              reason={run.queueReason}
+              hostExecution={queueOnlyExecution}
+              onOpenWorkers={onOpenWorkers}
+            />
+          )}
 
           {/* Two explicit rows: the tab strip alone on top, then the active
               panel and the evidence card side by side in one stretched row,
@@ -437,10 +465,42 @@ function WaitingBanner({
  * tones, matching the queued status's own colour (STATUS_TONE.queued):
  * waiting on capacity is not "connected" (mint) or "working" (ember).
  */
-function QueuedBanner({ reason }: { reason: string }) {
+function QueuedBanner({
+  reason,
+  hostExecution,
+  onOpenWorkers,
+}: {
+  reason: string;
+  /** Set only when this machine cannot execute and nothing else is connected. */
+  hostExecution: Extract<HostExecution, { kind: "none" }> | undefined;
+  onOpenWorkers: () => void;
+}) {
   return (
     <div className="rounded-[5px] border border-haze-700/50 bg-haze-600/10 p-3">
       <p className="text-[12.5px] leading-relaxed text-haze-400">{reason}</p>
+      {hostExecution && (
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
+          This machine can&apos;t run agents itself.{" "}
+          {hostExecution.reason === "macos-vm-not-installed" ? (
+            <>
+              Set up the macOS worker (
+              <code className="font-mono text-[11px]">brevi mac install</code>) or enroll another
+              machine from the{" "}
+            </>
+          ) : (
+            "Enroll another machine from the "
+          )}
+          <Button
+            type="button"
+            variant="link"
+            className="h-auto p-0 align-baseline text-[12.5px] text-haze-200 hover:text-haze-50"
+            onClick={onOpenWorkers}
+          >
+            Workers page
+          </Button>
+          .
+        </p>
+      )}
     </div>
   );
 }

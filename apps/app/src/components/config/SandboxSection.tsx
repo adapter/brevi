@@ -127,6 +127,11 @@ export function SandboxSection({
   hintWords.push(runWord, verb, `${formatGb(reservedMib)} GB of host memory`);
 
   const online = workers.filter((worker) => worker.connection === "online").length;
+  // Only the zero-worker case needs reason-aware copy: with any worker
+  // enrolled the summary below is already accurate regardless of why.
+  const hostExecution = health?.hostExecution;
+  const queueOnlyReason =
+    workers.length === 0 && hostExecution?.kind === "none" ? hostExecution.reason : undefined;
 
   return (
     <>
@@ -274,11 +279,28 @@ export function SandboxSection({
           </CardHeader>
           <CardContent className="mt-2.5 flex flex-col">
             <p className="text-[12.5px] leading-relaxed text-haze-700">
-              {workers.length === 0
-                ? "No workers enrolled yet."
-                : `${online} of ${workers.length} enrolled ${workers.length === 1 ? "worker" : "workers"} online.`}{" "}
-              Enroll a machine, and rename, drain, or revoke one, on the{" "}
-              <span className="text-haze-400">Workers</span> page.
+              {queueOnlyReason ? (
+                <>
+                  No workers enrolled, and this machine can&apos;t run agents itself.{" "}
+                  {queueOnlyReason === "macos-vm-not-installed" ? (
+                    <>
+                      Set up the macOS worker (
+                      <code className="font-mono text-[11px]">brevi mac install</code>) or enroll
+                    </>
+                  ) : (
+                    "Enroll"
+                  )}{" "}
+                  a machine on the <span className="text-haze-400">Workers</span> page.
+                </>
+              ) : (
+                <>
+                  {workers.length === 0
+                    ? "No workers enrolled yet."
+                    : `${online} of ${workers.length} enrolled ${workers.length === 1 ? "worker" : "workers"} online.`}{" "}
+                  Enroll a machine, and rename, drain, or revoke one, on the{" "}
+                  <span className="text-haze-400">Workers</span> page.
+                </>
+              )}
             </p>
           </CardContent>
         </Card>

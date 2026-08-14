@@ -11,7 +11,9 @@ import pc from "picocolors";
 import { errorMessage } from "./util.js";
 
 const HEALTH_TIMEOUT_MS = 2000;
-const GRACEFUL_TIMEOUT_MS = 10_000;
+// Above the local worker's own 35s drain window (serve.ts stops it before
+// the orchestrator), so a busy worker's final frames land before SIGKILL.
+const GRACEFUL_TIMEOUT_MS = 45_000;
 const FORCE_TIMEOUT_MS = 2000;
 const POLL_INTERVAL_MS = 200;
 

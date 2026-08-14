@@ -26,7 +26,7 @@ import { isTerminal, LinearService } from "@brevi/orchestrator/internal";
 import { createAttachSessions, type AttachSessions } from "./attach.js";
 import { connectToHost, type WorkerConnection } from "./connection.js";
 import { executeFollowUp } from "./followup.js";
-import { clearEnrollment, enrollmentFor, saveEnrollment } from "./identity.js";
+import { clearEnrollment, enrollmentFor, saveEnrollment, type WorkerEnrollment } from "./identity.js";
 import { RunReporter } from "./reporter.js";
 import { executeRun, type RunContext } from "./runner.js";
 
@@ -66,6 +66,85 @@ export interface WorkerOptions {
   concurrency?: number;
   /** Worker's own ~/.brevi/config.json path override, mainly for tests. */
   configPath?: string;
+  /**
+   * A supervisor-injected identity, minted by the host itself with no
+   * pairing token (how `brevi start` provisions the localhost worker it
+   * spawns). Used exactly as given against `hostUrl`; `~/.brevi/worker.json`
+   * is never read, written, or cleared on its behalf, since that file
+   * belongs to a separate, real enrollment this machine might also hold.
+   * Rejection fails the daemon like a rejected stored credential; nothing
+   * falls back to a token or stored credential.
+   */
+  enrollment?: { workerId: string; credential: string };
+  /**
+   * Pid of the process that spawned this worker. When set, a watchdog polls
+   * it and runs the same graceful shutdown as SIGTERM once it is gone, so
+   * even a SIGKILLed supervisor never leaves this worker orphaned.
+   */
+  supervisorPid?: number;
+}
+
+/** How often the supervisor watchdog (see WorkerOptions.supervisorPid) polls whether the process that spawned this worker is still alive. */
+const SUPERVISOR_WATCH_MS = 5_000;
+
+/** True when `pid` is a live process, probed like `kill -0`: ESRCH means gone; success or EPERM means alive. */
+function pidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+/**
+ * Polls `pid` and calls `onGone` once, the first time it is gone. The
+ * returned function stops the watchdog early. Exported (with `intervalMs`
+ * overridable) so tests need not spawn a real supervisor.
+ */
+export function watchSupervisor(pid: number, onGone: () => void, intervalMs: number = SUPERVISOR_WATCH_MS): () => void {
+  const timer = setInterval(() => {
+    if (pidIsAlive(pid)) return;
+    clearInterval(timer);
+    onGone();
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
+/**
+ * How this worker sources and persists its identity. An injected enrollment
+ * (see WorkerOptions.enrollment) is used as given and never touches
+ * `~/.brevi/worker.json`; otherwise the stored credential is read, a
+ * redeemed one persisted, and a dead one cleared, as always. `identity`
+ * defaults to the real ./identity.js functions; tests supply spies to prove
+ * the injected path never touches disk.
+ */
+export async function resolveEnrollment(
+  options: Pick<WorkerOptions, "enrollment" | "hostUrl">,
+  identity: {
+    enrollmentFor: (hostUrl: string) => Promise<WorkerEnrollment | undefined>;
+    saveEnrollment: (record: WorkerEnrollment) => Promise<void>;
+    clearEnrollment: () => Promise<void>;
+  } = { enrollmentFor, saveEnrollment, clearEnrollment },
+): Promise<{
+  enrollment: WorkerEnrollment | undefined;
+  onEnrolled: (record: WorkerEnrollment) => void | Promise<void>;
+  clearOnRevoke: () => Promise<void>;
+}> {
+  if (options.enrollment) {
+    const { workerId, credential } = options.enrollment;
+    return {
+      enrollment: { workerId, credential, host: options.hostUrl },
+      onEnrolled: () => {},
+      clearOnRevoke: async () => {},
+    };
+  }
+  return {
+    enrollment: await identity.enrollmentFor(options.hostUrl),
+    onEnrolled: (record) => identity.saveEnrollment(record),
+    clearOnRevoke: () => identity.clearEnrollment(),
+  };
 }
 
 /**
@@ -156,10 +235,22 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     return CONFIG_DEFAULTS;
   });
   const concurrency = options.concurrency ?? config.sandbox.concurrency;
-  // The credential an earlier enrollment on this host left behind, if any.
-  // Scoped to the host: a credential another brevi instance issued is not
-  // something this one would honour, so it counts as not being enrolled.
-  const enrollment = await enrollmentFor(options.hostUrl);
+  // The supervisor-injected identity (see WorkerOptions.enrollment) or the
+  // credential an earlier enrollment on this host left behind, if any.
+  const identity = await resolveEnrollment(options);
+
+  // Installed before provider setup, which can download a multi-GB rootfs:
+  // a supervisor that dies during it must still take this process down.
+  // Until shutdown() exists there is nothing to drain, so a bare exit is the
+  // graceful stop; the handler is re-pointed at shutdown() further down.
+  let onSupervisorGone = (): void => {
+    console.log(`[brevi] supervisor process ${options.supervisorPid} is gone; exiting`);
+    process.exit(0);
+  };
+  const stopSupervisorWatch =
+    options.supervisorPid !== undefined
+      ? watchSupervisor(options.supervisorPid, () => onSupervisorGone())
+      : undefined;
 
   console.log(`[brevi] resolving the ${config.sandbox.provider} sandbox provider...`);
   const provider: SandboxProvider = await createSandboxProvider({
@@ -427,6 +518,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
    */
   const shutdown = (failure?: Error): void => {
     shuttingDown = true;
+    stopSupervisorWatch?.();
     void (async () => {
       // Ordering matters here, in this order, because it is the difference
       // between a clean stop and orphaned microVMs:
@@ -488,15 +580,18 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   connection = connectToHost({
     hostUrl: options.hostUrl,
     token: options.token,
-    enrollment,
+    enrollment: identity.enrollment,
     name,
     capabilities,
     activeLeases: () => [...claimedLeases.values()],
     onLeaseLost: (leaseId, runId, reason) => handleLeaseLost(leaseId, runId, reason),
     // The pairing token was just redeemed for this credential, and this is
     // the only copy of it that exists: everything the connection does next
-    // waits on this write landing.
-    onEnrolled: (record) => saveEnrollment(record),
+    // waits on this write landing. A no-op for an injected enrollment.
+    onEnrolled: (record) => identity.onEnrolled(record),
+    // Mirrors onRevoked below: forget a dead credential locally, a no-op
+    // when it was injected.
+    forgetCredential: () => identity.clearOnRevoke(),
     onState: (state: WorkerState) => {
       const next = state === "draining";
       // The state arrives on every registration and heartbeat-ack too, so only
@@ -522,9 +617,10 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
       if (shuttingDown) return;
       void (async () => {
         // The credential is dead on the host, so keeping it would only mean
-        // being refused on every later start. Forget it first, then stop the
-        // same way a SIGTERM would, so in-flight sandboxes still come down.
-        await clearEnrollment().catch((error: unknown) => {
+        // being refused on every later start. Forget it first (a no-op for
+        // an injected enrollment; see resolveEnrollment), then stop the same
+        // way a SIGTERM would, so in-flight sandboxes still come down.
+        await identity.clearOnRevoke().catch((error: unknown) => {
           console.error(`[brevi] could not remove the stored credential: ${errorMessage(error)}`);
         });
         shutdown(
@@ -534,7 +630,25 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
         );
       })();
     },
+    // The connection already forgot the credential; like a revoke, drain
+    // in-flight sandboxes instead of exiting outright.
+    onUnauthorized: () => {
+      if (shuttingDown) return;
+      shutdown(
+        new Error(
+          "this worker's enrollment is no longer valid. Enroll this machine again with a fresh pairing token from Configuration > Workers.",
+        ),
+      );
+    },
   });
+
+  // The full shutdown path exists now; a dead supervisor drains instead of
+  // exiting outright.
+  onSupervisorGone = () => {
+    if (shuttingDown) return;
+    console.log(`[brevi] supervisor process ${options.supervisorPid} is gone; shutting down`);
+    shutdown();
+  };
 
   attachSessions = createAttachSessions({
     provider,
@@ -582,7 +696,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   process.on("SIGTERM", onSigterm);
 
   console.log(
-    enrollment
+    identity.enrollment
       ? `[brevi] connecting to ${options.hostUrl} as worker "${name}"...`
       : `[brevi] enrolling with ${options.hostUrl} as worker "${name}"...`,
   );

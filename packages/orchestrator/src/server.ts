@@ -20,6 +20,7 @@ import {
   type CredentialsUpdateRequest,
   type ForgetMemoryRequest,
   type HealthResponse,
+  type HostExecution,
   type LinearStatus,
   type Run,
   type RunEvent,
@@ -45,11 +46,23 @@ export interface StartOptions {
    * CLI bundles the dashboard and passes its own path here.
    */
   appDist?: string;
+  /**
+   * Whether this machine can execute runs, and through what. Computed by
+   * the booting process (CLI or desktop app), never by the orchestrator,
+   * and surfaced verbatim on /api/health.
+   */
+  hostExecution?: HostExecution;
 }
 
 export interface OrchestratorHandle {
   port: number;
   url: string;
+  /**
+   * Mint or refresh the local worker's credential, in plaintext, for the
+   * caller to inject into the child it is about to spawn. Every call
+   * rotates it, invalidating whatever the previous call minted.
+   */
+  ensureLocalWorker(name: string): Promise<{ workerId: string; credential: string }>;
   stop(): Promise<void>;
 }
 
@@ -210,6 +223,8 @@ function buildApp(
    * point at the socket that will receive the callback.
    */
   boundPort: () => number,
+  /** See StartOptions.hostExecution; reported on /api/health verbatim when the booter supplied it. */
+  hostExecution: HostExecution | undefined,
 ): Hono<{ Bindings: HttpBindings }> {
   const app = new Hono<{ Bindings: HttpBindings }>();
 
@@ -220,6 +235,7 @@ function buildApp(
       sandboxProvider: orchestrator.providerName,
       hostMemMib: Math.round(totalmem() / (1024 * 1024)),
     };
+    if (hostExecution) health.hostExecution = hostExecution;
     return c.json(health);
   });
 
@@ -749,7 +765,7 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
   // Filled in once the listener binds; the OAuth flows read it through the
   // getter rather than capturing a number that a settings save can outdate.
   let boundPort = config.server.port;
-  const app = buildApp(orchestrator, config, options.appDist, () => boundPort);
+  const app = buildApp(orchestrator, config, options.appDist, () => boundPort, options.hostExecution);
   const server = await new Promise<HttpServer>((resolvePromise, rejectPromise) => {
     const instance = serve(
       { fetch: app.fetch, port: config.server.port, hostname: config.server.host },
@@ -772,6 +788,7 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
   return {
     port,
     url: `http://${urlHost(config.server.host)}:${port}`,
+    ensureLocalWorker: (name: string) => orchestrator.ensureLocalWorker(name),
     async stop(): Promise<void> {
       sockets.close();
       await fleetListener?.close();

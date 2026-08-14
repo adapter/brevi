@@ -45,3 +45,6 @@ yarn-error.log*
 # Misc
 .DS_Store
 *.pem
+
+# Claude Code session state and worktrees
+.claude/

@@ -115,6 +115,7 @@ export function ConfigurationPage({
             <WorkersSection
               config={config}
               workers={workers}
+              health={health}
               onConfig={onConfig}
               onWorkers={onWorkers}
             />

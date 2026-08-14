@@ -1,5 +1,12 @@
 import { useState } from "react";
-import type { FleetResponse, PairingTokenResponse, WorkerConnection, WorkerView } from "@brevi/shared";
+import type {
+  FleetResponse,
+  HealthResponse,
+  HostExecution,
+  PairingTokenResponse,
+  WorkerConnection,
+  WorkerView,
+} from "@brevi/shared";
 import { DEFAULT_FLEET_PORT, type BreviConfig } from "@brevi/shared/config";
 // Deep import on purpose: the root barrel re-exports paths.ts, which calls
 // homedir() at module scope, and a value import of the barrel would drag that
@@ -34,6 +41,37 @@ function errorText(cause: unknown): string {
 }
 
 /**
+ * The empty-fleet explanation: the plain "enroll one" copy when this host
+ * can execute runs itself (or is too old to report), otherwise say why not
+ * before pointing at "Add a worker".
+ */
+function emptyFleetCopy(hostExecution: HostExecution | undefined) {
+  if (hostExecution?.kind !== "none") {
+    return (
+      <>
+        No workers enrolled yet. Runs stay queued until one joins; use{" "}
+        <span className="text-haze-400">Add a worker</span> above to enroll the first machine.
+      </>
+    );
+  }
+  if (hostExecution.reason === "macos-vm-not-installed") {
+    return (
+      <>
+        No workers enrolled yet, and this machine can&apos;t run agents itself. Set up the macOS
+        worker (<code className="font-mono text-[11px]">brevi mac install</code>) or use{" "}
+        <span className="text-haze-400">Add a worker</span> above to enroll another machine.
+      </>
+    );
+  }
+  return (
+    <>
+      No workers enrolled yet, and this machine can&apos;t run agents itself. Use{" "}
+      <span className="text-haze-400">Add a worker</span> above to enroll one.
+    </>
+  );
+}
+
+/**
  * Connected, and whether anything is happening on it. The warm accent is
  * reserved for a worker actually executing runs, the way it is everywhere
  * else; a connected but idle machine is mint, like the header's own live
@@ -63,11 +101,13 @@ function ConnectionDot({ connection, busy }: { connection: WorkerConnection; bus
 export function WorkersSection({
   config,
   workers,
+  health,
   onConfig,
   onWorkers,
 }: {
   config: BreviConfig;
   workers: WorkerView[];
+  health: HealthResponse | null;
   onConfig: (config: BreviConfig) => void;
   onWorkers: (workers: WorkerView[]) => void;
 }) {
@@ -144,6 +184,11 @@ export function WorkersSection({
   const minutesLeft = pairing
     ? Math.max(0, Math.round((Date.parse(pairing.expiresAt) - now) / 60_000))
     : 0;
+
+  // The host's own local worker pinned first, out of enrollment order.
+  const orderedWorkers = [...workers].sort(
+    (a, b) => Number(Boolean(b.local)) - Number(Boolean(a.local)),
+  );
 
   return (
     <>
@@ -282,13 +327,11 @@ export function WorkersSection({
             )}
             {workers.length === 0 ? (
               <p className="text-[12.5px] leading-relaxed text-haze-700">
-                No workers enrolled yet. Runs stay queued until one joins; use{" "}
-                <span className="text-haze-400">Add a worker</span> above to enroll the first
-                machine.
+                {emptyFleetCopy(health?.hostExecution)}
               </p>
             ) : (
               <ul>
-                {workers.map((worker) => {
+                {orderedWorkers.map((worker) => {
                   const rowBusy = busy[worker.id] === true;
                   const draining = worker.state === "draining";
                   return (
@@ -302,7 +345,11 @@ export function WorkersSection({
                             connection={worker.connection}
                             busy={worker.activeRuns > 0}
                           />
-                          {renamingId === worker.id ? (
+                          {worker.local ? (
+                            <span className="truncate font-mono text-[12.5px] text-haze-100">
+                              This machine
+                            </span>
+                          ) : renamingId === worker.id ? (
                             <Input
                               autoFocus
                               value={renameValue}
@@ -330,6 +377,7 @@ export function WorkersSection({
                               {worker.name}
                             </button>
                           )}
+                          {worker.local && <Badge variant="outline">Local</Badge>}
                           {draining && (
                             <Badge
                               variant="outline"
@@ -384,17 +432,19 @@ export function WorkersSection({
                       </div>
 
                       <div className="flex shrink-0 items-center gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          disabled={rowBusy}
-                          onClick={() => startRename(worker)}
-                          aria-label={`Rename ${worker.name}`}
-                          title="Rename"
-                        >
-                          <Edit />
-                        </Button>
+                        {!worker.local && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            disabled={rowBusy}
+                            onClick={() => startRename(worker)}
+                            aria-label={`Rename ${worker.name}`}
+                            title="Rename"
+                          >
+                            <Edit />
+                          </Button>
+                        )}
                         {draining ? (
                           <Button
                             type="button"
@@ -416,25 +466,27 @@ export function WorkersSection({
                             Drain
                           </Button>
                         )}
-                        <Button
-                          type="button"
-                          variant={revokeConfirmId === worker.id ? "destructive" : "ghost"}
-                          size="plate"
-                          disabled={rowBusy}
-                          onClick={() => {
-                            if (revokeConfirmId === worker.id) {
-                              mutate(worker.id, api.revokeWorker(worker.id));
-                              setRevokeConfirmId(null);
-                            } else {
-                              setRevokeConfirmId(worker.id);
+                        {!worker.local && (
+                          <Button
+                            type="button"
+                            variant={revokeConfirmId === worker.id ? "destructive" : "ghost"}
+                            size="plate"
+                            disabled={rowBusy}
+                            onClick={() => {
+                              if (revokeConfirmId === worker.id) {
+                                mutate(worker.id, api.revokeWorker(worker.id));
+                                setRevokeConfirmId(null);
+                              } else {
+                                setRevokeConfirmId(worker.id);
+                              }
+                            }}
+                            onBlur={() =>
+                              setRevokeConfirmId((id) => (id === worker.id ? null : id))
                             }
-                          }}
-                          onBlur={() =>
-                            setRevokeConfirmId((id) => (id === worker.id ? null : id))
-                          }
-                        >
-                          {revokeConfirmId === worker.id ? "Confirm" : "Revoke"}
-                        </Button>
+                          >
+                            {revokeConfirmId === worker.id ? "Confirm" : "Revoke"}
+                          </Button>
+                        )}
                       </div>
                     </li>
                   );

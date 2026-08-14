@@ -81,6 +81,7 @@ export default function App() {
         config={config}
         linearStatus={linearStatus}
         health={health}
+        workers={workers}
         busy={busy}
         unreachable={unreachable}
         onRun={handleRun}
@@ -88,6 +89,7 @@ export default function App() {
         onCancelRun={(id) => void cancelRun(id)}
         onRetryRun={(id) => void retryRun(id)}
         onAnotherLook={(id) => void followUpRun(id)}
+        onOpenWorkers={() => openConfig("workers")}
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
@@ -128,12 +130,14 @@ export default function App() {
                 run={selectedRun}
                 repoName={repoDisplay(config, selectedRun.ticket.repo)}
                 workers={workers}
+                health={health}
                 events={events[selectedRun.id] ?? []}
                 now={now}
                 busy={busy[selectedRun.id] === true}
                 onCancel={() => void cancelRun(selectedRun.id)}
                 onRetry={() => void retryRun(selectedRun.id)}
                 onFollowUp={() => followUpRun(selectedRun.id)}
+                onOpenWorkers={() => openConfig("workers")}
               />
             ) : (
               <Overview

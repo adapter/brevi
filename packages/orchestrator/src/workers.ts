@@ -252,6 +252,9 @@ interface WorkerRegistryEvents {
 /** What cancel() managed to do: "unknown" when the run has no active lease at all. */
 export type CancelOutcome = "sent" | "pending" | "unknown";
 
+/** A mutation the local worker refuses (rename, revoke). The scheduler maps exactly this to a 400; other failures stay server errors. */
+export class LocalWorkerRefusalError extends Error {}
+
 /** Parse one text frame as JSON, or undefined when it isn't well-formed JSON. */
 function safeJsonParse(raw: unknown): unknown {
   try {
@@ -544,6 +547,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
         activeRuns: this.#leasesForWorker(record.id).length,
         enrolledAt: record.enrolledAt,
       };
+      if (record.local) view.local = true;
       // What the worker reported on this connection beats what it reported on
       // its last one: a worker that gained /dev/kvm, or was restarted with a
       // different concurrency, says so at register time.
@@ -595,8 +599,26 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     return this.#fleet.authenticate(workerId, credential) !== null;
   }
 
-  /** Rename an enrolled worker. `name` is trusted to already be sanitized and non-empty. */
+  /**
+   * Mint or refresh the host's own local worker (see
+   * FleetStore.ensureLocalWorker), announced through the same "workers" emit
+   * every other mutation here uses.
+   */
+  async ensureLocalWorker(name: string): Promise<{ workerId: string; credential: string }> {
+    const result = await this.#fleet.ensureLocalWorker(name);
+    this.#emitWorkers();
+    return result;
+  }
+
+  /**
+   * Rename an enrolled worker. `name` is trusted to already be sanitized and
+   * non-empty. Refused for the local worker, which always presents as "This
+   * machine"; only ensureLocalWorker touches its record's name.
+   */
   async rename(id: string, name: string): Promise<boolean> {
+    if (this.#fleet.get(id)?.local) {
+      throw new LocalWorkerRefusalError("the local worker cannot be renamed; it always presents as this machine");
+    }
     if (!(await this.#fleet.rename(id, name))) return false;
     this.#emitWorkers();
     return true;
@@ -623,10 +645,14 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
    * and then failing to persist would report an error to the operator after
    * the worker had already been told it was revoked, which is backwards.
    * Serialized against registration on the same #gate: see #serialize for
-   * the race that closes.
+   * the race that closes. Refused for the local worker; draining it is the
+   * equivalent operation.
    */
   async revoke(id: string): Promise<boolean> {
     return this.#serialize(async () => {
+      if (this.#fleet.get(id)?.local) {
+        throw new LocalWorkerRefusalError("the local worker cannot be revoked; drain it instead");
+      }
       if (!(await this.#fleet.revoke(id))) return false;
       const live = this.#workers.get(id);
       if (live) {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { BreviConfig, HealthResponse, LinearStatus, Run, Ticket } from "@brevi/shared";
+import type { BreviConfig, HealthResponse, LinearStatus, Run, Ticket, WorkerView } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
 import {
   Sidebar,
@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { duration, relative } from "../lib/format";
+import { queueOnly } from "../lib/fleet";
 import { linearConnected as isLinearConnected } from "../lib/linear";
 import { repoDisplay } from "../lib/repo";
 import { isActive, isTerminal, STATUS_TONE } from "../lib/status";
@@ -31,6 +32,7 @@ export function AppSidebar({
   config,
   linearStatus,
   health,
+  workers,
   busy,
   unreachable,
   onRun,
@@ -38,6 +40,7 @@ export function AppSidebar({
   onCancelRun,
   onRetryRun,
   onAnotherLook,
+  onOpenWorkers,
 }: {
   tickets: Ticket[];
   runs: Run[];
@@ -47,6 +50,7 @@ export function AppSidebar({
   config: BreviConfig | null;
   linearStatus: LinearStatus | null;
   health: HealthResponse | null;
+  workers: WorkerView[];
   busy: Record<string, true | undefined>;
   /** No orchestrator has answered yet, so an empty queue means nothing. */
   unreachable: boolean;
@@ -56,6 +60,8 @@ export function AppSidebar({
   onCancelRun: (runId: string) => void;
   onRetryRun: (runId: string) => void;
   onAnotherLook: (runId: string) => void;
+  /** Opens the Workers config page, for the queue-only notice below. */
+  onOpenWorkers: () => void;
 }) {
   // config === null still counts as connected so the connect card doesn't
   // flash before the first config arrives.
@@ -89,6 +95,9 @@ export function AppSidebar({
   const finished = runs.filter((r) => isTerminal(r.status));
   const inFlightCount = active.length + queued.length + pending.length;
 
+  const hostExecution = health?.hostExecution;
+  const showQueueOnly = queueOnly(health, workers);
+
   return (
     <Sidebar collapsible="offcanvas" className="border-sidebar-border">
       <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
@@ -117,6 +126,9 @@ export function AppSidebar({
             </span>
           </SidebarGroupLabel>
           <SidebarGroupContent>
+            {showQueueOnly && hostExecution?.kind === "none" && (
+              <QueueOnlyNotice reason={hostExecution.reason} onOpenWorkers={onOpenWorkers} />
+            )}
             {pending.length === 0 && runs.length === 0 ? (
               unreachable ? (
                 <p className="px-2 py-2 text-[12.5px] leading-relaxed text-haze-700">
@@ -210,6 +222,45 @@ export function AppSidebar({
         </SidebarGroup>
       </SidebarContent>
     </Sidebar>
+  );
+}
+
+/**
+ * This machine cannot execute runs and nothing else is connected, so the
+ * queue cannot drain. Shown whenever the condition holds, since the per-run
+ * queueReason strip only appears once a run exists to carry it.
+ */
+function QueueOnlyNotice({
+  reason,
+  onOpenWorkers,
+}: {
+  reason: "macos-vm-not-installed" | "unsupported-platform";
+  onOpenWorkers: () => void;
+}) {
+  return (
+    <div className="mx-1 mb-2 rounded-[5px] border border-haze-700/50 bg-haze-600/10 p-3">
+      <p className="text-[12px] leading-relaxed text-haze-400">
+        This machine can&apos;t run agents itself. Queued runs will wait for a worker.{" "}
+        {reason === "macos-vm-not-installed" ? (
+          <>
+            Set up the macOS worker (
+            <code className="font-mono text-[11px]">brevi mac install</code>) or enroll another
+            machine from the{" "}
+          </>
+        ) : (
+          "Enroll another machine from the "
+        )}
+        <Button
+          type="button"
+          variant="link"
+          className="h-auto p-0 align-baseline text-[12px] text-haze-200 hover:text-haze-50"
+          onClick={onOpenWorkers}
+        >
+          Workers page
+        </Button>
+        .
+      </p>
+    </div>
   );
 }
 
