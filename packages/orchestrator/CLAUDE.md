@@ -18,7 +18,7 @@ The host is a pure scheduler: it owns the run store, the ticket poll, the memory
 - `memory.ts`: per-repo memories under `~/.brevi/memories/`, selected into each dispatch and harvested from what a run reports back
 - `connect.ts` / `credentials.ts`: Connections panel flows and live credential verification
 - `r2.ts`: Cloudflare R2 evidence uploads via the wrangler CLI, GIF previews via ffmpeg
-- `config.ts`: load/save `~/.brevi/config.json` (schema lives in `@brevi/shared`)
+- `config.ts`: load/save `~/.brevi/config.json` (schema lives in `@brevi/shared`); `ensureConfig` writes schema defaults on first launch so the CLI and desktop app can start without a prior init command
 - `internal.ts`: the node-side helpers `@brevi/worker` reuses (GitHub, Linear, R2, limits, memory, path safety), so the execution stack does not need a second copy of them
 - `logfile.ts`: tees console output to `~/.brevi/logs/orchestrator.log` for diagnostics
 - `pid.ts`: read/write `~/.brevi/server.pid`, written by whichever process runs the server and read by both the CLI and the desktop app

@@ -241,7 +241,7 @@ export function SandboxSection({
               draft={vm}
               wide
               placeholder="~/.brevi/images/vmlinux"
-              help="Uncompressed Linux kernel image (vmlinux). Empty uses the image brevi setup downloads."
+              help="Uncompressed Linux kernel image (vmlinux). Empty uses the image first-run provisioning downloads."
             />
             <TextField
               label="Rootfs"

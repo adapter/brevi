@@ -19,7 +19,7 @@ const program = new Command();
 program
   .name("brevi")
   .description(
-    "Local sandbox + orchestrator for coding agents: watches Linear, runs brevi-labeled tickets, opens PRs. Run with no arguments to set up (first launch only), start, and open the dashboard.",
+    "Local sandbox + orchestrator for coding agents: watches Linear, runs brevi-labeled tickets, opens PRs. Run with no arguments to start and open the dashboard.",
   )
   .version(readPackageVersion());
 

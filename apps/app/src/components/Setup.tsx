@@ -8,10 +8,9 @@ import { SandboxProviderField } from "./config/SandboxSection";
 /**
  * First-run setup, rendered once at /setup: the sandbox provider choice and
  * the Connectors panel, both required before brevi is actually usable.
- * `index.ts` in the desktop app sends a genuinely first launch (no prior
- * ~/.brevi/config.json) here instead of the dashboard; a CLI user reaches the
- * same page by visiting the URL directly, since it's just another route.
- * Everything below wraps the real Configuration controls rather than
+ * A genuinely first launch (no prior ~/.brevi/config.json) lands here: the
+ * desktop app sends the window, and `npx @brevi/cli` opens this URL in the
+ * browser. Everything below wraps the real Configuration controls rather than
  * reimplementing them, so there is exactly one sandbox.provider control and
  * one Connectors implementation.
  */

@@ -184,7 +184,7 @@ async function checkConfigSection(): Promise<{ section: Section; config: BreviCo
       name: "config file",
       status: "fail",
       detail: `no config at ${CONFIG_PATH}`,
-      hint: "Run `brevi init` to create one.",
+      hint: "Run `npx @brevi/cli` to create one.",
     });
     return finish(undefined);
   }
@@ -197,7 +197,7 @@ async function checkConfigSection(): Promise<{ section: Section; config: BreviCo
       name: "config file",
       status: "fail",
       detail: `not valid JSON: ${errorMessage(err)}`,
-      hint: "Fix the file or recreate it with `brevi init`.",
+      hint: "Fix the file or delete it and run `npx @brevi/cli`.",
     });
     return finish(undefined);
   }

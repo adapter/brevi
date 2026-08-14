@@ -1,11 +1,11 @@
 # @brevi/cli
 
-The published `brevi` command line (bin: `dist/index.js`). Thin layer over `@brevi/orchestrator`: parses commands with commander, runs the init flow, starts the orchestrator, opens the dashboard.
+The published `brevi` command line (bin: `dist/index.js`). Thin layer over `@brevi/orchestrator`: parses commands with commander, starts the orchestrator, opens the dashboard. First launch writes schema defaults and lands on `/setup`; on Linux it also provisions Firecracker.
 
 ## Layout
 
 - `src/index.ts`: entry point and command registration
-- `src/commands/`: one file per command (`init`, `ui`/default, `start`, `status`, `update`)
+- `src/commands/`: one file per command (`default`/`ui`, `start`, `status`, `update`; `setup` is hidden for the installer; `init` is a hidden removal stub)
 - `src/lib/`: prompt helpers (@clack/prompts), config discovery, update logic
 
 ## Gotchas

@@ -41,7 +41,7 @@ export const FLEET_DIR = join(BREVI_HOME, "fleet");
 /** Outstanding run leases, reloaded on boot so a host restart does not lose in-flight runs. */
 export const LEASES_PATH = join(FLEET_DIR, "leases.json");
 
-/** Where `brevi setup` downloads the kernel and `build-rootfs.sh` writes the image. */
+/** Where first-run host provisioning downloads the kernel and `build-rootfs.sh` writes the image. */
 export const DEFAULT_KERNEL_IMAGE = join(IMAGES_DIR, "vmlinux");
 export const DEFAULT_ROOTFS = join(IMAGES_DIR, "rootfs.ext4");
 

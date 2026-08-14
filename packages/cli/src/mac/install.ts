@@ -177,7 +177,7 @@ async function resolveHostAndToken(
   if (hostUrl === undefined) {
     const config = await loadConfig().catch((err: unknown) => {
       log.error(errorMessage(err));
-      log.info(`Run ${pc.cyan("npx @brevi/cli init")} to create one, or pass --host directly.`);
+      log.info(`Run ${pc.cyan("npx @brevi/cli")} to create one, or pass --host directly.`);
       return undefined;
     });
     if (config === undefined) return undefined;

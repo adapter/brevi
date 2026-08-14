@@ -12,12 +12,12 @@ Every run executes inside a sandbox: one sandbox holds one run's workspace. The 
 
 ## Choosing a provider
 
-`brevi init` writes your choice to `sandbox.provider`:
+The first-run **Set up brevi** page (and Configuration later) writes your choice to `sandbox.provider`:
 
 - **`auto`** (recommended): Firecracker when the host passes the full preflight, the same checks `brevi start` runs for an explicit `firecracker` provider: Linux, `/dev/kvm` readable and writable, the firecracker binary resolving on `PATH`, in `~/.brevi/bin`, or at `sandbox.firecracker.binary`, the kernel and ssh key images in place, a resolvable rootfs image (built from source, or downloaded and cached) whose manifest version matches brevi's, and networking ready (tap devices for `sandbox.concurrency`, IPv4 forwarding enabled). Otherwise the process provider. `auto` never fails; it downgrades.
 - **`firecracker`** / **`process`**: constructed and checked at startup, so a misconfigured host fails immediately with one aggregated, actionable error instead of halfway through a run.
 
-You can change the provider any time by editing `sandbox.provider` in `~/.brevi/config.json` (or re-running `brevi init`) and restarting brevi.
+You can change the provider any time from Configuration, or by editing `sandbox.provider` in `~/.brevi/config.json` and restarting brevi.
 
 ## Firecracker
 
@@ -25,17 +25,11 @@ On Linux with KVM, each run boots its own microVM: the base rootfs is cloned cop
 
 ### One-time host setup
 
-Four things are needed once per machine. The recommended path is one command:
-
-```sh
-brevi setup
-```
-
-It walks through everything below interactively (see [the CLI reference](/reference/cli/#brevi-setup)), skips whatever is already in place, and prints every `sudo` command before running it. Downloads are sha256-verified against pinned digests, the final check also verifies networking (tap devices and IPv4 forwarding), and setup exits non-zero when the host is not ready. The manual equivalents follow; this is a summary, see `packages/sandbox/README.md` in the repo for the full walkthrough and troubleshooting.
+Four things are needed once per machine. The first `brevi` (or `npx @brevi/cli`) on a Linux host provisions them automatically: it skips whatever is already in place, prints every `sudo` command before running it, and continues to the dashboard even if something is still missing (`auto` then falls back to the process provider). Downloads are sha256-verified against pinned digests. The worker installer and `brevi mac install` call the same flow unattended (`brevi setup --yes`). The manual equivalents follow; this is a summary, see `packages/sandbox/README.md` in the repo for the full walkthrough and troubleshooting.
 
 1. **Kernel**: an uncompressed `vmlinux` at `~/.brevi/images/vmlinux`. The Firecracker CI bucket used by their quickstart is the easiest source. Any kernel works if virtio-blk, virtio-net, ext4 and the 8250 serial driver are built in rather than modules.
 
-2. **Rootfs**: `brevi setup` downloads the prebuilt, checksum-verified image (no Docker needed) into a cache at `~/.brevi/cache/rootfs/<version>/`, where `<version>` is the brevi release version. A corrupted cached image is detected, and redownloaded automatically, both at startup and whenever a sandbox is created, rather than failing a run. After an install, cached images unused for 30 days are pruned; the image currently in use is never pruned, so two installed brevi versions keep separate cached images without conflict. Preflight compares the resolved image's manifest version against the version brevi expects: an older image means the host's image needs updating (`brevi setup` again, or a from-source rebuild), a newer image means brevi itself needs updating.
+2. **Rootfs**: first-run provisioning downloads the prebuilt, checksum-verified image (no Docker needed) into a cache at `~/.brevi/cache/rootfs/<version>/`, where `<version>` is the brevi release version. A corrupted cached image is detected, and redownloaded automatically, both at startup and whenever a sandbox is created, rather than failing a run. After an install, cached images unused for 30 days are pruned; the image currently in use is never pruned, so two installed brevi versions keep separate cached images without conflict. Preflight compares the resolved image's manifest version against the version brevi expects: an older image means the host's image needs updating (run `brevi` again on this host, or a from-source rebuild), a newer image means brevi itself needs updating.
 
    Building from source remains supported, for development and air-gapped hosts, and a from-source image at `~/.brevi/images/rootfs.ext4` takes precedence over the cache when present (needs docker and root):
 
@@ -43,7 +37,7 @@ It walks through everything below interactively (see [the CLI reference](/refere
    sudo packages/sandbox/scripts/build-rootfs.sh --with-kernel
    ```
 
-   This produces a ~2 GB ext4 image at `~/.brevi/images/rootfs.ext4` with node 22, git, curl, tar, ripgrep, both agent CLIs (`@anthropic-ai/claude-code` and `@openai/codex`, the latter used for the adversarial review step), `ccusage` (used for live cost capture from the Claude Code transcripts), and an sshd. The image no longer depends on a key baked in at build time: brevi injects the host's public key at boot (generated by `brevi setup` if missing), so the same image works on every machine. An image built for an older rootfs contract (which includes any image predating `ccusage`) is rejected by preflight and will not run: download the current prebuilt image (`brevi setup`, or automatically at startup) or rebuild from source before Firecracker will start.
+   This produces a ~2 GB ext4 image at `~/.brevi/images/rootfs.ext4` with node 22, git, curl, tar, ripgrep, both agent CLIs (`@anthropic-ai/claude-code` and `@openai/codex`, the latter used for the adversarial review step), `ccusage` (used for live cost capture from the Claude Code transcripts), and an sshd. The image no longer depends on a key baked in at build time: brevi injects the host's public key at boot (generated on first launch if missing), so the same image works on every machine. An image built for an older rootfs contract (which includes any image predating `ccusage`) is rejected by preflight and will not run: download the current prebuilt image (automatically at startup) or rebuild from source before Firecracker will start.
 
 3. **Networking**: pre-create tap devices and the NAT rule:
 

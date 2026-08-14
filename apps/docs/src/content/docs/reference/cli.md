@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: "Reference for the brevi command line: the default invocation, init, setup, start, status, doctor, worker, mac and update."
+description: "Reference for the brevi command line: the default invocation, start, status, doctor, worker, mac and update."
 ---
 
 The CLI is [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli), exposed as the `brevi` binary. Run it with `npx @brevi/cli [command]`, or install it globally with `npm install -g @brevi/cli` (see [Getting started](/getting-started/)).
@@ -9,10 +9,8 @@ The CLI is [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli), exposed as 
 brevi [command]
 
   (none)    Start the orchestrator and open the dashboard in your browser;
-            runs init first if there is no config yet
-  init      Create the brevi config and choose a sandbox provider
-  setup     Set up the firecracker sandbox on this host
-            (kvm, binary, kernel, rootfs, network)
+            first launch writes the config, provisions Firecracker on
+            Linux, and opens /setup
   start     Start the orchestrator headlessly, without opening a browser
   status    Check whether the brevi orchestrator is running
   doctor    Check the whole brevi setup: config, server, sandbox,
@@ -34,7 +32,7 @@ There are no global flags beyond `--version` and `--help`, and no environment va
 
 Running `brevi` with no arguments loads the config, starts the orchestrator (which begins polling Linear), serves the dashboard on `http://localhost:<server.port>` (4400 by default, bound to `server.host`, `127.0.0.1` unless configured), and opens it in your default browser. If the browser can't be opened, the URL is printed instead.
 
-On first launch, when there is no `~/.brevi/config.json` yet, it runs the [init flow](#brevi-init) automatically before starting, so a fresh machine goes from zero to dashboard in one command. In a non-interactive terminal (CI, scripts) the auto-init cannot prompt, so a missing config fails immediately with a message instead of hanging; run `brevi init` from an interactive terminal first.
+On first launch, when there is no `~/.brevi/config.json` yet, it writes schema defaults, provisions the [Firecracker sandbox](/guides/sandboxes/) on Linux (binary, kernel, rootfs, tap network), then opens the dashboard at `/setup` so you can pick a sandbox provider and connect Linear, GitHub, and an agent. A non-interactive terminal (CI, scripts) still writes the default config and starts; it skips Firecracker provisioning so it never hangs on a prompt or `sudo`.
 
 Runs in the foreground; `Ctrl+C` (or `SIGTERM`) shuts down gracefully: polling stops, an active run is aborted, queued runs are cancelled, and run state is flushed to disk.
 
@@ -42,33 +40,13 @@ Fails with an actionable message when the orchestrator can't start, for example 
 
 `brevi ui`, the previous name for this invocation, still works as a hidden deprecated alias and will be removed in a future release.
 
-## `brevi init`
-
-Creates `~/.brevi/config.json` and asks exactly one configuration question, the sandbox provider:
-
-| Choice | Meaning |
-| --- | --- |
-| `auto` | Firecracker when the host passes the full preflight (Linux, KVM, binary, images, key), the process provider otherwise (recommended) |
-| `firecracker` | Linux + KVM required, strongest isolation |
-| `process` | No isolation, development only |
-
-Picking `firecracker` on a non-Linux machine prints a warning; the config is still written.
-
-If a config already exists, `init` asks before touching it and **preserves everything else**: credentials, repository mappings, triggers. An unparseable config can be overwritten. A summary is shown before saving, listing the provider, which providers are connected, and the mapped repositories.
-
-Everything except the sandbox provider is configured from the dashboard's Configuration page, and the bare `brevi` invocation runs init automatically on first launch, so an explicit `brevi init` is normally only needed to change the sandbox provider later.
-
-On Linux, when the saved provider is `auto` or `firecracker` but the host isn't provisioned yet, init offers to run [`brevi setup`](#brevi-setup) inline. Declining changes nothing.
-
-Init then checks for the external CLIs brevi shells out to: `claude`, `codex`, `gh`, and `wrangler`. The agent CLIs (`claude`, `codex`) are only required on the host when runs execute with the process provider; under firecracker they ship inside the sandbox image, so they're checked but optional on the host. `gh` and `wrangler` are always optional, used by the dashboard's Connect flow and the R2 connector respectively. For each missing tool, init offers to install it; declining or a failed install never fails init, it just gets reported. The step ends with a per-tool status line, and re-running `brevi init` repeats the check.
-
 ## `brevi setup`
 
 ```
 brevi setup [-y, --yes] [--skip-network] [--set-provider]
 ```
 
-Provisions the current Linux host for the [Firecracker sandbox](/guides/sandboxes/). Interactive and idempotent: each step checks itself first and is skipped with a note when already satisfied, so re-running after a reboot or a partial first run is safe.
+Hidden. The same Firecracker provisioning first launch runs on Linux, kept for the [Linux worker installer](/guides/workers/) and `brevi mac install`. Interactive and idempotent: each step checks itself first and is skipped with a note when already satisfied, so re-running after a reboot or a partial first run is safe.
 
 | Flag | Meaning |
 | --- | --- |
@@ -76,7 +54,7 @@ Provisions the current Linux host for the [Firecracker sandbox](/guides/sandboxe
 | `--skip-network` | Skip the networking step. For a caller that provisions tap devices and NAT rules itself, for example the [Linux worker installer](/guides/workers/)'s systemd unit, which re-runs `setup-network.sh` as root on every boot instead of relying on this one-shot step. |
 | `--set-provider` | Set `sandbox.provider` to `firecracker` once setup succeeds, instead of asking, and write the firecracker settings this run provisioned along with it (creating the config when the machine has none). |
 
-`--yes` picks the path that needs no human and no extra host dependency: it accepts apt package installs, but declines a from-source rootfs build (and never installs docker) in favor of the prebuilt rootfs download, logging what it skipped and how to do it manually. The [Linux worker installer](/guides/workers/) runs `brevi setup --yes --skip-network --set-provider` to provision Firecracker unattended as its service user.
+`--yes` picks the path that needs no human and no extra host dependency: it accepts apt package installs, but declines a from-source rootfs build (and never installs docker) in favor of the prebuilt rootfs download, logging what it skipped and how to do it manually. The [Linux worker installer](/guides/workers/) runs `brevi setup --yes --skip-network --set-provider` to provision Firecracker unattended as its service user. First launch of `brevi` on an interactive Linux terminal runs the same flow with `--yes`.
 
 The steps, in order:
 
@@ -89,11 +67,11 @@ The steps, in order:
 
 brevi never escalates privileges silently: every `sudo` command line is printed before it runs, and every step that uses one asks first. Setup ends with the same complete preflight check `brevi start` uses, including networking (tap devices and IPv4 forwarding) and the rootfs manifest version; when everything passes, setup offers to switch `sandbox.provider` from `process` to `firecracker` (asking, unless `--set-provider` already answered) and reports the sandbox ready. Remaining problems are listed instead, with a pointer to re-run once fixed, and setup exits non-zero.
 
-Requires Linux and, without `--yes`, an interactive terminal; on other platforms there is nothing to set up, since the `auto` provider selects the [process provider](/guides/sandboxes/#the-process-provider) there (an explicit `firecracker` provider fails at startup instead). Works without a config too (`brevi init` picks the provisioned host up afterwards).
+Requires Linux and, without `--yes`, an interactive terminal; on other platforms there is nothing to set up, since the `auto` provider selects the [process provider](/guides/sandboxes/#the-process-provider) there (an explicit `firecracker` provider fails at startup instead).
 
 ## `brevi start`
 
-Identical to the bare `brevi` invocation, but does not open a browser and never auto-runs init; it fails with an actionable message when there is no config (`run brevi init first`). Use it for headless machines and process managers. The dashboard is still served on the same port.
+Identical to the bare `brevi` invocation, but does not open a browser. On first launch it still writes the default config and, on an interactive Linux terminal, provisions Firecracker. Use it for headless machines and process managers. The dashboard is still served on the same port.
 
 ## `brevi status`
 

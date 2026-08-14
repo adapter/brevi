@@ -13,7 +13,7 @@ src/content/docs/
 │   ├── tickets.md            eligibility, repo routing, run output, reruns
 │   └── sandboxes.md          provider selection, Firecracker setup, caveats
 └── reference/
-    ├── cli.md                brevi init / ui / start / status
+    ├── cli.md                brevi / start / status
     ├── configuration.md      ~/.brevi/config.json schema
     └── api.md                orchestrator HTTP + WS protocol, api.brevi.dev
 ```

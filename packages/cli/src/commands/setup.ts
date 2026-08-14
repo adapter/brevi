@@ -71,9 +71,9 @@ const DOCKER_PACKAGE = { tool: "docker", aptPackage: "docker.io" };
 
 export function registerSetupCommand(program: Command): void {
   program
-    .command("setup")
+    .command("setup", { hidden: true })
     .description(
-      "Set up the firecracker sandbox on this host (kvm, binary, kernel, rootfs, network)",
+      "Provision the firecracker sandbox on this Linux host (used by the worker installer and first launch)",
     )
     .option(
       "-y, --yes",
@@ -104,8 +104,8 @@ export function registerSetupCommand(program: Command): void {
 
 export interface RunSetupOptions {
   /**
-   * False when setup runs inline from `brevi init`, which already drew its own
-   * intro/outro frame; setup then logs its result instead of closing the frame.
+   * False when setup runs inline under another frame (the caller already drew
+   * intro/outro); setup then logs its result instead of closing the frame.
    */
   standalone?: boolean;
   /**
@@ -161,7 +161,7 @@ export async function runSetup({
   let config = await loadExisting();
   if (!config) {
     log.info(
-      `No config at ${pc.dim(CONFIG_PATH)} yet; provisioning with the default image paths. Run ${pc.cyan("brevi init")} afterwards and it will pick everything up.`,
+      `No config at ${pc.dim(CONFIG_PATH)} yet; provisioning with the default image paths.`,
     );
   }
   let firecracker = config?.sandbox.firecracker ?? firecrackerConfigSchema.parse({});

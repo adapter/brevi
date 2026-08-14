@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Install brevi from npm, pick a sandbox provider, connect Linear, GitHub and a coding agent, and run your first ticket.
+description: Install brevi from npm, connect Linear, GitHub and a coding agent in the dashboard, and run your first ticket.
 ---
 
 import { Steps, Aside } from '@astrojs/starlight/components';
@@ -44,17 +44,11 @@ Prefer a GUI to a terminal? Mission Control is the same brevi as a downloadable,
 
 1. **Run `brevi`**
 
-   The first launch (no `~/.brevi/config.json` yet) starts with the init flow, which asks a single question, the sandbox provider:
+   The first launch (no `~/.brevi/config.json` yet) writes schema defaults, provisions the Firecracker sandbox on Linux with KVM, starts the orchestrator on `http://localhost:4400`, and opens the **Set up brevi** page in your browser. That page is where you pick a sandbox provider and connect accounts. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up. Change the sandbox provider later from Configuration; it keeps everything else in the config (credentials, repositories) untouched.
 
-   - `auto` (recommended): Firecracker on Linux with KVM, the process sandbox everywhere else.
-   - `firecracker`: fails fast at startup if the host isn't ready.
-   - `process`: no isolation, development only.
+2. **Connect your accounts**
 
-   The orchestrator then binds `http://localhost:4400`, serves the dashboard, and opens it in your browser. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up. To change the sandbox provider later, run `brevi init`; it keeps everything else in the config (credentials, repositories) untouched.
-
-2. **Open the Configuration page**
-
-   Click the gear button in the dashboard's nav bar (or go to `/config`). The **Configuration** page is where every credential is set. Each provider has a **Connect** button that tries automatic strategies first and only falls back to a manual key input:
+   On first launch the dashboard opens on `/setup`. Later, click the gear button (or go to `/config`). Each provider has a **Connect** button that tries automatic strategies first and only falls back to a manual key input:
 
    - **GitHub**: your `gh` CLI login, otherwise an OAuth device code (a code to type on github.com).
    - **Claude**: a Claude Code login discovered on this machine (macOS Keychain or `~/.claude`), or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` in the orchestrator's environment.

@@ -12,7 +12,7 @@ export function registerAttachCommand(program: Command): void {
     .action(async (runId: string) => {
       const config = await loadConfig().catch((err: unknown) => {
         console.error(pc.red(`✖ ${errorMessage(err)}`));
-        console.error(pc.dim("  Run `npx @brevi/cli init` to create one."));
+        console.error(pc.dim("  Run `npx @brevi/cli` to create one."));
         process.exit(1);
       });
 

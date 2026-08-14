@@ -1,4 +1,5 @@
-export { loadConfig, saveConfig } from "./config.js";
+export { ensureConfig, loadConfig, saveConfig } from "./config.js";
+export type { EnsureConfigResult } from "./config.js";
 export { startOrchestrator } from "./server.js";
 export type { OrchestratorHandle, StartOptions } from "./server.js";
 export { validateLinearApiKey, validateGithubToken } from "./credentials.js";

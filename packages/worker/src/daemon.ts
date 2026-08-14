@@ -226,8 +226,8 @@ function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T | "timeout"
  */
 export async function runWorker(options: WorkerOptions): Promise<void> {
   const name = options.name ?? hostname();
-  // A machine that only ever runs `brevi worker` has no reason to have run
-  // `brevi init`, so an absent (or unreadable) config is not fatal here the
+  // A machine that only ever runs `brevi worker` has no reason to have a
+  // local config, so an absent (or unreadable) file is not fatal here the
   // way it is for every other command: fall back to the schema's own
   // defaults, which is a process-provider worker with concurrency 1.
   const config = await loadConfig(options.configPath).catch((error: unknown) => {

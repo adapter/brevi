@@ -91,13 +91,13 @@ place), and removes the sandbox directory.
 
 ## One-time Linux setup
 
-The recommended path is `brevi setup`: it installs missing host tools (offered via apt),
-checks KVM access, downloads the
-firecracker binary and kernel (sha256-verified against pinned digests), builds the rootfs,
-and sets up networking, interactively and idempotently, printing every sudo command before
-running it. Its final check also verifies networking (tap devices and IPv4 forwarding),
-and it exits non-zero when the host is not ready. The steps below are the manual
-equivalent.
+The recommended path is the first `brevi` (or `npx @brevi/cli`) on a Linux host: it
+installs missing host tools (offered via apt), checks KVM access, downloads the
+firecracker binary and kernel (sha256-verified against pinned digests), fetches the
+rootfs, and sets up networking, idempotently, printing every sudo command before
+running it. Its final check also verifies networking (tap devices and IPv4 forwarding).
+The worker installer and `brevi mac install` call the same flow unattended
+(`brevi setup --yes`). The steps below are the manual equivalent.
 
 ### 1. Kernel
 
@@ -116,7 +116,7 @@ init also parses the `ip=` argument itself.
 
 ### 2. Rootfs
 
-The recommended path needs no local build: `brevi setup` (or automatically at `brevi
+The recommended path needs no local build: first launch (or automatically at `brevi
 start`, once the other gates above pass) downloads the prebuilt, checksum-verified image
 published for the running `@brevi/cli` release and caches it, so most hosts never run
 Docker at all. See "Prebuilt images" below.
@@ -134,7 +134,7 @@ sshd. Needs docker and root. The image no longer depends on a baked-in key (from
 builds still bake the local one as a fallback): brevi passes the host's public key at boot
 via the `brevi.authorized_keys` kernel argument, and the guest installs it before starting
 sshd, so one image works on any machine. The key itself,
-`~/.brevi/images/id_ed25519`, is generated on demand (by `brevi setup`, or automatically the
+`~/.brevi/images/id_ed25519`, is generated on demand (on first launch, or automatically the
 first time it's needed) if missing, independent of the rootfs image.
 
 ### 3. Networking

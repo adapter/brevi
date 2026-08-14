@@ -2,11 +2,12 @@ import { existsSync } from "node:fs";
 import { hostname, networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig, startOrchestrator, type OrchestratorHandle } from "@brevi/orchestrator";
+import { ensureConfig, startOrchestrator, type OrchestratorHandle } from "@brevi/orchestrator";
 import { readPidFile, removePidFile, writePidFile, type ServerOwner } from "@brevi/orchestrator/pid";
 import { isHealthResponse, urlHost } from "@brevi/shared";
 import open from "open";
 import pc from "picocolors";
+import { runSetup } from "../commands/setup.js";
 import {
   reapStaleLocalWorker,
   resolveHostExecution,
@@ -98,11 +99,12 @@ async function orchestratorAlreadyRunning(url: string): Promise<boolean> {
 
 /** Shared implementation behind the bare `brevi` invocation and `brevi start`. */
 export async function runServer({ openBrowser }: RunServerOptions): Promise<void> {
-  const config = await loadConfig().catch((err: unknown) => {
+  const { config, firstLaunch } = await ensureConfig().catch((err: unknown) => {
     console.error(pc.red(`✖ ${errorMessage(err)}`));
-    console.error(pc.dim("  Run `npx @brevi/cli init` to create one."));
     process.exit(1);
   });
+
+  if (firstLaunch) await provisionHost();
 
   // The desktop app, or another terminal, may already be running an
   // orchestrator against this same ~/.brevi. Starting a second one would only
@@ -114,7 +116,7 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
       pc.green(`✔ brevi is already running at ${pc.bold(pc.cyan(runningUrl))}${pid === null ? "" : ` (pid ${pid})`}`),
     );
     console.log(pc.dim("  Attached to that instance instead of starting a second one."));
-    if (openBrowser) await open(runningUrl).catch(() => undefined);
+    if (openBrowser) await openDashboard(runningUrl, firstLaunch);
     return;
   }
 
@@ -151,11 +153,9 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
   }
 
   if (openBrowser) {
-    try {
-      await open(handle.url);
-    } catch {
-      console.log(pc.dim("  Could not open a browser automatically; open the URL above manually."));
-    }
+    await openDashboard(handle.url, firstLaunch);
+  } else if (firstLaunch) {
+    console.log(pc.dim(`  First launch: open ${handle.url.replace(/\/$/, "")}/setup to finish setup.`));
   } else {
     console.log(
       pc.dim(
@@ -219,4 +219,40 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
 
   // Keep the process alive; shutdown() is responsible for exiting.
   await new Promise<void>(() => {});
+}
+
+/**
+ * First launch on Linux provisions Firecracker (binary, kernel, rootfs, tap
+ * network) so `auto` can actually isolate. Non-interactive shells skip it:
+ * the orchestrator starts on schema defaults and falls back to the process
+ * provider. Failure here never blocks the dashboard.
+ */
+async function provisionHost(): Promise<void> {
+  if (process.platform !== "linux") return;
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return;
+  try {
+    await runSetup({ standalone: true, assumeYes: true });
+  } catch (err) {
+    console.error(pc.yellow(`  ! Firecracker setup did not finish: ${errorMessage(err)}`));
+    console.error(
+      pc.dim("  Starting anyway; this host will use the process provider until it is provisioned."),
+    );
+  }
+}
+
+/** First launch lands on /setup so connectors and the provider are chosen in the UI. */
+async function openDashboard(url: string, firstLaunch: boolean): Promise<void> {
+  const target = firstLaunch ? `${url.replace(/\/$/, "")}/setup` : url;
+  try {
+    await open(target);
+    if (firstLaunch) console.log(pc.dim("  Opened the first-run setup page in your browser."));
+  } catch {
+    console.log(
+      pc.dim(
+        firstLaunch
+          ? `  Could not open a browser automatically; open ${target} to finish setup.`
+          : "  Could not open a browser automatically; open the URL above manually.",
+      ),
+    );
+  }
 }
