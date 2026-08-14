@@ -24,6 +24,25 @@ interface WorkerCommandOptions {
   concurrency?: string;
 }
 
+/**
+ * Identity `brevi start`'s orchestrator mints and injects into the localhost
+ * worker child it spawns, so it enrolls with no pairing ceremony. Process
+ * provenance from the spawning parent (like BREVI_SUPERVISOR_PID), not
+ * persistent configuration.
+ */
+function injectedEnrollment(): { workerId: string; credential: string } | undefined {
+  const workerId = process.env.BREVI_WORKER_ID;
+  const credential = process.env.BREVI_WORKER_CREDENTIAL;
+  return workerId && credential ? { workerId, credential } : undefined;
+}
+
+/** Pid of the injecting supervisor, for runWorker's watchdog; undefined when absent or invalid. */
+function injectedSupervisorPid(): number | undefined {
+  const raw = process.env.BREVI_WORKER_SUPERVISOR_PID;
+  const pid = raw ? Number(raw) : NaN;
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
 interface UpdateCommandOptions {
   check?: boolean;
   version?: string;
@@ -77,13 +96,15 @@ export function registerWorkerCommand(program: Command): void {
       }
 
       const concurrency = options.concurrency !== undefined ? parseConcurrency(options.concurrency) : undefined;
+      const enrollment = injectedEnrollment();
 
       // Enrollment is the only way onto a host's fleet, and a pairing token is
-      // the only way to enroll: without one, and without a credential an
-      // earlier enrollment with this host left behind, there is nothing to
-      // connect with. Said here rather than after the sandbox provider has
-      // been resolved, which can take minutes on a first run.
-      if (!options.token && !(await enrollmentFor(options.host))) {
+      // the only way to enroll by hand: without one, without an identity a
+      // supervisor injected (see injectedEnrollment above), and without a
+      // credential an earlier enrollment with this host left behind, there is
+      // nothing to connect with. Said here rather than after the sandbox
+      // provider has been resolved, which can take minutes on a first run.
+      if (!options.token && !enrollment && !(await enrollmentFor(options.host))) {
         console.error(pc.red(`✖ This machine is not enrolled with ${options.host}, and no --token was given.`));
         console.error(
           pc.dim(
@@ -94,7 +115,14 @@ export function registerWorkerCommand(program: Command): void {
       }
 
       try {
-        await runWorker({ hostUrl: options.host, token: options.token, name: options.name, concurrency });
+        await runWorker({
+          hostUrl: options.host,
+          token: options.token,
+          name: options.name,
+          concurrency,
+          enrollment,
+          supervisorPid: injectedSupervisorPid(),
+        });
       } catch (err) {
         console.error(pc.red(`✖ ${errorMessage(err)}`));
         process.exit(1);

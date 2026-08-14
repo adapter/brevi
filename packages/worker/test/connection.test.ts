@@ -216,6 +216,34 @@ function dispatchFrame(expiresAt: string): HostMessage {
   };
 }
 
+describe("connectToHost with a pre-provisioned identity", () => {
+  it("registers with a credential auth envelope, never a pairing token", async () => {
+    const host = await startFakeHost();
+    // Mirrors what daemon.ts's resolveEnrollment builds from
+    // WorkerOptions.enrollment: no token at all, so the very first attempt
+    // has to authenticate with the credential straight away.
+    const connection = connectToHost({
+      hostUrl: host.url,
+      enrollment: { workerId: "wk-injected", credential: "bwc_injected-credential", host: host.url },
+      name: "test worker",
+      capabilities: CAPABILITIES,
+      activeLeases: () => [],
+    });
+    try {
+      await waitFor(() => host.sessions.length === 1);
+      const session = host.sessions[0]!;
+      expect(session.register.auth).toEqual({
+        kind: "credential",
+        workerId: "wk-injected",
+        secret: "bwc_injected-credential",
+      });
+    } finally {
+      connection.close();
+      await host.close();
+    }
+  });
+});
+
 describe("connectToHost replay buffer", () => {
   it("stamps reporting frames with per-lease sequence numbers starting at 1, independently per lease", async () => {
     const host = await startFakeHost();

@@ -525,10 +525,17 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return { host, port: endpoint?.port ?? this.config.server.port, remote };
   }
 
+  /** The registry refuses renaming the local worker; recast as an OrchestratorError so it maps to a 400, not a 500. */
   async renameWorker(id: string, name: string): Promise<FleetResponse> {
     const clean = sanitizeWorkerName(name);
     if (!clean) throw new OrchestratorError("invalid", "worker name must not be empty");
-    if (!(await this.#workers?.rename(id, clean))) throw new OrchestratorError("not-found", `no worker ${id}`);
+    let renamed: boolean;
+    try {
+      renamed = (await this.#workers?.rename(id, clean)) ?? false;
+    } catch (error) {
+      throw new OrchestratorError("invalid", error instanceof Error ? error.message : String(error));
+    }
+    if (!renamed) throw new OrchestratorError("not-found", `no worker ${id}`);
     return { workers: this.listWorkers() };
   }
 
@@ -538,10 +545,30 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return { workers: this.listWorkers() };
   }
 
-  /** Revoke: the credential dies and the worker is disconnected at once. */
+  /**
+   * Revoke: the credential dies and the worker is disconnected at once. The
+   * registry refuses this for the local worker (drain instead); recast as an
+   * OrchestratorError so it maps to a 400, not a 500.
+   */
   async revokeWorker(id: string): Promise<FleetResponse> {
-    if (!(await this.#workers?.revoke(id))) throw new OrchestratorError("not-found", `no worker ${id}`);
+    let revoked: boolean;
+    try {
+      revoked = (await this.#workers?.revoke(id)) ?? false;
+    } catch (error) {
+      throw new OrchestratorError("invalid", error instanceof Error ? error.message : String(error));
+    }
+    if (!revoked) throw new OrchestratorError("not-found", `no worker ${id}`);
     return { workers: this.listWorkers() };
+  }
+
+  /**
+   * Mint or refresh the local worker's credential, returned in plaintext for
+   * the caller to inject into the child it is about to spawn. Thin
+   * delegation to the registry; throws before start() has built one.
+   */
+  async ensureLocalWorker(name: string): Promise<{ workerId: string; credential: string }> {
+    if (!this.#workers) throw new OrchestratorError("conflict", "the orchestrator is not running yet");
+    return this.#workers.ensureLocalWorker(name);
   }
 
   /**

@@ -1,5 +1,5 @@
 import type { BreviConfig } from "./config.js";
-import type { WorkerState, WorkerView } from "./fleet.js";
+import type { HostExecution, WorkerState, WorkerView } from "./fleet.js";
 import type { ConfigPatch, SettingsApplied } from "./settings.js";
 import type { PrState, RepoMemory, Run, RunEvent, Ticket } from "./types.js";
 
@@ -123,6 +123,8 @@ export interface HealthResponse {
    * older orchestrators.
    */
   hostMemMib?: number;
+  /** Whether this machine can execute runs itself (see HostExecution in fleet.ts). Absent from older orchestrators. */
+  hostExecution?: HostExecution;
 }
 
 /**

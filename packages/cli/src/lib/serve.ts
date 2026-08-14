@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
-import { networkInterfaces } from "node:os";
+import { hostname, networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig, startOrchestrator } from "@brevi/orchestrator";
+import { loadConfig, startOrchestrator, type OrchestratorHandle } from "@brevi/orchestrator";
 import { readPidFile, removePidFile, writePidFile, type ServerOwner } from "@brevi/orchestrator/pid";
 import { isHealthResponse, urlHost } from "@brevi/shared";
 import open from "open";
 import pc from "picocolors";
+import { resolveHostExecution, superviseLocalWorker, type LocalWorkerHandle } from "./local-worker.js";
 import { updateNotice } from "./update.js";
 import { errorMessage } from "./util.js";
 import { readPackageVersion } from "./version.js";
@@ -112,9 +113,12 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
     return;
   }
 
-  const handle = await startOrchestrator({
+  const hostExecution = await resolveHostExecution();
+
+  const handle: OrchestratorHandle = await startOrchestrator({
     config,
     appDist: bundledAppDist(),
+    hostExecution,
   }).catch((err: unknown) => {
     console.error(pc.red(`✖ Failed to start the orchestrator: ${errorMessage(err)}`));
     process.exit(1);
@@ -157,6 +161,26 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
     );
   }
 
+  // Zero-enrollment execution: mint this host's own local worker and keep
+  // it running, invisible outside the Workers page and local-worker.log.
+  let localWorker: LocalWorkerHandle | undefined;
+  if (hostExecution.kind === "local-worker") {
+    try {
+      const { workerId, credential } = await handle.ensureLocalWorker(hostname());
+      // handle.url, not hardcoded loopback: a server.host bound to a
+      // specific interface has no loopback listener to dial, and handle.url
+      // is the dialable spelling for every bind.
+      localWorker = superviseLocalWorker({
+        hostUrl: handle.url,
+        workerId,
+        credential,
+      });
+      console.log(pc.dim("  Running a local worker on this machine."));
+    } catch (err) {
+      console.error(pc.yellow(`  ! Could not start this machine's local worker: ${errorMessage(err)}`));
+    }
+  }
+
   console.log(pc.dim("  Press Ctrl+C to stop."));
 
   // Fire-and-forget: prints a "new version available" line if npm answers in
@@ -170,8 +194,13 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(pc.dim(`\nReceived ${signal}, shutting down...`));
-    void handle
-      .stop()
+    // Drain the local worker first, while the orchestrator is still up to
+    // receive its final frames, then stop the orchestrator itself.
+    void Promise.resolve(localWorker?.stop())
+      .catch((err: unknown) => {
+        console.error(pc.red(`✖ Error while stopping the local worker: ${errorMessage(err)}`));
+      })
+      .then(() => handle.stop())
       .catch((err: unknown) => {
         console.error(pc.red(`✖ Error while shutting down: ${errorMessage(err)}`));
       })

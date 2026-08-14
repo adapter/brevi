@@ -189,6 +189,60 @@ describe("FleetStore ordering", () => {
   });
 });
 
+describe("FleetStore local worker", () => {
+  it("creates exactly one record and reuses it across calls", async () => {
+    const store = new FleetStore(fleetPath);
+    const first = await store.ensureLocalWorker("this-machine");
+    expect(first.workerId).toStartWith("wk-");
+    expect(store.get(first.workerId)?.local).toBe(true);
+    expect(store.get(first.workerId)?.name).toBe("this-machine");
+
+    const second = await store.ensureLocalWorker("this-machine");
+    expect(second.workerId).toBe(first.workerId);
+    expect(store.list()).toHaveLength(1);
+
+    // Renamed on a later call, same record.
+    const third = await store.ensureLocalWorker("renamed-machine");
+    expect(third.workerId).toBe(first.workerId);
+    expect(store.get(first.workerId)?.name).toBe("renamed-machine");
+    expect(store.list()).toHaveLength(1);
+  });
+
+  it("mints a fresh credential every call, and only the newest one authenticates", async () => {
+    const store = new FleetStore(fleetPath);
+    const first = await store.ensureLocalWorker("this-machine");
+    expect(store.authenticate(first.workerId, first.credential)?.id).toBe(first.workerId);
+
+    const second = await store.ensureLocalWorker("this-machine");
+    expect(second.credential).not.toBe(first.credential);
+    expect(store.authenticate(first.workerId, first.credential)).toBeNull();
+    expect(store.authenticate(second.workerId, second.credential)?.id).toBe(second.workerId);
+  });
+
+  it("preserves a drained local worker's state across ensureLocalWorker calls and a restart", async () => {
+    const store = new FleetStore(fleetPath);
+    const { workerId } = await store.ensureLocalWorker("this-machine");
+    await store.setState(workerId, "draining");
+
+    const refreshed = await store.ensureLocalWorker("this-machine");
+    expect(refreshed.workerId).toBe(workerId);
+    expect(store.get(workerId)?.state).toBe("draining");
+
+    const restarted = new FleetStore(fleetPath);
+    await restarted.init();
+    expect(restarted.get(workerId)?.state).toBe("draining");
+    expect(restarted.get(workerId)?.local).toBe(true);
+  });
+
+  it("never writes the plaintext credential to disk", async () => {
+    const store = new FleetStore(fleetPath);
+    const { credential } = await store.ensureLocalWorker("this-machine");
+
+    const bytes = await readFile(fleetPath, "utf8");
+    expect(bytes.includes(credential)).toBe(false);
+  });
+});
+
 describe("FleetStore persistence", () => {
   it("survives a restart with rename and drain applied", async () => {
     const store = new FleetStore(fleetPath);

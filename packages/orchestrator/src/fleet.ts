@@ -58,6 +58,12 @@ export interface WorkerRecord {
   enrolledAt: string;
   lastSeenAt?: string;
   capabilities?: WorkerCapabilities;
+  /**
+   * True for the host's own supervised worker (see ensureLocalWorker). At
+   * most one record carries this; unlike every other worker's, its credential
+   * is minted fresh on each boot rather than surviving one.
+   */
+  local?: boolean;
 }
 
 interface FleetFile {
@@ -81,6 +87,7 @@ function reviveWorker(raw: unknown): WorkerRecord | null {
   if (typeof enrolledAt !== "string" || !enrolledAt) return null;
   const record: WorkerRecord = { id, name, secretHash, state, enrolledAt };
   if (typeof raw.lastSeenAt === "string") record.lastSeenAt = raw.lastSeenAt;
+  if (raw.local === true) record.local = true;
   // Capabilities are validated against the same schema the register frame
   // goes through, not a hand-written copy: what was written here came off
   // that wire, so a stale file whose shape the protocol has since moved on
@@ -226,6 +233,61 @@ export class FleetStore {
     const actual = Buffer.from(sha256Hex(secret), "hex");
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
     return worker;
+  }
+
+  /**
+   * Mint or refresh the host's own local worker, no pairing ceremony (see
+   * WorkerView.local). The first call creates the record; every later call
+   * reuses its id and mints a fresh credential, held only by the child the
+   * host is about to spawn and dead with this process. `state` is left
+   * alone, so a drained local worker stays drained across restarts.
+   */
+  async ensureLocalWorker(name: string): Promise<{ workerId: string; credential: string }> {
+    const credential = `bwc_${randomBytes(32).toString("base64url")}`;
+    const secretHash = sha256Hex(credential);
+    const existing = this.#localWorker();
+    if (existing) {
+      const prevSecretHash = existing.secretHash;
+      const prevName = existing.name;
+      existing.secretHash = secretHash;
+      const clean = sanitizeWorkerName(name);
+      if (clean) existing.name = clean;
+      try {
+        await this.#persist();
+      } catch (error) {
+        existing.secretHash = prevSecretHash;
+        existing.name = prevName;
+        throw error;
+      }
+      return { workerId: existing.id, credential };
+    }
+
+    const worker: WorkerRecord = {
+      id: `wk-${randomBytes(5).toString("hex")}`,
+      name: this.#nameFor(name),
+      secretHash,
+      state: "active",
+      enrolledAt: new Date().toISOString(),
+      local: true,
+    };
+    this.#workers.set(worker.id, worker);
+    try {
+      await this.#persist();
+    } catch (error) {
+      // Same discipline as redeemPairing: a record only memory knows about
+      // must not survive the failed write that was supposed to make it real.
+      this.#workers.delete(worker.id);
+      throw error;
+    }
+    return { workerId: worker.id, credential };
+  }
+
+  /** The at-most-one local worker record, if this host has ever spawned one. */
+  #localWorker(): WorkerRecord | undefined {
+    for (const worker of this.#workers.values()) {
+      if (worker.local) return worker;
+    }
+    return undefined;
   }
 
   /** Rename an enrolled worker. `name` is trusted to already be sanitized and non-empty. */

@@ -303,3 +303,56 @@ describe("worker enrollment", () => {
     expect(host.registry.list()[0]?.connection).toBe("online");
   });
 });
+
+describe("local worker", () => {
+  it("enrolls with no pairing ceremony, is marked local, and connects on the minted credential", async () => {
+    const { workerId, credential } = await host.registry.ensureLocalWorker("this-machine");
+    // Minting alone (before anything ever connects as it) already tells the
+    // dashboard about it, the same "workers" emit every other mutation uses.
+    expect(host.registry.list()).toHaveLength(1);
+    expect(host.registry.list()[0]).toMatchObject({ id: workerId, local: true, connection: "offline" });
+
+    const socket = await register({ kind: "credential", workerId, secret: credential });
+    expect(socket.last("registered")?.workerId).toBe(workerId);
+    expect(host.registry.list()[0]?.connection).toBe("online");
+    expect(host.registry.list()[0]?.local).toBe(true);
+  });
+
+  it("rotates the credential on every call: the old plaintext stops authenticating, the new one works", async () => {
+    const first = await host.registry.ensureLocalWorker("this-machine");
+    expect(host.fleet.authenticate(first.workerId, first.credential)?.id).toBe(first.workerId);
+
+    const second = await host.registry.ensureLocalWorker("this-machine");
+    expect(second.workerId).toBe(first.workerId);
+    expect(second.credential).not.toBe(first.credential);
+    expect(host.fleet.authenticate(first.workerId, first.credential)).toBeNull();
+    expect(host.fleet.authenticate(second.workerId, second.credential)?.id).toBe(first.workerId);
+
+    // The credential a socket now connects with must be the newest one.
+    const stale = await register({ kind: "credential", workerId: first.workerId, secret: first.credential });
+    expect(stale.last("rejected")?.code).toBe("unauthorized");
+    const fresh = await register({ kind: "credential", workerId: first.workerId, secret: second.credential });
+    expect(fresh.last("registered")?.workerId).toBe(first.workerId);
+  });
+
+  it("keeps a drained local worker drained across ensureLocalWorker calls", async () => {
+    const { workerId } = await host.registry.ensureLocalWorker("this-machine");
+    expect(await host.registry.setState(workerId, "draining")).toBe(true);
+
+    await host.registry.ensureLocalWorker("this-machine");
+    expect(host.registry.list()[0]?.state).toBe("draining");
+  });
+
+  it("refuses to revoke or rename the local worker, and its record survives untouched", async () => {
+    const { workerId } = await host.registry.ensureLocalWorker("this-machine");
+
+    await expect(host.registry.revoke(workerId)).rejects.toThrow(/cannot be revoked/);
+    await expect(host.registry.rename(workerId, "renamed")).rejects.toThrow(/cannot be renamed/);
+
+    const workers = host.registry.list();
+    expect(workers).toHaveLength(1);
+    expect(workers[0]?.id).toBe(workerId);
+    expect(workers[0]?.name).toBe("this-machine");
+    expect(workers[0]?.local).toBe(true);
+  });
+});

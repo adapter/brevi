@@ -5,6 +5,12 @@ description: Add a Linux machine to the fleet with the one-line installer, what 
 
 A **worker** is a machine that executes runs. The host (wherever `brevi` runs) is a pure scheduler: it polls Linear, holds the run store, and opens PRs, but never touches a sandbox itself. Every run's sandbox, Firecracker microVM or process, lives on whichever worker executed it. Add workers when you want runs to execute somewhere other than the machine running the dashboard: a beefier Linux box with KVM, or several machines sharing the load.
 
+## The local worker
+
+A single-machine setup needs none of the enrollment below. When the host itself can execute runs (Linux), it spawns and supervises a worker of its own on startup: the same `brevi worker` daemon, connected over loopback, with a credential the host mints and injects itself, no pairing token involved. It reads the same `sandbox.*` config (provider, concurrency, VM size) that has always governed execution on that machine, so a fresh `npx @brevi/cli` on Linux behaves exactly as it always has, and `brevi stop` stops the worker and its sandboxes along with the orchestrator. It appears on the Workers page as **This machine**: you can drain it to keep runs off the host, but not rename or revoke it. If it crashes, the host restarts it with backoff; its logs land in `~/.brevi/logs/local-worker.log`.
+
+On a Mac without the [managed worker VM](/guides/macos-worker/), the host cannot execute runs itself: labeled tickets queue instead of failing, and Mission Control says so and points at enrolling a worker (below) or setting up the macOS worker.
+
 ## Installing a worker
 
 On a Linux machine with KVM and systemd, run the one-liner as root:

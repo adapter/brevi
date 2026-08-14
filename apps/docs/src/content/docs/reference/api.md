@@ -51,10 +51,18 @@ Errors are `{ "error": string }` with status `400` (invalid), `404` (not found),
 ### Health
 
 ```json
-{ "ok": true, "version": "0.1.0", "sandboxProvider": "process", "hostMemMib": 16384 }
+{
+  "ok": true,
+  "version": "0.1.0",
+  "sandboxProvider": "process",
+  "hostMemMib": 16384,
+  "hostExecution": { "kind": "local-worker" }
+}
 ```
 
 `sandboxProvider` is the provider actually in use, after `auto` resolution. `hostMemMib` is total host memory in MiB, used by the dashboard's capacity hint (memory per VM times `sandbox.concurrency`, with a warning when it exceeds host memory).
+
+`hostExecution` says whether the machine running the orchestrator can execute runs itself, and through what: `{ kind: "local-worker" }` (Linux; the host spawns and supervises a worker on this machine), `{ kind: "mac-vm" }` (the managed macOS worker VM is installed here), or `{ kind: "none", reason: "macos-vm-not-installed" | "unsupported-platform" }`. On `"none"`, Mission Control explains that queued runs wait for a worker instead of failing. Absent from older orchestrators.
 
 ### Runs and artifacts
 
@@ -147,6 +155,8 @@ Multiple clients (web terminals, `brevi attach` sessions) share one booted sandb
 
 Runs execute on `brevi worker` daemons, not on the host: the orchestrator is a pure scheduler and never boots a sandbox itself. A machine becomes one of this host's workers by redeeming a single-use pairing token, which buys it a durable per-worker credential; these endpoints are that fleet's management surface, and the dashboard's Workers page (Configuration > Workers, `/config/workers`) is built on them.
 
+One worker can exist without any of that ceremony: on a machine that can execute runs (Linux), the host spawns and supervises a local worker itself, minting and injecting its credential in-process, rotated on every start. It appears here with `local: true`, presents as "This machine" on the Workers page, and lives and dies with the orchestrator (`brevi stop` stops both). It can be drained like any other worker, but rename and revoke answer `400`: its identity is the machine's own, and its credential dies with the process anyway.
+
 `GET /api/workers` returns every enrolled worker, connected or not, oldest enrollment first:
 
 ```ts
@@ -159,6 +169,8 @@ interface WorkerView {
   name: string;
   state: "active" | "draining";
   connection: "online" | "offline";
+  local?: boolean;       // true for the worker the host spawns on its own machine
+
   capabilities?: WorkerCapabilities;  // absent for a worker that has never connected
   activeRuns: number;    // leases this worker holds right now
   enrolledAt: string;
@@ -196,7 +208,7 @@ No credential material ever appears here: the host stores only the sha256 of eac
 
 `remote` says whether `host` is genuinely reachable from another machine: a wildcard bind (`fleet.host` or `server.host` set to `"0.0.0.0"`) resolves to a guessed LAN address and reports `true`; a loopback-only bind prints `"http://localhost:<port>"` and reports `false` rather than inventing a LAN address nothing answers on. The dashboard uses it to warn when the printed command will only ever work on this machine.
 
-`POST /api/workers/:id/rename` with `{ "name": "..." }` (trimmed, control characters stripped, capped at 60 characters; empty is `400`), `POST /api/workers/:id/drain` (finish in-flight runs, accept nothing new; the state is persisted and survives reconnects), `POST /api/workers/:id/enable` (put a drained worker back in rotation), and `DELETE /api/workers/:id` (revoke: the credential dies and the worker is disconnected at once, unable to reconnect with what it holds) all return the updated `FleetResponse`, or `404` for an id that is not enrolled.
+`POST /api/workers/:id/rename` with `{ "name": "..." }` (trimmed, control characters stripped, capped at 60 characters; empty is `400`), `POST /api/workers/:id/drain` (finish in-flight runs, accept nothing new; the state is persisted and survives reconnects), `POST /api/workers/:id/enable` (put a drained worker back in rotation), and `DELETE /api/workers/:id` (revoke: the credential dies and the worker is disconnected at once, unable to reconnect with what it holds) all return the updated `FleetResponse`, or `404` for an id that is not enrolled. Rename and revoke answer `400` for the local worker: drain it instead.
 
 #### Worker demand
 
