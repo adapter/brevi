@@ -8,7 +8,7 @@ Interchangeable with the CLI: both read and write the same `~/.brevi/config.json
 
 ```sh
 bun run build   # bundle src/main/index.ts to dist/main.js with bun
-bun run start   # build, then launch electron .
+bun run start   # build, then launch (macOS runs a local brevi.app so the menu bar is not "Electron")
 ```
 
 The app supervises the *built* CLI (`packages/cli/dist/index.js`), so `bun run build` at the repo root must have run first. Set `BREVI_DESKTOP_CLI_ENTRY` to point at a different entry during development.

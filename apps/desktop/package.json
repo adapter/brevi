@@ -16,7 +16,7 @@
   "scripts": {
     "build": "bun build src/main/index.ts --outfile dist/main.js --target=node --format=esm --external electron && cp src/renderer/status.html dist/status.html",
     "dev": "tsc --noEmit --watch",
-    "start": "bun run build && electron .",
+    "start": "bun run build && bun run scripts/start.ts",
     "stage": "bun run build && bun run scripts/stage-cli.ts",
     "package": "bun run stage && electron-builder --publish never -c.extraMetadata.version=$(bun scripts/cli-version.ts)",
     "package:mac": "bun run build && bun run scripts/stage-cli.ts --darwin-universal && electron-builder --mac --universal --publish never -c.extraMetadata.version=$(bun scripts/cli-version.ts)",

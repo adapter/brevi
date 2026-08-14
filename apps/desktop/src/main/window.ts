@@ -1,4 +1,8 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BrowserWindow, dialog, shell } from "electron";
+
+const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "assets");
 
 export interface MissionControlOptions {
   /** Orchestrator http base url, e.g. http://localhost:4400. */
@@ -107,6 +111,9 @@ export class MissionControl {
       backgroundColor: "#101014",
       show: false, // shown on 'ready-to-show' to avoid a white flash
       title: "brevi",
+      // macOS reads the .app icon for the dock; this is what Linux uses
+      // for the taskbar / window list.
+      icon: join(ASSETS_DIR, "icon.png"),
       webPreferences: {
         // No preload script and no privileged API on purpose: the window
         // shows the ordinary dashboard the browser shows, so the desktop
