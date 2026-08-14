@@ -630,6 +630,16 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
         );
       })();
     },
+    // The connection already forgot the credential; like a revoke, drain
+    // in-flight sandboxes instead of exiting outright.
+    onUnauthorized: () => {
+      if (shuttingDown) return;
+      shutdown(
+        new Error(
+          "this worker's enrollment is no longer valid. Enroll this machine again with a fresh pairing token from Configuration > Workers.",
+        ),
+      );
+    },
   });
 
   // The full shutdown path exists now; a dead supervisor drains instead of

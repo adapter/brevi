@@ -7,7 +7,12 @@ import { readPidFile, removePidFile, writePidFile, type ServerOwner } from "@bre
 import { isHealthResponse, urlHost } from "@brevi/shared";
 import open from "open";
 import pc from "picocolors";
-import { resolveHostExecution, superviseLocalWorker, type LocalWorkerHandle } from "./local-worker.js";
+import {
+  reapStaleLocalWorker,
+  resolveHostExecution,
+  superviseLocalWorker,
+  type LocalWorkerHandle,
+} from "./local-worker.js";
 import { updateNotice } from "./update.js";
 import { errorMessage } from "./util.js";
 import { readPackageVersion } from "./version.js";
@@ -166,6 +171,9 @@ export async function runServer({ openBrowser }: RunServerOptions): Promise<void
   let localWorker: LocalWorkerHandle | undefined;
   if (hostExecution.kind === "local-worker") {
     try {
+      // Before the mint below rotates the credential: an orphan a SIGKILLed
+      // predecessor left behind drains now, while its credential still works.
+      await reapStaleLocalWorker((line) => console.log(pc.dim(`  ${line}`)));
       const { workerId, credential } = await handle.ensureLocalWorker(hostname());
       // handle.url, not hardcoded loopback: a server.host bound to a
       // specific interface has no loopback listener to dial, and handle.url

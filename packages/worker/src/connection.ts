@@ -121,6 +121,12 @@ export interface WorkerConnectionOptions {
    */
   forgetCredential?: () => void | Promise<void>;
   /**
+   * Called (after forgetCredential) when the credential is rejected as dead,
+   * instead of exiting the process outright, so the daemon can drain
+   * in-flight sandboxes on the way down. Absent, the process exits at once.
+   */
+  onUnauthorized?: () => void;
+  /**
    * A lease this worker holds is no longer this worker's: abort whatever is
    * running for it and report nothing, because the host has already given the
    * run to somebody else.
@@ -553,13 +559,18 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
       // loop alive, and say what actually fixes it.
       closed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      const message = `this worker's enrollment is no longer valid: ${reason}. Enroll this machine again with a fresh pairing token (Configuration > Workers on the host).`;
       void Promise.resolve(options.forgetCredential?.())
         .catch((error: unknown) => console.error(`[brevi] could not remove the stored credential: ${errorMessage(error)}`))
-        .finally(() =>
-          fatal(
-            `this worker's enrollment is no longer valid: ${reason}. Enroll this machine again with a fresh pairing token (Configuration > Workers on the host).`,
-          ),
-        );
+        .finally(() => {
+          if (!options.onUnauthorized) {
+            fatal(message);
+            return;
+          }
+          console.error(`[brevi] ${message}`);
+          socket?.close();
+          options.onUnauthorized();
+        });
       return;
     }
     // "protocol" and "malformed": a version or a frame the host will not

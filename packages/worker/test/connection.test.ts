@@ -242,6 +242,46 @@ describe("connectToHost with a pre-provisioned identity", () => {
       await host.close();
     }
   });
+
+  it("routes an unauthorized rejection through onUnauthorized instead of exiting", async () => {
+    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise<void>((resolve) => wss.once("listening", resolve));
+    const address = wss.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    wss.on("connection", (socket) => {
+      socket.on("message", () => {
+        socket.send(JSON.stringify({ type: "rejected", code: "unauthorized", reason: "unknown or revoked credential" }));
+      });
+    });
+
+    let forgotten = 0;
+    let unauthorized = 0;
+    const url = `http://127.0.0.1:${port}`;
+    const connection = connectToHost({
+      hostUrl: url,
+      enrollment: { workerId: "wk-injected", credential: "bwc_dead", host: url },
+      name: "test worker",
+      capabilities: CAPABILITIES,
+      activeLeases: () => [],
+      forgetCredential: () => {
+        forgotten += 1;
+      },
+      onUnauthorized: () => {
+        unauthorized += 1;
+      },
+    });
+    try {
+      // A passing test is itself the no-exit assertion: the fatal path this
+      // replaces would have killed the whole test process.
+      await waitFor(() => unauthorized === 1);
+      expect(forgotten).toBe(1);
+    } finally {
+      connection.close();
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+    }
+  });
 });
 
 describe("connectToHost replay buffer", () => {
