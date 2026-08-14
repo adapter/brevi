@@ -56,7 +56,7 @@ ENV_FILE="/etc/brevi/worker.env"
 OWNERSHIP_FILE="/etc/brevi/ownership.env"
 WORKER_START="/usr/local/lib/brevi/worker-start.sh"
 WORKER_UNIT="/etc/systemd/system/brevi-worker.service"
-# Leftovers from the Firecracker installer. New installs never write these; --uninstall
+# Leftovers from an older installer. New installs never write these; --uninstall
 # still removes them so an upgrade-then-uninstall of an old host is clean.
 NETWORK_ENV_FILE="/etc/brevi/network.env"
 NETWORK_START="/usr/local/lib/brevi/network-start.sh"
@@ -504,10 +504,6 @@ do_uninstall() {
   OWNED_USER=$(env_file_value "$OWNERSHIP_FILE" USER_CREATED)
   OWNED_GROUP=$(env_file_value "$OWNERSHIP_FILE" GROUP_CREATED)
 
-  if command -v pgrep >/dev/null 2>&1 && pgrep -x firecracker >/dev/null 2>&1; then
-    advise "firecracker processes are still running; runs in progress will be killed by this uninstall."
-  fi
-
   if command -v systemctl >/dev/null 2>&1; then
     for unit in brevi-worker.service brevi-network.service; do
       systemctl stop "$unit" >/dev/null 2>&1 || true
@@ -575,11 +571,11 @@ do_uninstall() {
   info "brevi worker is fully removed from this host."
 }
 
-# Best-effort removal of leftover Firecracker tap/NAT state from an older install.
+# Best-effort removal of leftover tap/NAT state from an older install.
 # Never fetches setup-network.sh; uses the local copy if this host still has one.
 clean_legacy_network() {
   if [ -x "$LIB_DIR/setup-network.sh" ]; then
-    info "Removing leftover Firecracker tap devices and NAT rules"
+    info "Removing leftover tap devices and NAT rules"
     if ! "$LIB_DIR/setup-network.sh" --clean; then
       err "setup-network.sh --clean exited non-zero (see above); network state may remain. Inspect it with: ip -o link show | grep brevi-tap"
       LEFTOVERS=$((LEFTOVERS + 1))
@@ -589,7 +585,7 @@ clean_legacy_network() {
   if ! network_state_remains; then
     return
   fi
-  info "Removing leftover Firecracker tap devices (best effort; setup-network.sh is not present)"
+  info "Removing leftover tap devices (best effort; setup-network.sh is not present)"
   if command -v ip >/dev/null 2>&1; then
     ip -o link show 2>/dev/null | awk -F': ' '/brevi-tap/{print $2}' | while read -r iface; do
       iface=${iface%%@*}
@@ -603,7 +599,7 @@ clean_legacy_network() {
   fi
 }
 
-# True when this host still carries network state from an older Firecracker install.
+# True when this host still carries network state from an older install.
 network_state_remains() {
   [ -e /var/lib/brevi-network.state ] && return 0
   [ -e /etc/sysctl.d/99-brevi.conf ] && return 0
@@ -902,7 +898,7 @@ WantedBy=multi-user.target
 EOF
 }
 
-# Drop leftover Firecracker network units from an earlier install so an upgrade
+# Drop leftover network units from an earlier install so an upgrade
 # does not keep a oneshot that fetches a deleted script.
 retire_legacy_network_unit() {
   if [ ! -f "$NETWORK_UNIT" ] && [ ! -f "$NETWORK_START" ] && [ ! -f "$NETWORK_ENV_FILE" ]; then
@@ -913,7 +909,7 @@ retire_legacy_network_unit() {
     systemctl disable brevi-network.service >/dev/null 2>&1 || true
   fi
   rm -f "$NETWORK_UNIT" "$NETWORK_START" "$NETWORK_ENV_FILE" "$LIB_DIR/setup-network.sh"
-  info "Removed leftover brevi-network.service from an earlier Firecracker install."
+  info "Removed leftover brevi-network.service from an earlier install."
 }
 
 configure_units() {
@@ -963,10 +959,10 @@ install_bubblewrap() {
   install_agent_clis
 }
 
-# The Firecracker rootfs used to ship claude and codex. A bwrap worker runs the
-# host binaries, so a stock Ubuntu box has to get them on PATH or every run
-# fails at sandbox.exec("claude"). Installed globally as root so the nologin
-# service user can exec them from /usr/local/bin.
+# A bwrap worker runs the host binaries, so a stock Ubuntu box has to get
+# claude and codex on PATH or every run fails at sandbox.exec("claude").
+# Installed globally as root so the nologin service user can exec them from
+# /usr/local/bin.
 install_agent_clis() {
   if command -v claude >/dev/null 2>&1 && command -v codex >/dev/null 2>&1; then
     info "claude and codex are already on PATH"

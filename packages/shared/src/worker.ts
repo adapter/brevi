@@ -214,7 +214,7 @@ export type RunStatusInSync = InSync<z.infer<typeof runStatusSchema>, RunStatus>
 export const prStateSchema = z.enum(["open", "draft", "merged", "closed"]);
 export type PrStateInSync = InSync<z.infer<typeof prStateSchema>, PrState>;
 
-export const sandboxProviderNameSchema = z.enum(["bwrap", "firecracker", "process"]);
+export const sandboxProviderNameSchema = z.string().min(1);
 export type SandboxProviderNameInSync = InSync<z.infer<typeof sandboxProviderNameSchema>, SandboxProviderName>;
 
 export const runSchema = z.object({

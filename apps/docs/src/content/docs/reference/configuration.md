@@ -221,7 +221,7 @@ Where runs execute. These fields are read by the **worker** that executes a run,
 | `timeoutMinutes` | integer ≥ 1 | `240` | Hard wall-clock limit applied per agent execution: the implementation pass, each of the parallel Codex reviewers, the synthesis pass, and the fix pass each get their own budget, rather than one limit for the whole run. The default 240 minutes gives each execution four hours. |
 | `retentionHours` | number ≥ 0 | `24` | How many hours a finished (completed or failed) run's sandbox disk is kept for interactive resume, either from the dashboard's "Open terminal" button or `brevi attach <runId>`. `0` disables retention. A retained sandbox's compute is stopped; it costs disk only, no memory or CPU. |
 
-A leftover `sandbox.provider` or `sandbox.firecracker` key in an older file is an unknown key: zod strips it on load, and `brevi doctor` warns that it is ignored.
+A leftover `sandbox.provider` or other unknown `sandbox.*` key in an older file is stripped on load, and `brevi doctor` warns that it is ignored.
 
 ## `fleet`
 

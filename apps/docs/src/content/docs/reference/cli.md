@@ -84,7 +84,7 @@ $ brevi status
   sandbox provider: bwrap
 ```
 
-Exits `0` when the orchestrator answers, and `1` when it doesn't (or when there is no config). `sandbox provider` is the provider the host reports (`bwrap` on current releases). Historical health payloads from older orchestrators may still say `firecracker` or `process`.
+Exits `0` when the orchestrator answers, and `1` when it doesn't (or when there is no config). `sandbox provider` is the provider the host reports (`bwrap` on current releases).
 
 ## `brevi doctor`
 
@@ -125,7 +125,7 @@ Calls `POST /api/runs/:id/resume`, which asks the worker that executed the run t
 
 On exit, `attach` calls `POST /api/runs/:id/release`, which stops the sandbox's compute again; its disk stays until `sandbox.retentionHours` runs out.
 
-Resume works for completed and failed runs and is Claude-only for now (Codex runs report "Resume unavailable", since the run has no captured session id to resume from). Fails with a clear message once the retention window has passed and the sandbox's disk was already reclaimed. Historical Firecracker or process sandboxes cannot be reattached.
+Resume works for completed and failed runs and is Claude-only for now (Codex runs report "Resume unavailable", since the run has no captured session id to resume from). Fails with a clear message once the retention window has passed and the sandbox's disk was already reclaimed. Only bwrap sandboxes can be reattached.
 
 ## `brevi worker`
 

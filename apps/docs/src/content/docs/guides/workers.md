@@ -71,7 +71,7 @@ Upgrades the installed binary in place, without losing enrollment, and restarts 
 curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- --uninstall
 ```
 
-Reverses everything: stops and removes `brevi-worker.service` (and a leftover `brevi-network.service` from an older Firecracker install, if present), best-effort tears down leftover tap devices from that older install, and removes the binary. Anything it could not remove is reported and exits non-zero rather than being summarised as a clean removal.
+Reverses everything: stops and removes `brevi-worker.service` (and a leftover `brevi-network.service` from an older install, if present), best-effort tears down leftover tap devices from that older install, and removes the binary. Anything it could not remove is reported and exits non-zero rather than being summarised as a clean removal.
 
 The `brevi` system user goes too, but only when the installer is the one that created it: the install records that in `/etc/brevi/ownership.env`, and an account that was already on the machine is left alone (with its home kept, minus brevi's own `~/.brevi` directory) and reported, rather than deleted by an uninstall that has no way to know what else it is used for.
 

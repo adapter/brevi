@@ -60,7 +60,7 @@ Errors are `{ "error": string }` with status `400` (invalid), `404` (not found),
 }
 ```
 
-`sandboxProvider` is the sandbox this orchestrator would use (`bwrap` on current releases). Older orchestrators may still report `firecracker` or `process`. `hostMemMib` is total host memory in MiB (optional; the Sandbox page that used it as a VM capacity hint is gone).
+`sandboxProvider` is the sandbox this orchestrator would use (`bwrap` on current releases). `hostMemMib` is total host memory in MiB (optional; unused by the current dashboard).
 
 `hostExecution` says whether the machine running the orchestrator can execute runs itself: `{ kind: "local-worker" }` (Linux with bwrap; the host spawns and supervises a worker on this machine), or `{ kind: "none", reason: "bwrap-unavailable" | "unsupported-platform" }`. On `"none"`, Mission Control explains that queued runs wait for a worker instead of failing. Absent from older orchestrators.
 
@@ -75,7 +75,7 @@ interface Run {
   id: string;
   ticket: Ticket;
   status: RunStatus;
-  sandbox: { provider?: "bwrap" | "firecracker" | "process"; id?: string; retainedUntil?: string; workerId?: string };
+  sandbox: { provider?: string; id?: string; retainedUntil?: string; workerId?: string };
   agentSessionId?: string;  // captured from the Claude stream, powers resume
   createdAt: string;
   queuedAt?: string;
@@ -99,7 +99,7 @@ Cancelling a terminal run is a no-op and returns it unchanged; cancelling a queu
 
 `queueReason` is set by the scheduler's placement step whenever a `queued` run has no worker to go to (no workers connected, every worker draining, the fleet at capacity) and cleared the moment the run dispatches. The dashboard shows it on the run's card and detail view so a stuck queue explains itself.
 
-`sandbox.provider` on a new run is `bwrap`. Historical run records may still say `firecracker` or `process`.
+`sandbox.provider` on a new run is `bwrap`.
 
 `costs` has one `CostEntry` per agent execution (an attempt, or a future phase/subagent), each carrying `label`, `provider`, an optional `model`, token counts (`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`), an optional `costUsd` (absent when only tokens are known), and `estimated`, true when the cost is computed from a pricing table or modeled on a subscription login rather than reported by the provider. An entry may also carry an optional `breakdown`: an array of per-model `CostModelUsage` rows, each with `model`, its own token counts (`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`), and an optional `costUsd`; the entry's own token and cost figures are the roll-up (sum) of its breakdown rows. `breakdown` is present when the execution spanned several models (e.g. a delegated Claude run with an implementer subagent), whether measured from the agent's transcripts by ccusage inside the sandbox or reconstructed from the output stream; single-model executions stay flat. `costTotals` sums those entries for the whole run, and beyond the run-wide sums it also carries `byModel`: an array of `CostModelTotal` rows, one per distinct model used anywhere in the run, each with summed token counts (`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`), an optional `costUsd`, and an `estimated` flag; a model used by several attempts or phases appears once with summed figures, and the dashboard displays this per-model roll-up rather than the per-execution entries.
 
@@ -182,7 +182,7 @@ interface WorkerView {
 interface WorkerCapabilities {
   os: string;            // process.platform, e.g. "linux" or "darwin"
   arch: string;          // process.arch, e.g. "x64" or "arm64"
-  provider: "bwrap" | "firecracker" | "process";  // current workers always report "bwrap"
+  provider: string;      // current workers always report "bwrap"
   maxConcurrency: number;  // dispatched runs this worker executes at once, 1 to 64
   version: string;       // brevi version running on the worker
 }

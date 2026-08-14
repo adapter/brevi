@@ -2,4 +2,4 @@
 "@brevi/cli": minor
 ---
 
-Runs now execute only in Linux bwrap sandboxes. Firecracker, the unisolated process fallback, and the Configuration Sandbox tab are all gone.
+Runs now execute only in Linux bwrap sandboxes. There is no unisolated process fallback, and the Configuration Sandbox tab has been removed.
