@@ -55,6 +55,11 @@ export interface Sandbox {
   provider: SandboxProviderName;
   /** Absolute path of the workspace inside the sandbox. */
   workspacePath: string;
+  /**
+   * Writable process home beside the checkout (never the checkout itself),
+   * so agent session files and caches cannot be committed into the PR.
+   */
+  homePath: string;
   exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
   /** Copy a local directory into the sandbox at `destPath`. */
   pushDirectory(localPath: string, destPath: string): Promise<void>;

@@ -18,7 +18,7 @@ import {
   type WorkerCapabilities,
   type WorkerState,
 } from "@brevi/shared";
-import { createSandboxProvider, type SandboxProvider } from "@brevi/sandbox";
+import { createSandboxProvider, resolveBinary, type SandboxProvider } from "@brevi/sandbox";
 import { loadConfig } from "@brevi/orchestrator";
 import { isTerminal, LinearService } from "@brevi/orchestrator/internal";
 import { createAttachSessions, type AttachSessions } from "./attach.js";
@@ -252,6 +252,13 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
 
   console.log("[brevi] resolving the bwrap sandbox...");
   const provider: SandboxProvider = await createSandboxProvider();
+  const agentBin = await resolveBinary(config.agent.command);
+  if (agentBin === undefined) {
+    throw new Error(
+      `the agent command "${config.agent.command}" was not found on PATH; install it on this worker (npm install -g @anthropic-ai/claude-code) before starting brevi worker`,
+    );
+  }
+  console.log(`[brevi] agent CLI ${config.agent.command} at ${agentBin}`);
 
   const capabilities: WorkerCapabilities = {
     os: resolveWorkerOs(process.platform, process.env),

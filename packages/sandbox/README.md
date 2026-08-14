@@ -29,7 +29,8 @@ relative paths given to `pushDirectory`/`writeFile`/… resolve against `workspa
 Every command runs under `bwrap` with a private `/tmp`, `/proc`, and `/dev`, a
 read-only bind of host binaries (`/usr`, `/bin`, `/lib`, `/etc`), and a read-write
 bind of the per-run directory (`~/.brevi/workspaces/<id>/`). The operator's `$HOME`
-is not bound. Network is shared with the host so agents can use git, npm, and model APIs.
+is not bound. The process `HOME` is `~/.brevi/workspaces/<id>/home`, beside the
+checkout. Network is shared with the host so agents can use git, npm, and model APIs.
 
 `brevi setup` installs `bubblewrap` when it is missing. `createSandboxProvider()`
 fails at startup if the host is not Linux or `bwrap` is missing or cannot unshare

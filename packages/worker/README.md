@@ -8,7 +8,7 @@ This package is consumed by [`@brevi/cli`](https://www.npmjs.com/package/@brevi/
 
 ## Install on a Linux server
 
-The hosted installer (`scripts/install.sh`, published at `https://brevi.dev/install.sh`) turns a stock Ubuntu/Debian server into a connected worker: it provisions a dedicated `brevi` system user, installs the `brevi` binary and bubblewrap, and runs the daemon as `brevi-worker.service`. It is idempotent: re-run the same command, or `sudo brevi worker update`, to upgrade in place without losing enrollment or settings.
+The hosted installer (`scripts/install.sh`, published at `https://brevi.dev/install.sh`) turns a stock Ubuntu/Debian server into a connected worker: it provisions a dedicated `brevi` system user, installs the `brevi` binary, bubblewrap, and the Claude and Codex CLIs, and runs the daemon as `brevi-worker.service`. It is idempotent: re-run the same command, or `sudo brevi worker update`, to upgrade in place without losing enrollment or settings.
 
 ```sh
 curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- --host https://your-host:4400 --token <pairing token>

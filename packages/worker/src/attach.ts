@@ -142,6 +142,7 @@ export function createAttachSessions(deps: AttachSessionsDeps): AttachSessions {
         scriptPath,
         buildResumeScript({
           workspacePath: sandbox.workspacePath,
+          homePath: sandbox.homePath,
           profilePath: provisioned.profilePath,
           command: config.agent.command,
           sessionId: run.agentSessionId,

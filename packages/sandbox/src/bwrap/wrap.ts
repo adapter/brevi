@@ -1,5 +1,5 @@
 import { accessSync, constants, existsSync, realpathSync, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { BREVI_HOME } from "@brevi/shared";
 import type { SandboxLaunch } from "../types.js";
 
@@ -77,9 +77,11 @@ export function wrapInBwrap(
     if (isDir(dir)) roBind(dir);
   }
   for (const dir of pathDirsToBind()) {
-    roBind(dir);
+    if (!isCovered(dir, RO_BINDS)) roBind(dir);
   }
-  bindResolvedCommand(command, roBind);
+  bindResolvedCommand(command, (src) => {
+    if (!isCovered(src, RO_BINDS)) roBind(src);
+  });
 
   const playwrightCache = `${BREVI_HOME}/cache/ms-playwright`;
   if (isDir(playwrightCache)) roBind(playwrightCache);
@@ -99,6 +101,14 @@ function pathDirsToBind(): string[] {
     if (!isDir(dir)) continue;
     if (isCovered(dir, RO_BINDS) || isCovered(dir, out)) continue;
     out.push(dir);
+    // Unix prefix layout: ~/.nvm/.../bin, ~/.local/bin, a bun prefix. The
+    // CLI on PATH is usually a shim; its package tree lives in sibling lib/.
+    if (basename(dir) === "bin") {
+      const lib = join(dirname(dir), "lib");
+      if (isDir(lib) && !isCovered(lib, RO_BINDS) && !isCovered(lib, out)) {
+        if (!(home && (lib === home || lib === `${home}/`))) out.push(lib);
+      }
+    }
   }
   return out;
 }
@@ -108,20 +118,42 @@ function isCovered(path: string, prefixes: readonly string[]): boolean {
 }
 
 /**
- * Bind the resolved command (and its realpath, if it is a symlink) so a
- * user-local agent binary is visible even when its directory is not on PATH
- * as a directory we already bound.
+ * Bind the resolved command, its realpath, and the npm/nvm package tree it
+ * lives in. Binding only the entry file leaves sibling modules invisible, so
+ * a user-local Codex/Claude launcher fails inside bwrap.
  */
 function bindResolvedCommand(command: string, roBind: (src: string) => void): void {
   const resolved = resolveOnPath(command);
   if (resolved === undefined) return;
   roBind(resolved);
+  let real = resolved;
   try {
-    const real = realpathSync(resolved);
-    if (real !== resolved) roBind(real);
+    real = realpathSync(resolved);
   } catch {
-    // dangling symlink: the unresolved path is enough for bwrap to fail clearly
+    return;
   }
+  if (real !== resolved) roBind(real);
+  const nodeModules = nodeModulesRoot(real);
+  if (nodeModules !== undefined) roBind(nodeModules);
+  const pkgRoot = nearestPackageRoot(real);
+  if (pkgRoot !== undefined) roBind(pkgRoot);
+}
+
+function nodeModulesRoot(file: string): string | undefined {
+  const idx = file.lastIndexOf("/node_modules/");
+  if (idx === -1) return undefined;
+  return file.slice(0, idx + "/node_modules".length);
+}
+
+function nearestPackageRoot(file: string): string | undefined {
+  let dir = dirname(file);
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(join(dir, "package.json"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
 }
 
 function resolveOnPath(nameOrPath: string): string | undefined {

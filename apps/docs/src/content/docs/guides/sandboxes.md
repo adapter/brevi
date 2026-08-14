@@ -13,9 +13,9 @@ A machine that cannot run bwrap (macOS, or Linux without bubblewrap) is a schedu
 
 ## What the sandbox can see
 
-Each command runs under `bwrap` with a private `/tmp`, `/dev/shm`, `/proc`, and `/dev`, a read-only bind of host binaries (`/usr`, `/bin`, `/lib`, `/etc`) plus any extra `PATH` directories that are not already covered (so a user-local `claude` under `~/.local/bin` or nvm is visible without binding `$HOME`), and a read-write bind of the per-run directory (`~/.brevi/workspaces/<id>/`). The operator's `$HOME` is not bound, so the agent cannot read other checkouts or host secrets. The inner process gets a cleared environment (`HOME` is the workspace). Network is shared with the host so agents can use git, npm, and model APIs.
+Each command runs under `bwrap` with a private `/tmp`, `/dev/shm`, `/proc`, and `/dev`, a read-only bind of host binaries (`/usr`, `/bin`, `/lib`, `/etc`) plus any extra `PATH` directories that are not already covered (so a user-local `claude` under `~/.local/bin` or nvm is visible without binding `$HOME`), and a read-write bind of the per-run directory (`~/.brevi/workspaces/<id>/`). The operator's `$HOME` is not bound, so the agent cannot read other checkouts or host secrets. The inner process gets a cleared environment: `HOME` is `~/.brevi/workspaces/<id>/home`, beside the checkout, never the checkout itself. Network is shared with the host so agents can use git, npm, and model APIs.
 
-Agent CLIs (`claude`, `codex`, `gh`, `wrangler`) come from the worker host's `PATH`.
+Agent CLIs (`claude`, `codex`, `gh`, `wrangler`) come from the worker host's `PATH`. The wrap also binds the CLI's package tree (the `lib/` next to a `bin/` prefix, and any `node_modules` ancestor) so an npm-installed Codex launcher can see its sibling modules.
 
 ## Setup
 
@@ -25,7 +25,7 @@ On Linux, `brevi setup` installs bubblewrap when it is missing (`apt install bub
 brevi setup
 ```
 
-The [Linux worker installer](/guides/workers/) installs bubblewrap as root (`apt-get install bubblewrap`) and probes user namespaces as the `brevi` service user.
+The [Linux worker installer](/guides/workers/) installs bubblewrap as root (`apt-get install bubblewrap`), installs the Claude and Codex CLIs globally, and probes user namespaces as the `brevi` service user.
 
 ## Workers
 

@@ -88,6 +88,8 @@ export function buildGitAskpass(token: string): string {
 
 export interface BuildResumeScriptOptions {
   workspacePath: string;
+  /** Process HOME beside the checkout; must not be the workspace itself. */
+  homePath: string;
   /** Absolute path of the credential profile (see buildCredentialProfile) to source. */
   profilePath: string;
   command: string;
@@ -106,11 +108,11 @@ export interface BuildResumeScriptOptions {
  * lives until that shell exits.
  */
 export function buildResumeScript(options: BuildResumeScriptOptions): string {
-  const { workspacePath, profilePath, command, sessionId } = options;
+  const { workspacePath, homePath, profilePath, command, sessionId } = options;
   const lines = [
     "#!/bin/sh",
     `. ${quote(profilePath)}`,
-    `export HOME=${quote(workspacePath)}`,
+    `export HOME=${quote(homePath)}`,
     "export TMPDIR=/tmp",
     `cd ${quote(workspacePath)}`,
     `${quote(command)} --resume ${quote(sessionId)}`,

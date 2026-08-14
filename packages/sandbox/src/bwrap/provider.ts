@@ -75,20 +75,24 @@ export class BwrapProvider implements SandboxProvider {
     const bwrap = await requireBwrap();
     const rootDir = join(WORKSPACES_DIR, options.id);
     const workspacePath = join(rootDir, "workspace");
+    const homePath = join(rootDir, "home");
     await mkdir(workspacePath, { recursive: true });
-    return new BwrapSandbox(options.id, rootDir, workspacePath, bwrap, options.env ?? {});
+    await mkdir(homePath, { recursive: true });
+    return new BwrapSandbox(options.id, rootDir, workspacePath, homePath, bwrap, options.env ?? {});
   }
 
   async rehydrate(options: CreateSandboxOptions): Promise<Sandbox> {
     const bwrap = await requireBwrap();
     const rootDir = join(WORKSPACES_DIR, options.id);
     const workspacePath = join(rootDir, "workspace");
+    const homePath = join(rootDir, "home");
     try {
       await stat(workspacePath);
     } catch {
       throw new Error(`no retained sandbox for ${options.id}`);
     }
-    return new BwrapSandbox(options.id, rootDir, workspacePath, bwrap, options.env ?? {});
+    await mkdir(homePath, { recursive: true });
+    return new BwrapSandbox(options.id, rootDir, workspacePath, homePath, bwrap, options.env ?? {});
   }
 
   async discard(id: string): Promise<void> {
@@ -100,6 +104,7 @@ class BwrapSandbox implements Sandbox {
   readonly provider = "bwrap" as const;
   readonly id: string;
   readonly workspacePath: string;
+  readonly homePath: string;
   readonly #rootDir: string;
   readonly #bwrap: string;
   readonly #env: Record<string, string>;
@@ -108,18 +113,20 @@ class BwrapSandbox implements Sandbox {
     id: string,
     rootDir: string,
     workspacePath: string,
+    homePath: string,
     bwrap: string,
     env: Record<string, string>,
   ) {
     this.id = id;
     this.#rootDir = rootDir;
     this.workspacePath = workspacePath;
+    this.homePath = homePath;
     this.#bwrap = bwrap;
     this.#env = env;
   }
 
   wrap(command: string, args: string[], cwd?: string, options?: { newSession?: boolean }): SandboxLaunch {
-    const env = sandboxEnv(this.workspacePath, this.#env);
+    const env = sandboxEnv(this.homePath, this.#env);
     return wrapInBwrap(this.#bwrap, this.#rootDir, command, args, resolveHostPath(this.workspacePath, cwd), {
       newSession: options?.newSession ?? true,
       env,
@@ -127,7 +134,7 @@ class BwrapSandbox implements Sandbox {
   }
 
   async exec(command: string, args: string[], options: ExecOptions = {}): Promise<ExecResult> {
-    const env = sandboxEnv(this.workspacePath, this.#env, options.env);
+    const env = sandboxEnv(this.homePath, this.#env, options.env);
     const launch = wrapInBwrap(
       this.#bwrap,
       this.#rootDir,
@@ -211,9 +218,11 @@ async function probeBwrap(bwrap: string): Promise<string | undefined> {
 /**
  * Allowlisted host env plus HOME/TMPDIR for a sandboxed command. Attach and
  * exec both use this so the inner process never sees the worker's secrets.
+ * HOME is the per-run home beside the checkout, never the checkout itself,
+ * so Claude session files and npm caches cannot land in the generated PR.
  */
 export function sandboxEnv(
-  workspacePath: string,
+  homePath: string,
   provided: Record<string, string>,
   extra?: Record<string, string>,
 ): Record<string, string> {
@@ -222,7 +231,7 @@ export function sandboxEnv(
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
-  env.HOME = workspacePath;
+  env.HOME = homePath;
   env.TMPDIR = "/tmp";
   env.TERM ??= "xterm-256color";
   // Chromium inside an existing user namespace cannot use its own sandbox.

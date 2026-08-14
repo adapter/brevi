@@ -305,7 +305,7 @@ check_service_cgroup() {
 # tool:apt-package pairs. sha256sum/install both ship in coreutils; useradd/userdel/
 # groupadd/groupdel ship in passwd; systemctl ships in systemd.
 # shellcheck disable=SC2034 # documents the mapping the loop below re-derives
-TOOL_LIST="curl:curl tar:tar gzip:gzip sha256sum:coreutils useradd:passwd install:coreutils systemctl:systemd"
+TOOL_LIST="curl:curl tar:tar gzip:gzip sha256sum:coreutils useradd:passwd install:coreutils systemctl:systemd git:git node:nodejs npm:npm"
 
 check_commands() {
   missing_tools=""
@@ -323,7 +323,7 @@ check_commands() {
     fi
   done
   if [ -z "$missing_tools" ]; then
-    pass "required commands are present: curl, tar, gzip, sha256sum, useradd, install, systemctl."
+    pass "required commands are present: curl, tar, gzip, sha256sum, useradd, install, systemctl, git, node, npm."
     return 0
   fi
 
@@ -419,13 +419,20 @@ check_egress() {
     esac
   fi
 
-  # The npm registry is only consulted to resolve "latest", which --version and --binary
-  # both answer on their own.
+  # npm is needed to resolve "latest" (unless --version/--binary) and to install
+  # the agent CLIs (unless claude and codex are already on PATH).
+  need_npm=0
   if [ -z "$BINARY" ] && [ -z "$VERSION" ]; then
+    need_npm=1
+  fi
+  if ! command -v claude >/dev/null 2>&1 || ! command -v codex >/dev/null 2>&1; then
+    need_npm=1
+  fi
+  if [ "$need_npm" -eq 1 ]; then
     if reachable "https://registry.npmjs.org/@brevi/cli/latest"; then
       pass "npm registry is reachable."
     else
-      fail "could not reach the npm registry (https://registry.npmjs.org); needed to resolve the @brevi/cli version to install. Pass --version, or --binary to install a local executable."
+      fail "could not reach the npm registry (https://registry.npmjs.org); needed to resolve the @brevi/cli version and to install the agent CLIs (claude, codex)."
     fi
   fi
 
@@ -937,7 +944,7 @@ run_as_service_user() {
 }
 
 install_bubblewrap() {
-  step 6 "Installing bubblewrap"
+  step 6 "Installing bubblewrap and agent CLIs"
   if ! command -v bwrap >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
       info "Running: apt-get update && apt-get install -y bubblewrap"
@@ -953,6 +960,29 @@ install_bubblewrap() {
     die "bwrap cannot create unprivileged user namespaces as $SERVICE_USER. Enable kernel.unprivileged_userns_clone=1 (and check AppArmor)."
   fi
   info "bwrap works as $SERVICE_USER"
+  install_agent_clis
+}
+
+# The Firecracker rootfs used to ship claude and codex. A bwrap worker runs the
+# host binaries, so a stock Ubuntu box has to get them on PATH or every run
+# fails at sandbox.exec("claude"). Installed globally as root so the nologin
+# service user can exec them from /usr/local/bin.
+install_agent_clis() {
+  if command -v claude >/dev/null 2>&1 && command -v codex >/dev/null 2>&1; then
+    info "claude and codex are already on PATH"
+  else
+    command -v npm >/dev/null 2>&1 || die "npm is not on PATH; install nodejs and npm (apt-get install -y nodejs npm)."
+    info "Running: npm install -g @anthropic-ai/claude-code @openai/codex"
+    npm install -g @anthropic-ai/claude-code @openai/codex >&2 ||
+      die "npm install -g of the agent CLIs failed"
+  fi
+  if ! run_as_service_user claude --version >/dev/null 2>&1; then
+    die "claude is not runnable as $SERVICE_USER. Install it with: npm install -g @anthropic-ai/claude-code"
+  fi
+  if ! run_as_service_user codex --version >/dev/null 2>&1; then
+    die "codex is not runnable as $SERVICE_USER. Install it with: npm install -g @openai/codex"
+  fi
+  info "claude and codex work as $SERVICE_USER"
 }
 
 # True when this machine already holds a durable credential for $HOST from an earlier
