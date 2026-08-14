@@ -9,6 +9,8 @@ export interface ProvisionedCredentials {
   profilePath: string;
   /** Stable Codex state directory (auth.json when a ChatGPT login is connected, rollout/session history). */
   codexHome: string;
+  /** Stable Grok state directory (auth.json when a Grok CLI login is connected). */
+  grokHome: string;
 }
 
 /**
@@ -108,5 +110,5 @@ export async function provisionCredentials(options: {
   );
   await sandbox.exec("chmod", ["600", profilePath]);
 
-  return { profilePath, codexHome };
+  return { profilePath, codexHome, grokHome };
 }

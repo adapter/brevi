@@ -82,6 +82,8 @@ export interface AgentSessionOptions {
   signal: AbortSignal;
   /** Stable CODEX_HOME dir provisioned in the sandbox (see provision.ts). */
   codexHome: string;
+  /** Stable GROK_HOME dir provisioned in the sandbox (see provision.ts). */
+  grokHome: string;
   /** Resolved ccusage invocation for live cost sampling, when available. */
   ccusageCommand?: string;
   /** Decorates cost labels, e.g. appending " (attempt 2)". Defaults to identity. */
@@ -112,7 +114,7 @@ export interface AgentSession {
  * events.
  */
 export function createAgentSession(options: AgentSessionOptions): AgentSession {
-  const { runId, store, config, sandbox, signal, codexHome, ccusageCommand } = options;
+  const { runId, store, config, sandbox, signal, codexHome, grokHome, ccusageCommand } = options;
   const labelFor = options.labelFor ?? ((label: string) => label);
 
   const log = (stream: "stdout" | "stderr" | "system", text: string): void => {
@@ -288,7 +290,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     // guarantees nothing is still running when the sandbox is destroyed.
     const exec = await activeSandbox.exec(config.agent.command, args, {
       cwd: activeSandbox.workspacePath,
-      env: { CODEX_HOME: codexHome },
+      env: { CODEX_HOME: codexHome, GROK_HOME: grokHome },
       timeoutMs,
       signal,
       onStdout: (chunk) => stdoutSink.write(chunk),
@@ -407,11 +409,11 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     await store.update(run.id, { sandbox: { provider: provider.name, id: sandbox.id } });
     await sandbox.pushDirectory(checkoutDir, sandbox.workspacePath);
     // Credentials are installed as sandbox-wide state (a shell profile plus
-    // the Codex auth.json at a stable CODEX_HOME, both outside the workspace
-    // so the run's tree stays clean): the agent execs below get them via the
-    // sandbox env, and any interactive shell opened beside or after the run
-    // (brevi attach) is authenticated the same way.
-    const { codexHome } = await provisionCredentials({
+    // the Codex/Grok auth.json files at stable CODEX_HOME / GROK_HOME, both
+    // outside the workspace so the run's tree stays clean): the agent execs
+    // below get them via the sandbox env, and any interactive shell opened
+    // beside or after the run (brevi attach) is authenticated the same way.
+    const { codexHome, grokHome } = await provisionCredentials({
       sandbox,
       runId: run.id,
       env: agentEnv,
@@ -443,6 +445,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       sandbox,
       signal,
       codexHome,
+      grokHome,
       ccusageCommand,
       labelFor: (label) => (attempt.number > 1 ? `${label} (attempt ${attempt.number})` : label),
     });

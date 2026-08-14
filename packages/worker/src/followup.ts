@@ -247,11 +247,11 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
     await store.update(run.id, { sandbox: { provider: provider.name, id: sandbox.id } });
 
     // Credentials are installed as sandbox-wide state (a shell profile plus
-    // the Codex auth.json at a stable CODEX_HOME, outside the workspace so
-    // the follow-up's tree stays clean), reinstalled fresh so a rehydrated
-    // retained sandbox picks up rotated credentials too. No githubToken:
-    // runs never hold push credentials.
-    const { codexHome } = await provisionCredentials({
+    // the Codex/Grok auth.json files at stable CODEX_HOME / GROK_HOME,
+    // outside the workspace so the follow-up's tree stays clean),
+    // reinstalled fresh so a rehydrated retained sandbox picks up rotated
+    // credentials too. No githubToken: runs never hold push credentials.
+    const { codexHome, grokHome } = await provisionCredentials({
       sandbox,
       runId: run.id,
       env: agentEnv,
@@ -275,6 +275,7 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
       sandbox,
       signal,
       codexHome,
+      grokHome,
       ccusageCommand,
       labelFor: (label) => (followUpNumber > 1 ? `${label} ${followUpNumber}` : label),
     });
