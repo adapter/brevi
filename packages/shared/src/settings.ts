@@ -4,8 +4,8 @@ import { configSchema, type BreviConfig } from "./config.js";
  * A deep-partial patch over `~/.brevi/config.json`, the body of
  * `PUT /api/settings`. Only the fields a form card touched are present, so a
  * save never clobbers a field the user did not edit (or one a hand edit
- * changed under them). `null` clears an optional field: `{"defaultRepo": null}`
- * unsets the default repo, `{"repos": {"web": null}}` removes a repo mapping.
+ * changed under them). `null` clears an optional field: `{"repos": {"web": null}}`
+ * removes a repo mapping.
  * Objects merge key by key; arrays and scalars replace.
  */
 export type ConfigPatch = { [key: string]: unknown };

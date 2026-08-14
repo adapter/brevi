@@ -21,7 +21,7 @@ import { safeExternalUrl, trustedOriginOf } from "../../lib/url";
 import { useSettingsDraft } from "../../lib/settings";
 import { Plate } from "../Bits";
 import { Check, ChevronRight, External, Warn } from "../Icons";
-import { SegmentedField, SettingsCard, TagField, TextField } from "./Fields";
+import { TagField, TextField } from "./Fields";
 
 type ConnectorKey = CredentialProvider | "r2";
 type ConnectorTone = "ok" | "warn" | "error" | "idle";
@@ -228,6 +228,11 @@ export function ConnectorsSection({
             onOpenChange={setOpen(spec.id)}
             authError={spec.id === "linear" ? linearAuthError : undefined}
             refreshWarning={spec.id === "linear" ? linearRefreshWarning : undefined}
+            extra={
+              spec.id === "linear" ? (
+                <LinearPollingFields config={config} onConfig={onConfig} />
+              ) : undefined
+            }
           />
         ))}
         <R2Row
@@ -237,10 +242,6 @@ export function ConnectorsSection({
           onOpenChange={setOpen("r2")}
         />
       </Card>
-      <div className="mt-2.5 flex flex-col gap-2.5">
-        <LinearSettingsCard config={config} onConfig={onConfig} />
-        <GithubSettingsCard config={config} onConfig={onConfig} />
-      </div>
 
       <p className="mt-6 border-t border-ink-700 pt-3.5 text-[11.5px] leading-relaxed text-haze-700">
         Credentials are validated with the provider, then stored in{" "}
@@ -252,8 +253,8 @@ export function ConnectorsSection({
   );
 }
 
-/** Polling scope for the Linear connector, next to the connection itself. */
-function LinearSettingsCard({
+/** Team-key filter, shown inside the Linear accordion rather than as its own card. */
+function LinearPollingFields({
   config,
   onConfig,
 }: {
@@ -262,7 +263,16 @@ function LinearSettingsCard({
 }) {
   const draft = useSettingsDraft(config, onConfig);
   return (
-    <SettingsCard title="Linear polling" draft={draft}>
+    <form
+      className="mt-3 border-t border-ink-700 pt-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (draft.dirty && !draft.invalid && !draft.saving) draft.save();
+      }}
+    >
+      <p className="font-plate text-[10px] font-medium tracking-[0.12em] text-haze-700 uppercase">
+        Polling
+      </p>
       <TagField
         label="Team keys"
         path="linear.teamKeys"
@@ -270,32 +280,40 @@ function LinearSettingsCard({
         placeholder="ENG, then press Enter"
         help="Restrict polling to these team keys. Empty polls every team you can see."
       />
-    </SettingsCard>
-  );
-}
-
-/** How the agent is told to write the pull request it opens. */
-function GithubSettingsCard({
-  config,
-  onConfig,
-}: {
-  config: BreviConfig;
-  onConfig: (config: BreviConfig) => void;
-}) {
-  const draft = useSettingsDraft(config, onConfig);
-  return (
-    <SettingsCard title="Pull requests" draft={draft}>
-      <SegmentedField
-        label="PR description"
-        path="github.prDescription"
-        draft={draft}
-        options={[
-          { value: "concise", label: "Concise" },
-          { value: "detailed", label: "Detailed" },
-        ]}
-        help="How the agent is told to write the PR description: concise asks for a couple of sentences plus a few bullets, detailed allows a full write-up."
-      />
-    </SettingsCard>
+      {(draft.dirty || draft.error || draft.applied) && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {draft.dirty && (
+            <>
+              <Button type="submit" size="plate" disabled={draft.saving || draft.invalid}>
+                {draft.saving ? "Saving" : "Save"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="plate"
+                onClick={draft.discard}
+                disabled={draft.saving}
+                className="hover:bg-transparent hover:text-haze-300"
+              >
+                Discard
+              </Button>
+            </>
+          )}
+          {draft.error && (
+            <p className="flex min-w-0 items-start gap-1.5 text-[12px] leading-relaxed text-rust-400">
+              <Warn className="mt-px size-3 shrink-0" />
+              {draft.error}
+            </p>
+          )}
+          {!draft.dirty && draft.applied === "live" && (
+            <p className="flex items-center gap-1.5 text-[12px] text-mint-400">
+              <Check className="size-3 shrink-0" />
+              Saved. Applies to the next run.
+            </p>
+          )}
+        </div>
+      )}
+    </form>
   );
 }
 
@@ -313,6 +331,7 @@ function ProviderRow({
   onOpenChange,
   authError,
   refreshWarning,
+  extra,
 }: {
   spec: ProviderSpec;
   config: BreviConfig;
@@ -321,6 +340,7 @@ function ProviderRow({
   onOpenChange: (open: boolean) => void;
   authError?: string;
   refreshWarning?: string;
+  extra?: ReactNode;
 }) {
   const [value, setValue] = useState("");
   const [pending, setPending] = useState(false);
@@ -630,6 +650,7 @@ function ProviderRow({
             <External className="size-2.5" />
           </a>
         )}
+      {extra}
     </ConnectorItem>
   );
 }
