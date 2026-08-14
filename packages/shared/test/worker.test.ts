@@ -183,6 +183,24 @@ describe("registration", () => {
     expect(parseWorkerMessage({ ...base, auth: { kind: "credential", workerId: "wk-1" } })).toBeUndefined();
   });
 
+  it("refuses a worker that is not bwrap", () => {
+    const registration = {
+      type: "register",
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      auth: { kind: "pairing" as const, token: "bwp_pairing" },
+      name: "builder",
+      capabilities: {
+        os: "linux",
+        arch: "x64",
+        provider: "legacy",
+        maxConcurrency: 1,
+        version: "0.5.0",
+      },
+      activeLeases: [],
+    };
+    expect(parseWorkerMessage(registration)).toBeUndefined();
+  });
+
   it("rejects a concurrency the CLI must refuse too", () => {
     const registration = {
       type: "register",

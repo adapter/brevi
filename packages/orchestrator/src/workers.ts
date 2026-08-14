@@ -1033,10 +1033,8 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   #placeWorker(): { worker: ConnectedWorker } | { reason: string } {
     if (this.#workers.size === 0) return { reason: "no workers are connected" };
 
-    const available = [...this.#workers.values()].filter(
-      (worker) => !this.#isDraining(worker.id),
-    );
-    if (available.length === 0) {
+    const notDraining = [...this.#workers.values()].filter((worker) => !this.#isDraining(worker.id));
+    if (notDraining.length === 0) {
       const n = this.#workers.size;
       return {
         reason:
@@ -1044,6 +1042,11 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
             ? "the 1 connected worker is draining"
             : `all ${n} connected workers are draining`,
       };
+    }
+
+    const available = notDraining.filter((worker) => worker.capabilities.provider === "bwrap");
+    if (available.length === 0) {
+      return { reason: "no connected worker can execute isolated runs" };
     }
 
     const withCapacity = available.filter(

@@ -228,7 +228,7 @@ No credential material ever appears here: the host stores only the sha256 of eac
 
 ### Worker channel
 
-`WS /ws/worker` is the channel `brevi worker` (see [CLI](/reference/cli/#brevi-worker)) connects to. Each worker dials it outbound and never accepts inbound connections, so a worker behind NAT needs no port open. The wire protocol is defined as zod schemas in `packages/shared/src/worker.ts` and is versioned (`WORKER_PROTOCOL_VERSION`, currently `2`); a worker on a different version is rejected on registration.
+`WS /ws/worker` is the channel `brevi worker` (see [CLI](/reference/cli/#brevi-worker)) connects to. Each worker dials it outbound and never accepts inbound connections, so a worker behind NAT needs no port open. The wire protocol is defined as zod schemas in `packages/shared/src/worker.ts` and is versioned (`WORKER_PROTOCOL_VERSION`, currently `3`); a worker on a different version is rejected on registration.
 
 It is served in two places: always by the dashboard's own listener (`server.host` / `server.port`), so a worker on this same machine can always enroll, and additionally by a dedicated listener bound to `fleet.host` / `fleet.port` (see [Configuration](/reference/configuration/#fleet)) when `fleet.host` is set. That second listener exists so a worker on another machine can reach `/ws/worker` without exposing the unauthenticated management API above, which stays on `server.host` regardless; the dedicated listener serves nothing else beyond the credential-authenticated `GET /api/worker/demand` above, and every other request on it gets a `404`.
 

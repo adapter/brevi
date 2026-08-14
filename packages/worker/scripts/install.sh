@@ -899,14 +899,23 @@ EOF
 }
 
 # Drop leftover network units from an earlier install so an upgrade
-# does not keep a oneshot that fetches a deleted script.
+# does not keep a oneshot that fetches a deleted script. Clean tap/NAT
+# state first, while the helper is still on disk.
 retire_legacy_network_unit() {
-  if [ ! -f "$NETWORK_UNIT" ] && [ ! -f "$NETWORK_START" ] && [ ! -f "$NETWORK_ENV_FILE" ]; then
+  if [ ! -f "$NETWORK_UNIT" ] && [ ! -f "$NETWORK_START" ] && [ ! -f "$NETWORK_ENV_FILE" ] && [ ! -x "$LIB_DIR/setup-network.sh" ]; then
     return
   fi
   if command -v systemctl >/dev/null 2>&1; then
+    # Release any in-use tap devices before --clean tries to delete them.
+    systemctl stop brevi-worker.service >/dev/null 2>&1 || true
     systemctl stop brevi-network.service >/dev/null 2>&1 || true
     systemctl disable brevi-network.service >/dev/null 2>&1 || true
+  fi
+  if [ -x "$LIB_DIR/setup-network.sh" ]; then
+    info "Removing leftover tap devices and NAT rules from an earlier install"
+    if ! "$LIB_DIR/setup-network.sh" --clean; then
+      warnc "setup-network.sh --clean exited non-zero; leftover tap/NAT state may remain"
+    fi
   fi
   rm -f "$NETWORK_UNIT" "$NETWORK_START" "$NETWORK_ENV_FILE" "$LIB_DIR/setup-network.sh"
   info "Removed leftover brevi-network.service from an earlier install."

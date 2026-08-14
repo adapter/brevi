@@ -7,7 +7,7 @@ import type { SandboxLaunch } from "../types.js";
 const RO_BINDS = ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"];
 
 /** Extra host trees that resolv.conf or the dynamic linker often need. */
-const OPTIONAL_RO_BINDS = ["/run/systemd/resolve", "/run/resolvconf"];
+const OPTIONAL_RO_BINDS = ["/run/systemd/resolve", "/run/resolvconf", "/run/NetworkManager"];
 
 export interface WrapInBwrapOptions {
   /**
@@ -76,6 +76,7 @@ export function wrapInBwrap(
   for (const dir of OPTIONAL_RO_BINDS) {
     if (isDir(dir)) roBind(dir);
   }
+  bindResolvTarget(roBind);
   for (const dir of pathDirsToBind()) {
     if (!isCovered(dir, RO_BINDS)) roBind(dir);
   }
@@ -115,6 +116,25 @@ function pathDirsToBind(): string[] {
 
 function isCovered(path: string, prefixes: readonly string[]): boolean {
   return prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+/**
+ * If /etc/resolv.conf is a symlink (NetworkManager, systemd-resolved,
+ * connman), bind the real file and its parent dir so DNS works inside
+ * the sandbox. A regular /etc/resolv.conf is already covered by /etc.
+ */
+function bindResolvTarget(roBind: (src: string) => void): void {
+  const resolv = "/etc/resolv.conf";
+  try {
+    if (!existsSync(resolv)) return;
+    const real = realpathSync(resolv);
+    if (real === resolv || isCovered(real, RO_BINDS)) return;
+    roBind(real);
+    const parent = dirname(real);
+    if (isDir(parent) && !isCovered(parent, RO_BINDS)) roBind(parent);
+  } catch {
+    // missing or unreadable: the /etc bind is all we can do
+  }
 }
 
 /**

@@ -36,11 +36,15 @@ import type {
  */
 
 /**
+ * 3 since bwrap-only isolation: a version-2 worker can still register with a
+ * non-bwrap provider, and the host would dispatch unisolated runs. A
+ * version-2 frame is rejected on registration.
+ *
  * 2 since enrollment: `register` carries an auth envelope instead of a shared
  * pairing token, and the host answers with the worker's assigned id, so a
  * version-1 worker's frame is not merely older, it is unauthenticatable.
  */
-export const WORKER_PROTOCOL_VERSION = 2;
+export const WORKER_PROTOCOL_VERSION = 3;
 /** WebSocket path workers dial on the host. */
 export const WORKER_WS_PATH = "/ws/worker";
 /**
@@ -307,8 +311,8 @@ export const workerCapabilitiesSchema = z.object({
   /** process.platform of the worker host, e.g. "linux"; the managed macOS VM's worker reports MACOS_VM_OS ("macos-vm") instead (see resolveWorkerOs). */
   os: z.string(),
   arch: z.string(),
-  /** Sandbox provider the worker runs (always bwrap on current workers). */
-  provider: sandboxProviderNameSchema,
+  /** Sandbox provider the worker runs. Only bwrap workers may register. */
+  provider: z.literal("bwrap"),
   /** How many dispatched runs this worker executes at once. */
   maxConcurrency: z.number().int().min(1).max(WORKER_MAX_CONCURRENCY),
   /** @brevi/cli version the worker runs. */
