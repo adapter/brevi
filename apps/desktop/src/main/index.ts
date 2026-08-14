@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, dialog, shell } from "electron";
+import { app, dialog, nativeImage, shell } from "electron";
 import type { HealthResponse } from "@brevi/shared";
 import { loadConfig } from "@brevi/orchestrator/config";
 import { ensureConfig } from "./config.js";
@@ -19,6 +19,9 @@ import { MissionControl } from "./window.js";
 /** How many recent runs the tray menu lists (see summary.ts's menuRuns). */
 const MENU_RUN_LIMIT = 6;
 
+/** Product name shown in the macOS app menu, dock, About panel, and dialogs. */
+const APP_NAME = "brevi";
+
 const here = dirname(fileURLToPath(import.meta.url));
 
 let missionControl: MissionControl | undefined;
@@ -27,6 +30,11 @@ let supervisor: OrchestratorSupervisor | undefined;
 let fleet: FleetMonitor | undefined;
 let updater: DesktopUpdater | undefined;
 let quitting = false;
+
+// Must run before ready. Sets About/Quit labels and the Linux WM name.
+// The macOS menu bar and dock read the .app bundle instead; source
+// launches go through scripts/start.ts so that bundle is named brevi.
+app.setName(APP_NAME);
 
 // The default application menu already wires Cmd+Q to quit and gives every
 // BrowserWindow the standard Edit menu (copy/paste, etc.), so there's
@@ -70,8 +78,20 @@ async function teardownForQuit(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const iconPath = join(here, "..", "assets", "icon.png");
+  const icon = nativeImage.createFromPath(iconPath);
+  if (process.platform === "darwin" && !icon.isEmpty()) {
+    app.dock?.setIcon(icon);
+  }
+
+  app.setAboutPanelOptions({
+    applicationName: APP_NAME,
+    applicationVersion: app.getVersion(),
+    iconPath,
+  });
+
   const result = await ensureConfig().catch((err: unknown) => {
-    dialog.showErrorBox("brevi", err instanceof Error ? err.message : String(err));
+    dialog.showErrorBox(APP_NAME, err instanceof Error ? err.message : String(err));
     app.quit();
     return null;
   });
