@@ -24,7 +24,6 @@ import {
   OptionalTextField,
   RadioField,
   SectionIntro,
-  SelectField,
   SettingsCard,
   TextField,
 } from "./Fields";
@@ -34,9 +33,9 @@ const UNFINISHED = new Set(["queued", "preparing", "running", "finalizing", "wai
 
 /**
  * Repo mappings, sourced from the connected GitHub account. Tickets resolve to
- * a repo via a "repo:<key>" label, a project name, or the default mapping.
- * Each mapping is its own card, saved on its own; adding and removing a repo
- * writes through the same settings endpoint.
+ * a repo via a "repo:<key>" label or a Linear project name. Each mapping is
+ * its own card, saved on its own; adding and removing a repo writes through
+ * the same settings endpoint.
  */
 export function RepositoriesSection({
   config,
@@ -53,7 +52,6 @@ export function RepositoriesSection({
   const linearConnected = isLinearConnected(config, linearStatus);
   const mapped = Object.entries(config.repos);
 
-  const fallback = useSettingsDraft(config, onConfig);
   const [available, setAvailable] = useState<GithubRepo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -139,9 +137,6 @@ export function RepositoriesSection({
       repos: {
         [key]: { remote: repo.fullName, defaultBranch: repo.defaultBranch, projects: [], demo: "auto" },
       },
-      // The first repo added becomes the fallback, so tickets that match
-      // nothing still have somewhere to run.
-      ...(config.defaultRepo ? {} : { defaultRepo: key }),
     });
     setSearch("");
     setAdding(false);
@@ -151,20 +146,9 @@ export function RepositoriesSection({
     setConfirmRemove(null);
     void mutate({
       repos: { [key]: null },
-      // defaultRepo has to stop pointing at a mapping that no longer exists,
-      // or the whole config fails validation.
-      ...(config.defaultRepo === key ? { defaultRepo: null } : {}),
     });
   };
 
-  const repoKeys = mapped.map(([key]) => key);
-  // An unsaved default pointing at a repo that has since been removed can
-  // never be saved (the orchestrator rejects a dangling defaultRepo), so drop
-  // the edit rather than leave a Save button that always fails.
-  const pendingDefault = fallback.value("defaultRepo");
-  if (typeof pendingDefault === "string" && !repoKeys.includes(pendingDefault)) {
-    fallback.revert("defaultRepo");
-  }
   // Removing a mapping strands whatever is still in flight against it, so the
   // confirmation says how much that is.
   const unfinished = useMemo(() => {
@@ -181,24 +165,11 @@ export function RepositoriesSection({
     <>
       <SectionIntro title="Repositories">
         Tickets run against these checkouts. A <code className="font-mono text-[11px]">repo:&lt;key&gt;</code>{" "}
-        label, a mapped Linear project, or a matching project name picks one; everything else uses
-        the default.
+        label, a mapped Linear project, or a matching project name picks one. Tickets that match
+        nothing do not run.
       </SectionIntro>
 
       <div className="mt-3 flex flex-col gap-2.5">
-        {repoKeys.length > 0 && (
-          <SettingsCard title="Routing" draft={fallback}>
-            <SelectField
-              label="Default repository"
-              path="defaultRepo"
-              draft={fallback}
-              options={repoKeys.map((key) => ({ value: key, label: key }))}
-              clearable
-              help="Repo key to use when a ticket doesn't match any mapping."
-            />
-          </SettingsCard>
-        )}
-
         {mapped.map(([key]) => (
           <RepoCard
             key={key}

@@ -900,7 +900,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     if (!ticket.repo) {
       throw new OrchestratorError(
         "invalid",
-        `ticket ${ticket.identifier} has no repo mapping: add a "repo:<key>" label or set defaultRepo`,
+        `ticket ${ticket.identifier} has no repo mapping: add a "repo:<key>" label or map its Linear project`,
       );
     }
     if (!this.config.github.token) {
@@ -1278,8 +1278,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
           `${secrets.join(", ")} cannot be changed here; connect the provider instead`,
         );
       }
-      this.#checkSettingsSemantics(next);
-
       const saved = await this.#writeAndApply(next, patch);
       this.#reactToSettings(before, saved);
       return {
@@ -1343,21 +1341,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return write;
   }
 
-  /**
-   * The one rule the schema can't express, because it spans two fields: a
-   * default repo has to name a mapping that exists. Everything else, the R2
-   * URL shape included, lives in the schema so the dashboard validates it
-   * inline with the same message.
-   */
-  #checkSettingsSemantics(next: BreviConfig): void {
-    if (next.defaultRepo !== undefined && !Object.hasOwn(next.repos, next.defaultRepo)) {
-      throw new OrchestratorError(
-        "invalid",
-        `defaultRepo: "${next.defaultRepo}" is not a configured repo key`,
-      );
-    }
-  }
-
   /** Pick up whatever the new config changed: timers, queue, and the dashboard. */
   #reactToSettings(before: BreviConfig, next: BreviConfig): void {
     const changed = (path: string): boolean =>
@@ -1366,7 +1349,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     if (changed("pollIntervalSeconds")) this.#armPollTimer();
     if (changed("linear.teamKeys")) this.#tickets = [];
     this.emit("config", redactConfig(this.config));
-    if (changed("repos") || changed("defaultRepo")) {
+    if (changed("repos")) {
       this.#warnedNoRepo.clear();
       void this.poll(); // Tickets may now resolve to a repo.
     } else if (changed("trigger.label") || changed("linear.teamKeys")) {
@@ -1862,16 +1845,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       const before = structuredClone(this.config);
       const next = result.data;
       if (serializeConfig(before) === serializeConfig(next)) return;
-      try {
-        // The same cross-field rules the API enforces: a hand edit must not
-        // reach a state the dashboard would have refused.
-        this.#checkSettingsSemantics(next);
-      } catch (error) {
-        console.error(
-          `[brevi] ${this.#configPath} was edited into an invalid state (${error instanceof Error ? error.message : "invalid"}); keeping the settings already loaded.`,
-        );
-        return;
-      }
       console.log(`[brevi] Reloaded ${this.#configPath} after an external edit.`);
       // Secrets live in this same file, so a hand edit legitimately carries
       // them; they are applied like any other field.
@@ -2242,7 +2215,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       if (!this.#warnedNoRepo.has(ticket.id)) {
         this.#warnedNoRepo.add(ticket.id);
         console.warn(
-          `[brevi] ${ticket.identifier} is eligible but has no repo mapping; add a "repo:<key>" label, name its project after a repo key, or set defaultRepo. It will not run automatically.`,
+          `[brevi] ${ticket.identifier} is eligible but has no repo mapping; add a "repo:<key>" label or name its project after a repo key. It will not run automatically.`,
         );
       }
       return;
@@ -2334,8 +2307,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   /**
    * Resolve everything a dispatch needs beyond the run itself. Mirrors how
    * the old in-process executeRun resolved a run's repo: `ticket.repo`
-   * already names a configured repo key (Linear resolution or defaultRepo
-   * picked it before the ticket was ever queued), so this just looks it up
+   * already names a configured repo key (Linear resolution picked it before
+   * the ticket was ever queued), so this just looks it up
    * in the live config. Returns undefined, after failing the run itself,
    * when that lookup comes up empty: there is no later point in the
    * dispatch path where that failure could be reported instead.
@@ -2346,7 +2319,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     const repoKey = run.ticket.repo;
     const repo = repoKey ? this.config.repos[repoKey] : undefined;
     if (!repoKey || !repo) {
-      const text = `ticket ${run.ticket.identifier} has no resolved repo mapping: add a "repo:<key>" label or set defaultRepo`;
+      const text = `ticket ${run.ticket.identifier} has no resolved repo mapping: add a "repo:<key>" label or map its Linear project`;
       this.store.appendEvent({ runId, ts: new Date().toISOString(), type: "log", stream: "system", text });
       void this.store
         .setStatus(runId, "failed", { error: text, finishedAt: new Date().toISOString() })
@@ -2357,7 +2330,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       ? selectMemories(this.memories.list(memoryKeyFor(repo.remote)), this.config.memory.maxChars)
       : [];
     const prompts: DispatchPrompts = {
-      prDescription: this.config.github.prDescription,
+      prDescription: "concise",
       memories,
       recordMemories: this.config.memory.enabled,
     };

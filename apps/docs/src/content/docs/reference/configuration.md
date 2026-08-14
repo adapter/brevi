@@ -13,8 +13,8 @@ Every field on this page is editable from the dashboard's Configuration page, at
 
 | Page | Covers |
 | --- | --- |
-| Connectors | Connect/Disconnect per provider, `linear.teamKeys`, `github.prDescription`, `r2` |
-| Repositories | `repos`, `defaultRepo` |
+| Connectors | Connect/Disconnect per provider, `linear.teamKeys`, `r2` |
+| Repositories | `repos` |
 | Agent | `agent` (models, effort, command, args, Codex review) |
 | Sandbox | `sandbox`, including the Firecracker fields |
 | Workers | `fleet`, plus the enrolled workers themselves |
@@ -40,7 +40,7 @@ A freshly initialised config, with every default filled in:
 ```json
 {
   "linear": { "apiKey": "", "refreshToken": "", "tokenExpiresAt": "", "teamKeys": [] },
-  "github": { "token": "", "prDescription": "concise" },
+  "github": { "token": "" },
   "r2": { "bucket": "", "publicBaseUrl": "" },
   "repos": {},
   "agent": {
@@ -110,9 +110,8 @@ Keys beginning with `lin_api_` are sent as a raw `Authorization` header; anythin
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `token` | string | `""` | Token with the `repo` and `workflow` scopes. Used to list repos, clone, push, and open PRs. Empty means not connected. |
-| `prDescription` | `"concise"` \| `"detailed"` | `"concise"` | How the agent is told to write the PR description: `concise` asks for a couple of sentences plus a few bullets, `detailed` allows a full write-up. |
 
-Tickets will not run without it: every run pushes a branch and opens a pull request.
+Tickets will not run without it: every run pushes a branch and opens a pull request. The agent is always told to write a concise PR description.
 
 ## `r2`
 
@@ -135,7 +134,7 @@ The bucket is public: anyone with a URL can view any screenshot or recording bre
 brevi also never deletes uploaded objects. Clean them up yourself, or attach an R2 lifecycle rule to expire old objects automatically.
 :::
 
-## `repos` and `defaultRepo`
+## `repos`
 
 `repos` maps a **repo key** to a repository. The key is what tickets route on: a `repo:<key>` label, a bare label, or a Linear project name. The dashboard uses the repository name as the key when you add a repo.
 
@@ -154,8 +153,7 @@ brevi also never deletes uploaded objects. Clean them up yourself, or attach an 
       "devCommand": "bun run dev",
       "devUrl": "http://localhost:3000"
     }
-  },
-  "defaultRepo": "brevi"
+  }
 }
 ```
 
@@ -169,7 +167,7 @@ brevi also never deletes uploaded objects. Clean them up yourself, or attach an 
 | `devUrl` | string | - | URL the dev server listens on, so the agent knows when it's up and what to screenshot. |
 | `demo` | `"always"` \| `"auto"` \| `"never"` | `"auto"` | How much demo evidence runs capture. `always` is the full dev-server/screenshot flow; `auto` lets the agent downgrade to test output or a CLI transcript for changes with no visible surface (docs, tests, refactors); `never` skips the demo requirement. |
 
-`defaultRepo` is the key used when a ticket matches no mapping. It must name an existing entry, or the config is rejected; leave it unset and unmatched tickets simply don't run. Removing a repo from the dashboard clears `defaultRepo` along with it when it pointed there.
+A ticket that matches no mapping does not run. Add a `repo:<key>` label, map its Linear project, or name the project after a repo key.
 
 ## `agent`
 

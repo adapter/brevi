@@ -384,7 +384,7 @@ The bucket and its public base URL are config fields like any other; set them wi
 }
 ```
 
-Objects merge key by key; arrays and scalars replace. `null` **removes** a key, which is how an optional field is cleared (`{"defaultRepo": null}`) and how a repo mapping is deleted (`{"repos": {"web": null}}`).
+Objects merge key by key; arrays and scalars replace. `null` **removes** a key, which is how a repo mapping is deleted (`{"repos": {"web": null}}`).
 
 ```ts
 interface SettingsUpdateResponse {
@@ -399,7 +399,7 @@ The patch is merged onto the config on disk, the **whole** result is validated a
 { "error": "agent.orchestratorEffort: Invalid option: expected one of \"low\"|\"medium\"|\"high\"" }
 ```
 
-Two rules span fields and are checked after the schema: `defaultRepo` has to name a configured repo key, and a non-empty `r2.publicBaseUrl` has to parse as an `http(s)` URL.
+A non-empty `r2.publicBaseUrl` has to parse as an `http(s)` URL; that check lives in the schema.
 
 Credential fields are refused here with `400`: `linear.apiKey`, `linear.refreshToken`, `linear.tokenExpiresAt`, `github.token`, and the six `agent.*` keys. Most of them are masked in every read, so accepting them would let a form round-trip the mask over a live secret; `linear.tokenExpiresAt` is not itself masked and is refused because the OAuth flow maintains it. They are written by the Connect flows and `PUT /api/settings/credentials`, which verify each key with its provider. `connect.linearClientSecret` is write-only rather than refused: it can be set, but the literal mask value is rejected. The `fleet` section holds no secret at all: worker credentials are minted, not configured, and only their hashes are stored (see [Workers](#workers)).
 

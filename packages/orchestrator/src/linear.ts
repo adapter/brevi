@@ -261,8 +261,8 @@ export class LinearService {
 
   /**
    * Repo resolution order: a `repo:<key>` label, a label exactly matching a
-   * repo key, the issue's project among a repo's configured `projects`, the
-   * project name matching a key, then config.defaultRepo.
+   * repo key, the issue's project among a repo's configured `projects`, then
+   * the project name matching a key.
    */
   async #resolveRepo(issue: Issue, labels: string[]): Promise<string | undefined> {
     const repoKeys = Object.keys(this.#config.repos);
@@ -292,8 +292,6 @@ export class LinearService {
     } catch {
       // project lookup is optional
     }
-    const fallback = this.#config.defaultRepo;
-    if (fallback && this.#config.repos[fallback]) return fallback;
     return undefined;
   }
 }

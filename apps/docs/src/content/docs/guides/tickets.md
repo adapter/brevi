@@ -26,9 +26,8 @@ Repository mappings live in `config.repos` as *key → repo* entries; the dashbo
 2. A label that **exactly matches a repo key**.
 3. The issue's project appearing in a repo's **`projects` list** (the Linear-project mapping edited on the dashboard's Configuration page).
 4. The issue's **project name** matching a repo key.
-5. **`config.defaultRepo`**, if it names a real entry in `config.repos`.
 
-A ticket that resolves to nothing is still shown in the dashboard queue, but it is never auto-queued; the orchestrator logs a warning once, telling you to add a `repo:<key>` label, rename the project, or set a default. The same is true while GitHub is disconnected.
+A ticket that resolves to nothing is still shown in the dashboard queue, but it is never auto-queued; the orchestrator logs a warning once, telling you to add a `repo:<key>` label or rename the project. The same is true while GitHub is disconnected.
 
 ## What a run does
 
