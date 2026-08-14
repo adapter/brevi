@@ -29,7 +29,7 @@ export type RunStatus =
   | "cancelled";
 
 /** Which coding agent's usage limit was hit. */
-export type LimitProvider = "claude" | "codex";
+export type LimitProvider = "claude" | "codex" | "grok";
 
 /** A usage limit reported by the coding agent during an attempt. */
 export interface LimitInfo {
@@ -103,7 +103,7 @@ export interface CostModelUsage {
 export interface CostEntry {
   /** Which execution produced it, e.g. "implementation", "review fixes", "implementation (attempt 2)". */
   label: string;
-  /** "claude" | "codex" | future providers. */
+  /** "claude" | "codex" | "grok" | future providers. */
   provider: string;
   model?: string;
   inputTokens: number;

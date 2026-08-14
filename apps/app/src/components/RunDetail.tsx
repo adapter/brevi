@@ -446,7 +446,8 @@ function QueuedBanner({ reason }: { reason: string }) {
 }
 
 function limitLabel(limit: LimitInfo): string {
-  const provider = limit.provider === "claude" ? "Claude" : "Codex";
+  const provider =
+    limit.provider === "claude" ? "Claude" : limit.provider === "grok" ? "Grok" : "Codex";
   const kind = limit.kind === "unknown" ? "usage limit" : `${limit.kind} limit`;
   return `${provider} ${kind} reached`;
 }

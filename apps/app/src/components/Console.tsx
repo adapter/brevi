@@ -285,7 +285,8 @@ function Row({ row, thinking }: { row: ConsoleRow; thinking?: boolean }) {
   }
 
   if (event.type === "limit") {
-    const provider = event.limit.provider === "claude" ? "Claude" : "Codex";
+    const provider =
+      event.limit.provider === "claude" ? "Claude" : event.limit.provider === "grok" ? "Grok" : "Codex";
     const kind = event.limit.kind === "unknown" ? "usage limit" : `${event.limit.kind} limit`;
     return (
       <div className="flex gap-2.5 py-[3px]">

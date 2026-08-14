@@ -134,6 +134,7 @@ export function createAttachSessions(deps: AttachSessionsDeps): AttachSessions {
         runId,
         env,
         codexAuthJson: config.agent.codexAuthJson || undefined,
+        grokAuthJson: config.agent.grokAuthJson || undefined,
         githubToken: config.github.token || undefined,
       });
       const connection = sandbox.connection();

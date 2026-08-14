@@ -8,6 +8,7 @@ import {
   checkWrangler,
   discoverAnthropicCredential,
   discoverCodexCredential,
+  discoverXaiCredential,
   validateLinearApiKey,
 } from "@brevi/orchestrator";
 import { PROCESS_PLAYWRIGHT_CACHE_DIR } from "@brevi/worker";
@@ -484,7 +485,9 @@ async function checkProcessProvider(config: BreviConfig): Promise<CheckResult[]>
         ? "Install Claude Code: npm install -g @anthropic-ai/claude-code"
         : command === "codex"
           ? "Install Codex: npm install -g @openai/codex"
-          : "Install it or change agent.command.";
+          : command === "grok"
+            ? "Install the Grok CLI, or change agent.command."
+            : "Install it or change agent.command.";
     checks.push({
       name: "agent CLI",
       status: "fail",
@@ -560,7 +563,14 @@ async function nearestExistingAncestor(path: string): Promise<string | undefined
 
 // --- Connectors -------------------------------------------------------------------
 
-const CONNECTOR_NAMES = ["Linear", "GitHub", "Claude credential", "Codex credential", "R2"];
+const CONNECTOR_NAMES = [
+  "Linear",
+  "GitHub",
+  "Claude credential",
+  "Codex credential",
+  "Grok credential",
+  "R2",
+];
 
 async function checkConnectorsSection(config: BreviConfig | undefined): Promise<Section> {
   if (!config) {
@@ -575,6 +585,7 @@ async function checkConnectorsSection(config: BreviConfig | undefined): Promise<
     checkGithub(config),
     checkClaudeCredential(config),
     checkCodexCredential(config),
+    checkGrokCredential(config),
     checkR2(config),
   ]);
 
@@ -805,6 +816,27 @@ async function checkCodexCredential(config: BreviConfig): Promise<CheckResult> {
     };
   }
   return { name: "Codex credential", status: "skip", detail: "not needed" };
+}
+
+async function checkGrokCredential(config: BreviConfig): Promise<CheckResult> {
+  if (config.agent.xaiApiKey) {
+    return { name: "Grok credential", status: "pass", detail: "configured (agent.xaiApiKey)" };
+  }
+  if (config.agent.grokAuthJson) {
+    return { name: "Grok credential", status: "pass", detail: "configured (agent.grokAuthJson)" };
+  }
+  if (agentProvider(config) === "grok") {
+    const discovered = await discoverXaiCredential();
+    return {
+      name: "Grok credential",
+      status: "fail",
+      detail: discovered
+        ? `found via ${discovered.source} on this host, but it is not saved in the config runs use`
+        : "no xAI credential in the config",
+      hint: "Connect Grok from the dashboard (Configuration, Connectors); connecting validates the credential and saves it for runs.",
+    };
+  }
+  return { name: "Grok credential", status: "skip", detail: "not needed" };
 }
 
 /** Shared deadline for both wrangler probes, which run in parallel below. */

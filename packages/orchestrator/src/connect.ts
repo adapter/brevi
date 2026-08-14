@@ -7,7 +7,7 @@ import type { BreviConfig } from "@brevi/shared";
 
 /**
  * Automatic credential acquisition for the dashboard's Connect buttons:
- * host discovery (gh CLI, Claude Code login, Codex login, env vars) and the
+ * host discovery (gh CLI, Claude Code login, Codex login, Grok/xAI env, env vars) and the
  * OAuth flows (GitHub device flow, Linear redirect flow). Validation happens
  * in the caller (scheduler) via credentials.ts.
  */
@@ -16,8 +16,11 @@ export interface DiscoveredCredential {
   value: string;
   /** Where it came from, for the "Connected via ..." detail. */
   source: string;
-  /** "chatgpt" = a Codex CLI ChatGPT login (full auth.json blob, no API key). */
-  kind: "api-key" | "oauth" | "chatgpt";
+  /**
+   * "chatgpt" = a Codex CLI ChatGPT login (full auth.json blob, no API key).
+   * "grok" = a Grok CLI login (full ~/.grok/auth.json blob, no API key).
+   */
+  kind: "api-key" | "oauth" | "chatgpt" | "grok";
 }
 
 // --- Host discovery ----------------------------------------------------------
@@ -114,6 +117,127 @@ export async function discoverCodexCredential(): Promise<DiscoveredCredential | 
     // no codex auth
   }
   return null;
+}
+
+/** Env vars the Grok CLI itself consults for a key or a stored login. */
+const GROK_API_KEY_VARS = ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"] as const;
+const GROK_ENV_VARS = [...GROK_API_KEY_VARS, "GROK_AUTH", "GROK_AUTH_PATH", "GROK_HOME"] as const;
+
+/**
+ * Grok / xAI, in the same order the Grok CLI uses: API-key env vars, then
+ * GROK_AUTH (a JSON login blob in the environment), then the auth file
+ * (GROK_AUTH_PATH, else $GROK_HOME/auth.json, else ~/.grok/auth.json).
+ *
+ * A GUI-launched orchestrator does not inherit ~/.zshrc, so missing vars are
+ * also read from a login shell, the same way Grok captures its own shell
+ * environment.
+ */
+export async function discoverXaiCredential(): Promise<DiscoveredCredential | null> {
+  const env = await lookupGrokEnv([...GROK_ENV_VARS]);
+
+  for (const name of GROK_API_KEY_VARS) {
+    const hit = env[name];
+    if (hit) return { value: hit.value, source: envSource(name, hit), kind: "api-key" };
+  }
+
+  const grokAuth = env.GROK_AUTH;
+  if (grokAuth) {
+    const fromEnv = credentialFromGrokAuth(grokAuth.value, envSource("GROK_AUTH", grokAuth));
+    if (fromEnv) return fromEnv;
+  }
+
+  const grokHome = env.GROK_HOME?.value.trim() || join(homedir(), ".grok");
+  const authPath = env.GROK_AUTH_PATH?.value.trim() || join(grokHome, "auth.json");
+  try {
+    const raw = await readFile(authPath, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && grokAuthHasSession(parsed)) {
+      const source = env.GROK_AUTH_PATH ? envSource("GROK_AUTH_PATH", env.GROK_AUTH_PATH) : "Grok CLI login";
+      return { value: raw, source, kind: "grok" };
+    }
+  } catch {
+    // no grok auth file
+  }
+  return null;
+}
+
+type EnvHit = { value: string; via: "process" | "login-shell" };
+
+function envSource(name: string, hit: EnvHit): string {
+  return hit.via === "login-shell" ? `${name} (login shell)` : name;
+}
+
+/**
+ * Values the Grok CLI would see: this process first, then a login shell for
+ * anything still unset (GUI apps never load ~/.zshrc).
+ */
+async function lookupGrokEnv(names: readonly string[]): Promise<Partial<Record<string, EnvHit>>> {
+  const hits: Partial<Record<string, EnvHit>> = {};
+  const missing: string[] = [];
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value) hits[name] = { value, via: "process" };
+    else missing.push(name);
+  }
+  if (missing.length === 0) return hits;
+  const login = await captureLoginShellEnv(missing);
+  for (const name of missing) {
+    const value = login[name]?.trim();
+    if (value) hits[name] = { value, via: "login-shell" };
+  }
+  return hits;
+}
+
+/** Pull named variables out of `$SHELL -lic`, the user's real login environment. */
+async function captureLoginShellEnv(names: string[]): Promise<Record<string, string>> {
+  if (names.length === 0 || names.some((name) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))) {
+    return {};
+  }
+  const shell = process.env.SHELL?.trim() || "/bin/zsh";
+  const script = `exec /usr/bin/python3 -c ${shSingleQuote(
+    `import json,os; print(json.dumps({n:os.environ[n] for n in ${JSON.stringify(names)} if os.environ.get(n)}))`,
+  )}`;
+  try {
+    const { stdout, exitCode } = await execa(shell, ["-lic", script], {
+      timeout: 4000,
+      reject: false,
+    });
+    if (exitCode !== 0 || !stdout.trim()) return {};
+    const parsed = JSON.parse(stdout) as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "string" && value) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function shSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+/** GROK_AUTH is JSON (the auth.json blob). A bare token is accepted as an API key. */
+function credentialFromGrokAuth(raw: string, source: string): DiscoveredCredential | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && grokAuthHasSession(parsed)) {
+      return { value: raw, source, kind: "grok" };
+    }
+  } catch {
+    if (raw.trim()) return { value: raw.trim(), source, kind: "api-key" };
+  }
+  return null;
+}
+
+function grokAuthHasSession(parsed: object): boolean {
+  return Object.values(parsed).some((value) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+    const key = (value as { key?: unknown }).key;
+    return typeof key === "string" && key.length > 0;
+  });
 }
 
 // --- Hosted OAuth backend (apps/api on api.brevi.dev) ------------------------

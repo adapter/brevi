@@ -256,6 +256,7 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
       runId: run.id,
       env: agentEnv,
       codexAuthJson: config.agent.codexAuthJson || undefined,
+      grokAuthJson: config.agent.grokAuthJson || undefined,
     });
     const claude = agentProvider(config) === "claude";
     const ccusageCommand = claude ? await resolveCcusageCommand(sandbox, provider.name, signal) : undefined;

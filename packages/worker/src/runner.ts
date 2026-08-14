@@ -204,7 +204,12 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     pendingCostModel = undefined;
     stdoutSink.flush();
     stderrSink.flush();
-    const subscription = limitProvider === "claude" ? !config.agent.anthropicApiKey : !config.agent.codexApiKey;
+    const subscription =
+      limitProvider === "claude"
+        ? !config.agent.anthropicApiKey
+        : limitProvider === "codex"
+          ? !config.agent.codexApiKey
+          : !config.agent.xaiApiKey;
     const streamEntry = usage.snapshot({ label, subscription, fallbackModel: executionModel });
 
     // ccusage reads the transcript directly, so when a final sample lands it
@@ -411,6 +416,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       runId: run.id,
       env: agentEnv,
       codexAuthJson: config.agent.codexAuthJson || undefined,
+      grokAuthJson: config.agent.grokAuthJson || undefined,
     });
     // Live sampling only ever applies to Claude executions; a Codex run
     // resolves and starts nothing here. The Codex review passes below still
@@ -690,7 +696,8 @@ export async function finishRunSandbox(options: {
 
 /** Human line for logs and failure reasons, e.g. "Claude five-hour limit reached". */
 export function limitLabel(limit: LimitInfo): string {
-  const provider = limit.provider === "claude" ? "Claude" : "Codex";
+  const provider =
+    limit.provider === "claude" ? "Claude" : limit.provider === "grok" ? "Grok" : "Codex";
   const kind = limit.kind === "unknown" ? "usage limit" : `${limit.kind} limit`;
   return `${provider} ${kind} reached`;
 }
@@ -759,13 +766,15 @@ export async function buildRepoMap(checkoutDir: string, token: string): Promise<
  */
 export function collectAgentEnv(config: BreviConfig): Record<string, string> {
   const env: Record<string, string> = {};
-  const { anthropicApiKey, claudeCodeOauthToken, codexApiKey, codexAuthJson } = config.agent;
+  const { anthropicApiKey, claudeCodeOauthToken, codexApiKey, codexAuthJson, xaiApiKey, grokAuthJson } =
+    config.agent;
   if (anthropicApiKey) env.ANTHROPIC_API_KEY = anthropicApiKey;
   if (claudeCodeOauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = claudeCodeOauthToken;
   if (codexApiKey) env.OPENAI_API_KEY = codexApiKey;
-  if (Object.keys(env).length === 0 && !codexAuthJson) {
+  if (xaiApiKey) env.XAI_API_KEY = xaiApiKey;
+  if (Object.keys(env).length === 0 && !codexAuthJson && !grokAuthJson) {
     throw new Error(
-      "no agent credentials configured: connect Claude (or Codex) in the dashboard's Connections panel",
+      "no agent credentials configured: connect Claude, Codex, or Grok in the dashboard's Connections panel",
     );
   }
   return env;

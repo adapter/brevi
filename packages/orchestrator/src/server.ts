@@ -398,6 +398,7 @@ function buildApp(
     if (typeof body.githubToken === "string") request.githubToken = body.githubToken;
     if (typeof body.anthropicApiKey === "string") request.anthropicApiKey = body.anthropicApiKey;
     if (typeof body.codexApiKey === "string") request.codexApiKey = body.codexApiKey;
+    if (typeof body.xaiApiKey === "string") request.xaiApiKey = body.xaiApiKey;
     if (Object.keys(request).length === 0) {
       return c.json({ error: "no credentials provided" }, 400);
     }
@@ -418,13 +419,16 @@ function buildApp(
 
   app.post("/api/connect/:provider", async (c) => {
     const provider = c.req.param("provider");
-    if (!["linear", "github", "anthropic", "codex"].includes(provider)) {
+    if (!["linear", "github", "anthropic", "codex", "grok"].includes(provider)) {
       return c.json({ error: "unknown provider" }, 404);
     }
     try {
       const serverUrl = `http://localhost:${boundPort()}`;
       return c.json(
-        await orchestrator.connectProvider(provider as "linear" | "github" | "anthropic" | "codex", serverUrl),
+        await orchestrator.connectProvider(
+          provider as "linear" | "github" | "anthropic" | "codex" | "grok",
+          serverUrl,
+        ),
       );
     } catch (error) {
       return c.json({ error: errorMessage(error) }, 500);

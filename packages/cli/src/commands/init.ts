@@ -190,6 +190,7 @@ function summarize(provider: string, existing: BreviConfig | undefined): string 
     connection("GitHub", Boolean(existing?.github.token)),
     connection("Anthropic", Boolean(existing?.agent.anthropicApiKey)),
     connection("Codex", Boolean(existing?.agent.codexApiKey)),
+    connection("Grok", Boolean(existing?.agent.xaiApiKey || existing?.agent.grokAuthJson)),
     repoKeys.length > 0
       ? `Repositories: ${repoKeys.join(", ")}`
       : "Repositories: none; pick them in the dashboard once GitHub is connected",

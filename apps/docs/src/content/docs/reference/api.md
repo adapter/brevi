@@ -274,7 +274,7 @@ Two more host-to-worker frames belong to the fleet rather than to a run: `worker
 PUT /api/settings/credentials
 Content-Type: application/json
 
-{ "linearApiKey": "lin_api_…", "githubToken": "", "anthropicApiKey": "sk-ant-…" }
+{ "linearApiKey": "lin_api_…", "githubToken": "", "anthropicApiKey": "sk-ant-…", "xaiApiKey": "xai-…" }
 ```
 
 Only the fields you send are touched. Each is validated against its provider before being saved; invalid keys are rejected per field while valid ones in the same request are still applied. An empty string disconnects that provider without validation.
@@ -291,7 +291,7 @@ Only the fields you send are touched. Each is validated against its provider bef
 
 ### Connect
 
-`POST /api/connect/:provider` with `provider` one of `linear`, `github`, `anthropic`, `codex` runs the one-click strategy chain and reports what the dashboard should do next. It returns one of four shapes:
+`POST /api/connect/:provider` with `provider` one of `linear`, `github`, `anthropic`, `codex`, `grok` runs the one-click strategy chain and reports what the dashboard should do next. It returns one of four shapes:
 
 ```ts
 | { status: "connected"; provider; detail: string; config: BreviConfig }
@@ -389,7 +389,7 @@ The patch is merged onto the config on disk, the **whole** result is validated a
 
 Two rules span fields and are checked after the schema: `defaultRepo` has to name a configured repo key, and a non-empty `r2.publicBaseUrl` has to parse as an `http(s)` URL.
 
-Credential fields are refused here with `400`: `linear.apiKey`, `linear.refreshToken`, `linear.tokenExpiresAt`, `github.token`, and the four `agent.*` keys. Most of them are masked in every read, so accepting them would let a form round-trip the mask over a live secret; `linear.tokenExpiresAt` is not itself masked and is refused because the OAuth flow maintains it. They are written by the Connect flows and `PUT /api/settings/credentials`, which verify each key with its provider. `connect.linearClientSecret` is write-only rather than refused: it can be set, but the literal mask value is rejected. The `fleet` section holds no secret at all: worker credentials are minted, not configured, and only their hashes are stored (see [Workers](#workers)).
+Credential fields are refused here with `400`: `linear.apiKey`, `linear.refreshToken`, `linear.tokenExpiresAt`, `github.token`, and the six `agent.*` keys. Most of them are masked in every read, so accepting them would let a form round-trip the mask over a live secret; `linear.tokenExpiresAt` is not itself masked and is refused because the OAuth flow maintains it. They are written by the Connect flows and `PUT /api/settings/credentials`, which verify each key with its provider. `connect.linearClientSecret` is write-only rather than refused: it can be set, but the literal mask value is rejected. The `fleet` section holds no secret at all: worker credentials are minted, not configured, and only their hashes are stored (see [Workers](#workers)).
 
 The check compares credential values on the merged result, not paths in the patch, so deleting a whole section (`{"linear": null}`, which would let the schema defaults refill it with empty strings) is refused the same way as setting the field directly.
 

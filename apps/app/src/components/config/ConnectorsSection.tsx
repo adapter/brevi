@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   BreviConfig,
   CredentialProvider,
@@ -8,15 +8,23 @@ import type {
   R2Status,
 } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { api } from "../../lib/api";
 import { linearConnected } from "../../lib/linear";
 import { safeExternalUrl, trustedOriginOf } from "../../lib/url";
 import { useSettingsDraft } from "../../lib/settings";
 import { Plate } from "../Bits";
-import { Check, External, Warn } from "../Icons";
+import { Check, ChevronRight, External, Warn } from "../Icons";
 import { SegmentedField, SettingsCard, TagField, TextField } from "./Fields";
+
+type ConnectorKey = CredentialProvider | "r2";
+type ConnectorTone = "ok" | "warn" | "error" | "idle";
 
 /** How the "Connect" button acquires a credential, shown as a hint. */
 type ConnectHint = string;
@@ -78,11 +86,91 @@ export const PROVIDERS: ProviderSpec[] = [
     keyUrlLabel: "platform.openai.com",
     connected: (c) => c.agent.codexApiKey !== "" || c.agent.codexAuthJson !== "",
   },
+  {
+    id: "grok",
+    field: "xaiApiKey",
+    name: "Grok",
+    role: "Alternative agent key (xAI)",
+    connectHint: "Found on this machine (Grok CLI env, login, or XAI_API_KEY)",
+    inputLabel: "xAI API key",
+    keyUrl: "https://console.x.ai",
+    keyUrlLabel: "console.x.ai",
+    connected: (c) => c.agent.xaiApiKey !== "" || c.agent.grokAuthJson !== "",
+  },
 ];
 
+const TONE_DOT: Record<ConnectorTone, string> = {
+  ok: "bg-mint-500",
+  warn: "bg-ember-400",
+  error: "bg-rust-400",
+  idle: "bg-haze-700",
+};
+
+const TONE_LABEL: Record<ConnectorTone, string> = {
+  ok: "text-mint-400",
+  warn: "text-ember-300",
+  error: "text-rust-400",
+  idle: "text-haze-700",
+};
+
 /**
- * Provider connections: Linear, GitHub, and the agent credentials, plus the
- * Cloudflare R2 evidence connector. Rendered at /config/connectors.
+ * One row in the connectors accordion. The trigger is the name and status;
+ * Connect/Disconnect sit beside it as their own buttons so they are not
+ * nested inside the trigger.
+ */
+function ConnectorItem({
+  name,
+  open,
+  onOpenChange,
+  tone,
+  statusLabel,
+  actions,
+  children,
+}: {
+  name: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  tone: ConnectorTone;
+  statusLabel: string;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={onOpenChange}
+      className="border-t border-ink-700 first:border-t-0"
+    >
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <CollapsibleTrigger className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left">
+          <span
+            className={`inline-block size-[7px] shrink-0 rounded-full ${TONE_DOT[tone]}`}
+            role="img"
+            aria-label={statusLabel}
+            title={statusLabel}
+          />
+          <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
+            {name}
+          </h3>
+          <span className={`min-w-0 truncate text-[11px] ${TONE_LABEL[tone]}`}>{statusLabel}</span>
+        </CollapsibleTrigger>
+        {actions}
+        <CollapsibleTrigger
+          aria-label={open ? `Collapse ${name}` : `Expand ${name}`}
+          className="shrink-0 cursor-pointer p-0.5 text-haze-700 hover:text-haze-300"
+        >
+          <ChevronRight className={`size-3 transition-transform ${open ? "rotate-90" : ""}`} />
+        </CollapsibleTrigger>
+      </div>
+      <CollapsibleContent className="px-3 pb-3">{children}</CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/**
+ * Provider connections: Linear, GitHub, and the agent credentials (Claude,
+ * Codex, Grok), plus the Cloudflare R2 evidence connector. Rendered at
+ * /config/connectors as a single-column accordion.
  */
 export function ConnectorsSection({
   config,
@@ -107,6 +195,19 @@ export function ConnectorsSection({
     linearStatus?.state === "refresh-failing"
       ? period(linearStatus.error ?? "The Linear token could not be refreshed")
       : undefined;
+  const [openId, setOpenId] = useState<ConnectorKey | null>(() => {
+    if (linearStatus?.state === "auth-error" || linearStatus?.state === "refresh-failing") {
+      return "linear";
+    }
+    return (
+      PROVIDERS.find((spec) =>
+        spec.id === "linear" ? !linearConnected(config, linearStatus) : !spec.connected(config),
+      )?.id ?? null
+    );
+  });
+  const setOpen = (id: ConnectorKey) => (open: boolean) => {
+    setOpenId((current) => (open ? id : current === id ? null : current));
+  };
 
   return (
     <section className="mt-6">
@@ -116,22 +217,26 @@ export function ConnectorsSection({
           {connectedCount}/{PROVIDERS.length}
         </span>
       </div>
-      <ul className="mt-3 grid grid-cols-1 gap-2.5 lg:grid-cols-2">
+      <Card size="sm" className="mt-3 gap-0 py-0">
         {PROVIDERS.map((spec) => (
-          <li key={spec.id}>
-            <ProviderRow
-              spec={spec}
-              config={config}
-              onConfig={onConfig}
-              authError={spec.id === "linear" ? linearAuthError : undefined}
-              refreshWarning={spec.id === "linear" ? linearRefreshWarning : undefined}
-            />
-          </li>
+          <ProviderRow
+            key={spec.id}
+            spec={spec}
+            config={config}
+            onConfig={onConfig}
+            open={openId === spec.id}
+            onOpenChange={setOpen(spec.id)}
+            authError={spec.id === "linear" ? linearAuthError : undefined}
+            refreshWarning={spec.id === "linear" ? linearRefreshWarning : undefined}
+          />
         ))}
-        <li>
-          <R2Row config={config} onConfig={onConfig} />
-        </li>
-      </ul>
+        <R2Row
+          config={config}
+          onConfig={onConfig}
+          open={openId === "r2"}
+          onOpenChange={setOpen("r2")}
+        />
+      </Card>
       <div className="mt-2.5 flex flex-col gap-2.5">
         <LinearSettingsCard config={config} onConfig={onConfig} />
         <GithubSettingsCard config={config} onConfig={onConfig} />
@@ -204,12 +309,16 @@ function ProviderRow({
   spec,
   config,
   onConfig,
+  open,
+  onOpenChange,
   authError,
   refreshWarning,
 }: {
   spec: ProviderSpec;
   config: BreviConfig;
   onConfig: (config: BreviConfig) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   authError?: string;
   refreshWarning?: string;
 }) {
@@ -299,6 +408,7 @@ function ProviderRow({
             verificationUri,
             interval: response.interval,
           });
+          onOpenChange(true);
           window.open(verificationUri, "_blank", "noopener");
           pollDevice(response.interval);
           break;
@@ -310,12 +420,14 @@ function ProviderRow({
             break;
           }
           setAwaitingRedirect(true);
+          onOpenChange(true);
           window.open(url, "_blank", "noopener");
           break;
         }
         case "manual":
           setManual(true);
           setManualReason(response.reason);
+          onOpenChange(true);
           break;
       }
     } catch (err) {
@@ -345,70 +457,54 @@ function ProviderRow({
     }
   };
 
-  return (
-    <Card size="sm" className="gap-1.5">
-      <CardHeader className="gap-0">
-        <div className="flex items-center gap-2">
-          <span
-            className={`inline-block size-[7px] shrink-0 rounded-full ${
-              authError
-                ? "bg-rust-400"
-                : refreshWarning
-                  ? "bg-ember-400"
-                  : connected
-                    ? "bg-mint-500"
-                    : "bg-haze-700"
-            }`}
-            role="img"
-            aria-label={
-              authError || refreshWarning ? "Needs attention" : connected ? "Connected" : "Not connected"
-            }
-            title={
-              authError || refreshWarning ? "Needs attention" : connected ? "Connected" : "Not connected"
-            }
-          />
-          <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
-            {spec.name}
-          </h3>
-          <span className="ml-auto flex items-center gap-1.5">
-            {connected ? (
-              <>
-                {(authError || refreshWarning) && (
-                  <Button
-                    size="plate"
-                    onClick={() => void connect()}
-                    disabled={pending || device !== null}
-                    title="Authorize in the browser again"
-                  >
-                    Reconnect
-                  </Button>
-                )}
-                <Button
-                  variant="outline"
-                  size="plate"
-                  onClick={() => void submit("")}
-                  disabled={pending}
-                  title="Remove this key"
-                >
-                  Disconnect
-                </Button>
-              </>
-            ) : (
-              <Button
-                size="plate"
-                onClick={() => void connect()}
-                disabled={pending || device !== null}
-                title={spec.connectHint}
-              >
-                {pending ? "Connecting" : "Connect"}
-              </Button>
-            )}
-          </span>
-        </div>
-      </CardHeader>
+  const tone: ConnectorTone = authError ? "error" : refreshWarning ? "warn" : connected ? "ok" : "idle";
+  const statusLabel = authError || refreshWarning ? "Needs attention" : connected ? "Connected" : "Not connected";
 
-      <CardContent>
-        <p className="text-[12px] leading-relaxed text-haze-400">{spec.role}</p>
+  return (
+    <ConnectorItem
+      name={spec.name}
+      open={open}
+      onOpenChange={onOpenChange}
+      tone={tone}
+      statusLabel={statusLabel}
+      actions={
+        <span className="flex shrink-0 items-center gap-1.5">
+          {connected ? (
+            <>
+              {(authError || refreshWarning) && (
+                <Button
+                  size="plate"
+                  onClick={() => void connect()}
+                  disabled={pending || device !== null}
+                  title="Authorize in the browser again"
+                >
+                  Reconnect
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="plate"
+                onClick={() => void submit("")}
+                disabled={pending}
+                title="Remove this key"
+              >
+                Disconnect
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="plate"
+              onClick={() => void connect()}
+              disabled={pending || device !== null}
+              title={spec.connectHint}
+            >
+              {pending ? "Connecting" : "Connect"}
+            </Button>
+          )}
+        </span>
+      }
+    >
+      <p className="text-[12px] leading-relaxed text-haze-400">{spec.role}</p>
 
         {authError && (
           <p className="mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed text-rust-400">
@@ -497,7 +593,10 @@ function ProviderRow({
             <Button
               variant="ghost"
               size="plate"
-              onClick={() => setManual(true)}
+              onClick={() => {
+                setManual(true);
+                onOpenChange(true);
+              }}
               className="mt-2.5 -ml-2 hover:bg-transparent hover:text-haze-300"
             >
               Enter a key manually instead
@@ -531,8 +630,7 @@ function ProviderRow({
             <External className="size-2.5" />
           </a>
         )}
-      </CardContent>
-    </Card>
+    </ConnectorItem>
   );
 }
 
@@ -554,9 +652,13 @@ const R2_POLL_INTERVAL_MS = 3000;
 function R2Row({
   config,
   onConfig,
+  open,
+  onOpenChange,
 }: {
   config: BreviConfig;
   onConfig: (config: BreviConfig) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
   const [status, setStatus] = useState<R2Status | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -653,14 +755,17 @@ function R2Row({
         case "login-started":
           autoProvisioned.current = false;
           setConnectDetail(response.detail);
+          onOpenChange(true);
           pollStatus(Date.now() + R2_POLL_TIMEOUT_MS);
           break;
         case "provision-failed":
           setStatus(response.r2);
           setConnectError(response.reason);
+          onOpenChange(true);
           break;
         case "unavailable":
           setUnavailableReason(response.reason);
+          onOpenChange(true);
           break;
       }
     } catch (err) {
@@ -698,38 +803,29 @@ function R2Row({
   const showManualEntry = !configured && !editing;
 
   return (
-    <Card size="sm" className="gap-1.5">
-      <CardHeader className="gap-0">
-        <div className="flex items-center gap-2">
-          <span
-            className={`inline-block size-[7px] shrink-0 rounded-full ${ready ? "bg-mint-500" : "bg-haze-700"}`}
-            role="img"
-            aria-label={ready ? "Connected" : "Not connected"}
-            title={ready ? "Connected" : "Not connected"}
-          />
-          <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
-            Cloudflare R2
-          </h3>
-          {showConnect && (
-            <span className="ml-auto">
-              <Button
-                size="plate"
-                onClick={() => void connect()}
-                disabled={pending || connectDetail !== null}
-                title="Authenticate wrangler with your Cloudflare account and provision the evidence bucket"
-              >
-                {pending ? "Connecting" : "Connect"}
-              </Button>
-            </span>
-          )}
-        </div>
-      </CardHeader>
-
-      <CardContent>
-        <p className="text-[12px] leading-relaxed text-haze-400">
-          Publishes run evidence (screenshots, recordings) to a public bucket, embedded in PR
-          descriptions.
-        </p>
+    <ConnectorItem
+      name="Cloudflare R2"
+      open={open}
+      onOpenChange={onOpenChange}
+      tone={ready ? "ok" : "idle"}
+      statusLabel={ready ? "Connected" : "Not connected"}
+      actions={
+        showConnect ? (
+          <Button
+            size="plate"
+            onClick={() => void connect()}
+            disabled={pending || connectDetail !== null}
+            title="Authenticate wrangler with your Cloudflare account and provision the evidence bucket"
+          >
+            {pending ? "Connecting" : "Connect"}
+          </Button>
+        ) : undefined
+      }
+    >
+      <p className="text-[12px] leading-relaxed text-haze-400">
+        Publishes run evidence (screenshots, recordings) to a public bucket, embedded in PR
+        descriptions.
+      </p>
 
         {status && !status.installed && (
           <>
@@ -791,7 +887,10 @@ function R2Row({
             <Button
               variant="ghost"
               size="plate"
-              onClick={() => setEditing(true)}
+              onClick={() => {
+                setEditing(true);
+                onOpenChange(true);
+              }}
               className="mt-1 -ml-2 self-start hover:bg-transparent hover:text-haze-300"
             >
               Edit
@@ -803,7 +902,10 @@ function R2Row({
           <Button
             variant="ghost"
             size="plate"
-            onClick={() => setEditing(true)}
+            onClick={() => {
+              setEditing(true);
+              onOpenChange(true);
+            }}
             className="mt-2.5 -ml-2 hover:bg-transparent hover:text-haze-300"
           >
             Enter bucket details manually instead
@@ -873,7 +975,6 @@ function R2Row({
             {loadError}
           </p>
         )}
-      </CardContent>
-    </Card>
+    </ConnectorItem>
   );
 }

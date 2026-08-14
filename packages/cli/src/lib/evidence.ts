@@ -48,7 +48,7 @@ export async function buildEvidenceBundle(
 
 /**
  * Every raw secret value from the parsed config: the credential fields
- * themselves plus, for the Codex auth.json blob, each string leaf inside it
+ * themselves plus, for the Codex and Grok auth.json blobs, each string leaf inside it
  * (access, refresh, and ID tokens, API key). A token logged on its own line
  * would never match the whole multiline document, so the leaves must be
  * scrubbed individually.
@@ -61,8 +61,11 @@ export function collectSecrets(config: BreviConfig): string[] {
     config.agent.claudeCodeOauthToken,
     config.agent.codexApiKey,
     config.agent.codexAuthJson,
+    config.agent.xaiApiKey,
+    config.agent.grokAuthJson,
     config.connect.linearClientSecret,
     ...codexAuthLeaves(config.agent.codexAuthJson),
+    ...codexAuthLeaves(config.agent.grokAuthJson),
   ];
   // Longest first, so a secret containing another is replaced whole.
   return [...new Set(secrets.filter((value) => value.length >= MIN_SECRET_LENGTH))].sort(
