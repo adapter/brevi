@@ -972,9 +972,10 @@ install_bubblewrap() {
   fi
   info "bwrap works as $SERVICE_USER"
   # Probe pasta the way a run uses it: new user+net namespace, no port maps,
-  # no gateway mapping. Catches AppArmor userns restrictions for passt.
+  # no gateway mapping, DNS forwarding. Catches AppArmor userns restrictions
+  # and a passt too old for these flags before the first ticket, not after.
   pasta_bin=$(command -v pasta)
-  if ! run_as_service_user "$pasta_bin" --config-net --quiet --foreground -t none -u none -T none -U none --no-map-gw -- true; then
+  if ! run_as_service_user "$pasta_bin" --config-net --quiet --foreground -t none -u none -T none -U none --no-map-gw --dns-forward 169.254.1.1 -- true; then
     die "pasta cannot create namespaces as $SERVICE_USER. Check that the passt package (and its AppArmor profile) is installed correctly."
   fi
   info "pasta works as $SERVICE_USER"

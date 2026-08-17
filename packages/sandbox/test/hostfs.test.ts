@@ -25,17 +25,21 @@ describe("readFileWithin", () => {
     expect(await readFileWithin(root, target)).toBe("looks good");
   });
 
-  test("follows a symlink that stays inside the root", async () => {
+  test("refuses a symlink target even when it stays inside the root", async () => {
+    // The control files we read (review.md, summary.md) are never symlinks;
+    // refusing them outright removes a whole class of reasoning.
     writeFileSync(join(root, "real.md"), "inside");
     symlinkSync(join(root, "real.md"), join(root, "link.md"));
-    expect(await readFileWithin(root, join(root, "link.md"))).toBe("inside");
+    expect(readFileWithin(root, join(root, "link.md"))).rejects.toThrow(/ELOOP|not a regular file/);
   });
 
   test("refuses a symlink pointing outside the root", async () => {
     const secret = join(outside, "worker.json");
     writeFileSync(secret, "credential");
     symlinkSync(secret, join(root, "workspace", "review.md"));
-    expect(readFileWithin(root, join(root, "workspace", "review.md"))).rejects.toThrow(/outside the sandbox root/);
+    expect(readFileWithin(root, join(root, "workspace", "review.md"))).rejects.toThrow(
+      /ELOOP|not a regular file/,
+    );
   });
 
   test("refuses a symlinked parent directory escaping the root", async () => {
@@ -44,7 +48,20 @@ describe("readFileWithin", () => {
     writeFileSync(join(elsewhere, "review.md"), "secret");
     symlinkSync(elsewhere, join(root, "workspace", ".brevi"));
     expect(readFileWithin(root, join(root, "workspace", ".brevi", "review.md"))).rejects.toThrow(
-      /outside the sandbox root/,
+      /not a regular file|ENOTDIR|ELOOP/,
+    );
+  });
+
+  test("refuses an intermediate symlink even when it points back inside the root", async () => {
+    // The final target is in-root, but a middle component is a symlink. A
+    // string realpath of just the parent would miss this; descending with
+    // O_NOFOLLOW does not.
+    const real = join(root, "real-dir");
+    mkdirSync(real);
+    writeFileSync(join(real, "file"), "inside");
+    symlinkSync(real, join(root, "workspace", "link-dir"));
+    expect(readFileWithin(root, join(root, "workspace", "link-dir", "file"))).rejects.toThrow(
+      /ENOTDIR|ELOOP/,
     );
   });
 });
@@ -71,8 +88,20 @@ describe("writeFileWithin", () => {
     mkdirSync(elsewhere);
     symlinkSync(elsewhere, join(root, "codex-home"));
     expect(writeFileWithin(root, join(root, "codex-home", "auth.json"), "{}")).rejects.toThrow(
-      /outside the sandbox root/,
+      /ENOTDIR|ELOOP|EEXIST/,
     );
+    // The write must not have created the file through the symlink.
+    expect(lstatSync(join(elsewhere, "auth.json"), { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  test("does not create directories outside the root when a parent is a symlink", async () => {
+    // Regression: mkdir(recursive) ran before the containment check and could
+    // materialize host dirs through a planted symlink (e.g. ~/.brevi/.git).
+    const elsewhere = join(outside, "victim");
+    mkdirSync(elsewhere);
+    symlinkSync(elsewhere, join(root, "workspace-link"));
+    expect(writeFileWithin(root, join(root, "workspace-link", ".git", "config"), "x")).rejects.toThrow();
+    expect(lstatSync(join(elsewhere, ".git"), { throwIfNoEntry: false })).toBeUndefined();
   });
 
   test("overwrites an existing regular file in place", async () => {
@@ -88,7 +117,15 @@ describe("directory containment", () => {
     const elsewhere = join(outside, "elsewhere");
     mkdirSync(elsewhere);
     symlinkSync(elsewhere, join(root, "workspace", "artifacts"));
-    expect(resolveDirWithin(root, join(root, "workspace", "artifacts"))).rejects.toThrow(/outside the sandbox root/);
+    expect(resolveDirWithin(root, join(root, "workspace", "artifacts"))).rejects.toThrow(/ENOTDIR|ELOOP/);
+  });
+
+  test("ensureDirWithin does not create through a symlinked component", async () => {
+    const elsewhere = join(outside, "victim");
+    mkdirSync(elsewhere);
+    symlinkSync(elsewhere, join(root, "linked"));
+    expect(ensureDirWithin(root, join(root, "linked", "nested"))).rejects.toThrow();
+    expect(lstatSync(join(elsewhere, "nested"), { throwIfNoEntry: false })).toBeUndefined();
   });
 
   test("ensureDirWithin creates and accepts a directory under the root", async () => {
