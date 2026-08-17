@@ -949,22 +949,35 @@ run_as_service_user() {
 }
 
 install_bubblewrap() {
-  step 6 "Installing bubblewrap and agent CLIs"
-  if ! command -v bwrap >/dev/null 2>&1; then
+  step 6 "Installing bubblewrap, passt, and agent CLIs"
+  missing_sandbox_pkgs=""
+  command -v bwrap >/dev/null 2>&1 || missing_sandbox_pkgs="bubblewrap"
+  command -v pasta >/dev/null 2>&1 || missing_sandbox_pkgs="$missing_sandbox_pkgs passt"
+  missing_sandbox_pkgs=${missing_sandbox_pkgs# }
+  if [ -n "$missing_sandbox_pkgs" ]; then
     if command -v apt-get >/dev/null 2>&1; then
-      info "Running: apt-get update && apt-get install -y bubblewrap"
-      apt-get update >&2 && apt-get install -y bubblewrap >&2 || die "apt-get install bubblewrap failed"
+      info "Running: apt-get update && apt-get install -y $missing_sandbox_pkgs"
+      # shellcheck disable=SC2086
+      apt-get update >&2 && apt-get install -y $missing_sandbox_pkgs >&2 || die "apt-get install $missing_sandbox_pkgs failed"
     else
-      die "bwrap is not on PATH and apt-get is not available; install bubblewrap yourself."
+      die "bwrap and/or pasta are not on PATH and apt-get is not available; install bubblewrap and passt yourself."
     fi
   else
     info "bwrap is already on PATH ($(command -v bwrap))"
+    info "pasta is already on PATH ($(command -v pasta))"
   fi
   bwrap_bin=$(command -v bwrap)
   if ! run_as_service_user "$bwrap_bin" --unshare-user --unshare-pid true; then
     die "bwrap cannot create unprivileged user namespaces as $SERVICE_USER. Enable kernel.unprivileged_userns_clone=1 (and check AppArmor)."
   fi
   info "bwrap works as $SERVICE_USER"
+  # Probe pasta the way a run uses it: new user+net namespace, no port maps,
+  # no gateway mapping. Catches AppArmor userns restrictions for passt.
+  pasta_bin=$(command -v pasta)
+  if ! run_as_service_user "$pasta_bin" --config-net --quiet --foreground -t none -u none -T none -U none --no-map-gw -- true; then
+    die "pasta cannot create namespaces as $SERVICE_USER. Check that the passt package (and its AppArmor profile) is installed correctly."
+  fi
+  info "pasta works as $SERVICE_USER"
   install_agent_clis
 }
 

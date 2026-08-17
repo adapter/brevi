@@ -105,7 +105,7 @@ export async function runInit({ firstRun = false }: RunInitOptions = {}): Promis
   return true;
 }
 
-/** On Linux, offer to install bubblewrap when it is missing. Declining changes nothing. */
+/** On Linux, offer to install bubblewrap and passt when missing. Declining changes nothing. */
 async function offerBwrapSetup(): Promise<void> {
   if (process.platform !== "linux") return;
   if (!process.stdin.isTTY || !process.stdout.isTTY) return;
@@ -115,7 +115,7 @@ async function offerBwrapSetup(): Promise<void> {
 
   const setupNow = exitOnCancel(
     await confirm({
-      message: "Install bubblewrap now so this machine can execute runs?",
+      message: "Install bubblewrap and passt now so this machine can execute runs?",
       initialValue: true,
     }),
   );
@@ -123,7 +123,7 @@ async function offerBwrapSetup(): Promise<void> {
 
   const ready = await runSetup({ standalone: false });
   if (!ready) {
-    log.warn("This machine cannot execute runs until bubblewrap is installed. Enroll a Linux worker, or re-run brevi setup.");
+    log.warn("This machine cannot execute runs until bubblewrap and passt are installed. Enroll a Linux worker, or re-run brevi setup.");
   }
 }
 

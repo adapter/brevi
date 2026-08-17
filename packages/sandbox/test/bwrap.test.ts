@@ -3,35 +3,87 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { BREVI_HOME } from "@brevi/shared";
-import { wrapInBwrap } from "../src/bwrap/wrap.js";
+import { SANDBOX_DNS_ADDR, wrapInBwrap } from "../src/bwrap/wrap.js";
 import { collectBwrapProblems, sandboxEnv } from "../src/bwrap/provider.js";
 
 const ENV = { HOME: "/tmp/run-1/home", TMPDIR: "/tmp", PATH: "/usr/bin:/bin" };
+const TOOLS = { bwrap: "/usr/bin/bwrap", pasta: "/usr/bin/pasta" };
+
+/** The bwrap portion of the argv: everything after pasta's `--` separator. */
+function bwrapArgs(args: string[]): string[] {
+  const dash = args.indexOf("--");
+  expect(args[dash + 1]).toBe(TOOLS.bwrap);
+  return args.slice(dash + 2);
+}
 
 describe("wrapInBwrap", () => {
-  test("runs the command after -- and binds the workspace root", () => {
-    const launch = wrapInBwrap("/usr/bin/bwrap", "/tmp/run-1", "claude", ["-p", "hi"], "/tmp/run-1/workspace", {
+  test("launches pasta with an isolated netns and no host port mappings", () => {
+    const launch = wrapInBwrap(TOOLS, "/tmp/run-1", "claude", ["-p", "hi"], "/tmp/run-1/workspace", {
       env: ENV,
     });
-    expect(launch.file).toBe("/usr/bin/bwrap");
+    expect(launch.file).toBe(TOOLS.pasta);
+    const pastaPart = launch.args.slice(0, launch.args.indexOf("--"));
+    expect(pastaPart).toContain("--config-net");
+    expect(pastaPart).toContain("--foreground");
+    expect(pastaPart).toContain("--no-map-gw");
+    for (const flag of ["-t", "-u", "-T", "-U"]) {
+      const at = pastaPart.indexOf(flag);
+      expect(at).toBeGreaterThan(-1);
+      expect(pastaPart[at + 1]).toBe("none");
+    }
+    const dnsAt = pastaPart.indexOf("--dns-forward");
+    expect(pastaPart[dnsAt + 1]).toBe(SANDBOX_DNS_ADDR);
+  });
+
+  test("runs the command after -- and binds the workspace root", () => {
+    const launch = wrapInBwrap(TOOLS, "/tmp/run-1", "claude", ["-p", "hi"], "/tmp/run-1/workspace", {
+      env: ENV,
+    });
     expect(launch.env).toEqual(ENV);
-    expect(launch.args).toContain("--die-with-parent");
-    expect(launch.args).toContain("--unshare-user");
-    expect(launch.args).toContain("--clearenv");
-    expect(launch.args).toContain("--new-session");
-    expect(launch.args).toContain("--tmpfs");
-    expect(launch.args).toContain("/dev/shm");
-    expect(launch.args).toContain("--bind");
-    const bindAt = launch.args.indexOf("--bind");
-    expect(launch.args[bindAt + 1]).toBe("/tmp/run-1");
-    expect(launch.args[bindAt + 2]).toBe("/tmp/run-1");
-    const dash = launch.args.lastIndexOf("--");
-    expect(launch.args.slice(dash)).toEqual(["--", "claude", "-p", "hi"]);
-    expect(launch.args).toContain("--chdir");
-    expect(launch.args[launch.args.indexOf("--chdir") + 1]).toBe("/tmp/run-1/workspace");
-    expect(launch.args).toContain("--setenv");
-    expect(launch.args[launch.args.indexOf("--setenv") + 1]).toBe("HOME");
-    expect(launch.args[launch.args.indexOf("--setenv") + 2]).toBe("/tmp/run-1/home");
+    const args = bwrapArgs(launch.args);
+    expect(args).toContain("--die-with-parent");
+    expect(args).toContain("--unshare-user");
+    expect(args).toContain("--clearenv");
+    expect(args).toContain("--new-session");
+    expect(args).toContain("--tmpfs");
+    expect(args).toContain("/dev/shm");
+    expect(args).toContain("--bind");
+    const bindAt = args.indexOf("--bind");
+    expect(args[bindAt + 1]).toBe("/tmp/run-1");
+    expect(args[bindAt + 2]).toBe("/tmp/run-1");
+    const dash = args.lastIndexOf("--");
+    expect(args.slice(dash)).toEqual(["--", "claude", "-p", "hi"]);
+    expect(args).toContain("--chdir");
+    expect(args[args.indexOf("--chdir") + 1]).toBe("/tmp/run-1/workspace");
+    expect(args).toContain("--setenv");
+    expect(args[args.indexOf("--setenv") + 1]).toBe("HOME");
+    expect(args[args.indexOf("--setenv") + 2]).toBe("/tmp/run-1/home");
+  });
+
+  test("binds the resolv.conf override over /etc/resolv.conf, but never a symlink", () => {
+    const dir = mkdtempSync(join(tmpdir(), "brevi-resolv-"));
+    try {
+      const resolv = join(dir, "resolv.conf");
+      writeFileSync(resolv, `nameserver ${SANDBOX_DNS_ADDR}\n`);
+      const launch = wrapInBwrap(TOOLS, "/tmp/run-1", "true", [], "/tmp/run-1/workspace", {
+        env: ENV,
+        resolvConfPath: resolv,
+      });
+      const args = bwrapArgs(launch.args);
+      const at = args.findIndex((arg, i) => arg === "--ro-bind" && args[i + 1] === resolv);
+      expect(at).toBeGreaterThan(-1);
+      expect(args[at + 2]).toBe("/etc/resolv.conf");
+
+      const link = join(dir, "resolv-link.conf");
+      symlinkSync(resolv, link);
+      const linked = wrapInBwrap(TOOLS, "/tmp/run-1", "true", [], "/tmp/run-1/workspace", {
+        env: ENV,
+        resolvConfPath: link,
+      });
+      expect(bwrapArgs(linked.args)).not.toContain(link);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("binds a PATH prefix's sibling lib and the resolved package tree", () => {
@@ -49,12 +101,11 @@ describe("wrapInBwrap", () => {
       const previousPath = process.env.PATH;
       process.env.PATH = `${bin}:/usr/bin:/bin`;
       try {
-        const launch = wrapInBwrap("/usr/bin/bwrap", "/tmp/run-1", "codex", [], "/tmp/run-1/workspace", {
+        const launch = wrapInBwrap(TOOLS, "/tmp/run-1", "codex", [], "/tmp/run-1/workspace", {
           env: ENV,
         });
-        const binds = launch.args.flatMap((arg, i) =>
-          arg === "--ro-bind" || arg === "--bind" ? [launch.args[i + 1]] : [],
-        );
+        const args = bwrapArgs(launch.args);
+        const binds = args.flatMap((arg, i) => (arg === "--ro-bind" || arg === "--bind" ? [args[i + 1]] : []));
         expect(binds).toContain(lib);
         expect(binds.some((path) => path.endsWith("/lib/node_modules"))).toBe(true);
       } finally {
@@ -66,22 +117,22 @@ describe("wrapInBwrap", () => {
   });
 
   test("drops --new-session when attaching to a PTY", () => {
-    const launch = wrapInBwrap("/usr/bin/bwrap", "/tmp/run-1", "true", [], "/tmp/run-1/workspace", {
+    const launch = wrapInBwrap(TOOLS, "/tmp/run-1", "true", [], "/tmp/run-1/workspace", {
       newSession: false,
       env: ENV,
     });
-    expect(launch.args).not.toContain("--new-session");
-    expect(launch.args).toContain("--clearenv");
+    const args = bwrapArgs(launch.args);
+    expect(args).not.toContain("--new-session");
+    expect(args).toContain("--clearenv");
   });
 
   test("does not bind the operator home or the whole cache tree", () => {
     const home = process.env.HOME ?? "";
-    const launch = wrapInBwrap("/usr/bin/bwrap", "/tmp/run-1", "true", [], "/tmp/run-1/workspace", {
+    const launch = wrapInBwrap(TOOLS, "/tmp/run-1", "true", [], "/tmp/run-1/workspace", {
       env: ENV,
     });
-    const binds = launch.args.flatMap((arg, i) =>
-      arg === "--bind" || arg === "--ro-bind" ? [launch.args[i + 1]] : [],
-    );
+    const args = bwrapArgs(launch.args);
+    const binds = args.flatMap((arg, i) => (arg === "--bind" || arg === "--ro-bind" ? [args[i + 1]] : []));
     if (home && home !== "/tmp/run-1") {
       expect(binds).not.toContain(home);
     }

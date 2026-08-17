@@ -11,7 +11,7 @@ brevi [command]
   (none)    Start the orchestrator and open the dashboard in your browser;
             runs init first if there is no config yet
   init      Create the brevi config
-  setup     Install bubblewrap so this Linux host can execute isolated runs
+  setup     Install bubblewrap and passt so this Linux host can execute isolated runs
   start     Start the orchestrator headlessly, without opening a browser
   status    Check whether the brevi orchestrator is running
   doctor    Check the whole brevi setup: config, server, sandbox,
@@ -59,15 +59,15 @@ Init then checks for the external CLIs brevi shells out to: `claude`, `codex`, `
 brevi setup [-y, --yes]
 ```
 
-Installs [bubblewrap](https://github.com/containers/bubblewrap) on this Linux host so it can execute isolated runs. Interactive and idempotent: if `bwrap` is already on `PATH`, setup skips the install and only probes unprivileged user namespaces.
+Installs [bubblewrap](https://github.com/containers/bubblewrap) and [passt](https://passt.top/) on this Linux host so it can execute isolated runs. Interactive and idempotent: if `bwrap` and `pasta` are already on `PATH`, setup skips the install and only probes unprivileged user namespaces.
 
 | Flag | Meaning |
 | --- | --- |
 | `-y, --yes` | Install missing packages without prompting |
 
-On a missing `bwrap`, setup offers `sudo apt-get install -y bubblewrap` (or runs it immediately with `--yes`). It then runs the same readiness check `brevi doctor` uses: Linux, `bwrap` on `PATH`, and a production-shaped namespace probe. When that passes, this machine can execute runs. Remaining problems are listed instead, and setup exits non-zero.
+On a missing `bwrap` or `pasta`, setup offers `sudo apt-get install -y` for whichever packages are absent (or runs it immediately with `--yes`). It then runs the same readiness check `brevi doctor` uses: Linux, `bwrap` and `pasta` on `PATH`, and a production-shaped namespace probe. When that passes, this machine can execute runs. Remaining problems are listed instead, and setup exits non-zero.
 
-Requires Linux; on other platforms there is nothing to set up (this machine stays a scheduler). The [Linux worker installer](/guides/workers/) installs bubblewrap as root itself rather than calling this command as the unprivileged `brevi` user.
+Requires Linux; on other platforms there is nothing to set up (this machine stays a scheduler). The [Linux worker installer](/guides/workers/) installs bubblewrap and passt as root itself rather than calling this command as the unprivileged `brevi` user.
 
 ## `brevi start`
 
@@ -94,7 +94,7 @@ Five sections, roughly in dependency order:
 
 1. **Config**: `~/.brevi/config.json` exists, is valid JSON, and passes the schema; unknown keys (typos, leftovers from an older version) come back as warnings.
 2. **Server**: the pid file against reality (running and healthy, not running, a stale or unreadable pid file left by a crash, or the port held by something that isn't brevi, even one that answers no HTTP), plus the running server's version against the installed CLI, to catch an update that hasn't been restarted yet. The probe targets the configured `server.host` (loopback for the default and wildcard binds), a healthy answer must report `ok`, and a healthy server whose pid file doesn't match the responder is flagged too.
-3. **Sandbox**: whether this machine can run bwrap (Linux, bubblewrap on `PATH`, unprivileged user namespaces). When it can, also that `agent.command` resolves on `PATH`, `~/.brevi` is writable, and the Playwright browser cache (`~/.brevi/cache/ms-playwright`) is writable or creatable. A Mac (or Linux without bwrap) is a warning, not a failure: enroll a Linux worker instead.
+3. **Sandbox**: whether this machine can run bwrap (Linux, bubblewrap and passt on `PATH`, unprivileged user namespaces). When it can, also that `agent.command` resolves on `PATH`, `~/.brevi` is writable, and the Playwright browser cache (`~/.brevi/cache/ms-playwright`) is writable or creatable. A Mac (or Linux without bwrap) is a warning, not a failure: enroll a Linux worker instead.
 4. **Connectors**: the Linear token, verified with a cheap authenticated call; the GitHub token, verified plus its scopes checked (`repo` required, `workflow` recommended), and push access to every configured repository confirmed with a cheap read-only call per repo, which also covers fine-grained tokens (they don't report scopes); Claude, Codex, and Grok agent credentials saved in the config, which is what runs actually consume (a credential that is merely discoverable on the host fails, or warns for the optional Codex review, with a hint to connect it from the dashboard); R2, only when configured, checking wrangler is installed and logged in and the configured bucket is reachable, both probes sharing one 10 second budget.
 5. **External CLIs**: presence and version of `claude`, `codex`, `gh`, and `wrangler`. Purely informational here, since a CLI that's actually required already failed an earlier section; missing optional ones just show as dim skips.
 
@@ -108,7 +108,7 @@ Server
   ✖ server            not running
                       ↳ Start it with `brevi start` (or `npx @brevi/cli`).
 Sandbox
-  ✔ bwrap             ready (Linux, bubblewrap, user namespaces)
+  ✔ bwrap             ready (Linux, bubblewrap, passt, user namespaces)
   ✔ agent CLI         claude at /usr/local/bin/claude
   ✔ state dir         ~/.brevi is writable
 ```
@@ -152,7 +152,7 @@ A `--token` passed alongside a stored credential is tried first regardless, whic
 
 `--name` only picks the name this machine enrolls under, and the host keeps its own name for the worker from then on: rename it from the Workers page rather than by restarting with a different `--name`.
 
-The worker's `sandbox.*` settings (concurrency, timeout, retention) always come from its own local `~/.brevi/config.json`, never from the host. Before the first connect it resolves and preflights bwrap (Linux, bubblewrap on `PATH`, unprivileged user namespaces). A host that cannot run bwrap still connects, but the host will not dispatch runs to it.
+The worker's `sandbox.*` settings (concurrency, timeout, retention) always come from its own local `~/.brevi/config.json`, never from the host. Before the first connect it resolves and preflights the sandbox (Linux, bubblewrap and passt on `PATH`, unprivileged user namespaces). A host that cannot run bwrap still connects, but the host will not dispatch runs to it.
 
 Every registration reports the worker's capabilities: OS, architecture, the sandbox provider (`bwrap`), available agent commands, concurrency, and brevi version. The scheduler only dispatches a run to a worker that advertises its configured agent command. While connected the worker heartbeats every 15 seconds with the leases it still holds; a worker silent for longer than the host's `fleet.heartbeatTimeoutSeconds` (45 by default) is dropped, and one that dropped mid-run has `fleet.reconnectGraceSeconds` (120 by default) to reconnect and resume reporting before its runs are failed.
 

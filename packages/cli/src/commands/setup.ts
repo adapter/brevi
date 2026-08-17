@@ -8,7 +8,7 @@ import { errorMessage, exitOnCancel } from "../lib/util.js";
 export function registerSetupCommand(program: Command): void {
   program
     .command("setup")
-    .description("Install bubblewrap so this Linux host can execute isolated runs")
+    .description("Install bubblewrap and passt so this Linux host can execute isolated runs")
     .option("-y, --yes", "install missing packages without prompting")
     .action(async (options: { yes?: boolean }) => {
       try {
@@ -27,7 +27,7 @@ export interface RunSetupOptions {
   assumeYes?: boolean;
 }
 
-/** Provisions bubblewrap on this Linux host. Returns true when bwrap is ready. */
+/** Provisions bubblewrap and passt on this Linux host. Returns true when the sandbox is ready. */
 export async function runSetup(options: RunSetupOptions = {}): Promise<boolean> {
   const standalone = options.standalone !== false;
   const assumeYes = options.assumeYes === true;
@@ -41,28 +41,31 @@ export async function runSetup(options: RunSetupOptions = {}): Promise<boolean> 
     return false;
   }
 
-  const existing = await resolveBinary("bwrap");
-  if (existing) {
-    log.success(`bwrap: ${existing}`);
-  } else {
+  const bwrapBin = await resolveBinary("bwrap");
+  if (bwrapBin) log.success(`bwrap: ${bwrapBin}`);
+  const pastaBin = await resolveBinary("pasta");
+  if (pastaBin) log.success(`pasta: ${pastaBin}`);
+  const missing = [...(bwrapBin ? [] : ["bubblewrap"]), ...(pastaBin ? [] : ["passt"])];
+  if (missing.length > 0) {
+    const label = missing.join(" and ");
     const install = assumeYes
       ? true
       : exitOnCancel(
           await confirm({
-            message: "bwrap is not on PATH. Install bubblewrap with apt?",
+            message: `${missing.length === 1 ? `${label} is` : `${label} are`} not installed. Install with apt?`,
             initialValue: true,
           }),
         );
     if (!install) {
-      log.warn("Skipped; this machine cannot execute runs until bubblewrap is installed.");
+      log.warn(`Skipped; this machine cannot execute runs until ${label} ${missing.length === 1 ? "is" : "are"} installed.`);
     } else {
       const s = spinner();
-      s.start("Installing bubblewrap");
-      const code = await runSudo(["apt-get", "install", "-y", "bubblewrap"]);
-      if (code === 0) s.stop("Installed bubblewrap");
+      s.start(`Installing ${label}`);
+      const code = await runSudo(["apt-get", "install", "-y", ...missing]);
+      if (code === 0) s.stop(`Installed ${label}`);
       else {
-        s.error("apt-get install bubblewrap failed");
-        log.warn("Install it yourself: sudo apt-get install bubblewrap");
+        s.error(`apt-get install ${missing.join(" ")} failed`);
+        log.warn(`Install ${missing.length === 1 ? "it" : "them"} yourself: sudo apt-get install ${missing.join(" ")}`);
       }
     }
   }

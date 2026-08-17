@@ -2,4 +2,4 @@
 "@brevi/cli": minor
 ---
 
-Runs now execute only in Linux bwrap sandboxes. There is no unisolated process fallback, and the Configuration Sandbox tab has been removed.
+Runs execute in Linux bwrap sandboxes with private pasta networking: no host loopback access, no unisolated fallback, and setup installs passt.

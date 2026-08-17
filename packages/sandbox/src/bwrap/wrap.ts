@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, realpathSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { basename, delimiter, dirname, join } from "node:path";
 import { BREVI_HOME } from "@brevi/shared";
 import type { SandboxLaunch } from "../types.js";
@@ -8,6 +8,27 @@ const RO_BINDS = ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"];
 
 /** Extra host trees that resolv.conf or the dynamic linker often need. */
 const OPTIONAL_RO_BINDS = ["/run/systemd/resolve", "/run/resolvconf", "/run/NetworkManager"];
+
+/**
+ * Address inside the sandbox netns that pasta maps to the host's resolver.
+ * Off-link, so it routes via the tap device where pasta intercepts DNS.
+ * Same address rootless podman uses for this purpose.
+ */
+export const SANDBOX_DNS_ADDR = "169.254.1.1";
+
+/**
+ * The resolv.conf bound over /etc/resolv.conf inside the sandbox. It lives
+ * under ~/.brevi (never under the rw-bound run root) so the agent cannot
+ * swap it for a symlink and have the next exec bind an arbitrary host file.
+ */
+export const SANDBOX_RESOLV_PATH = join(BREVI_HOME, "sandbox-resolv.conf");
+export const SANDBOX_RESOLV_CONTENTS = `nameserver ${SANDBOX_DNS_ADDR}\n`;
+
+/** The bwrap and pasta binaries a sandbox launch runs through. */
+export interface SandboxTools {
+  bwrap: string;
+  pasta: string;
+}
 
 export interface WrapInBwrapOptions {
   /**
@@ -21,10 +42,22 @@ export interface WrapInBwrapOptions {
    * TMPDIR / PATH is set so the inner process never inherits the host env.
    */
   env?: Record<string, string>;
+  /** Override the resolv.conf override source (tests only). */
+  resolvConfPath?: string;
 }
 
 /**
- * Builds the `bwrap` argv that runs `command` inside the sandbox.
+ * Builds the argv that runs `command` inside the sandbox: pasta creates a
+ * private network namespace with user-mode outbound networking, and bwrap
+ * runs inside it with the mount/pid/user namespaces.
+ *
+ * pasta flags are the isolation boundary: `-T none -U none` disable the
+ * default splicing of in-namespace loopback connections to ports bound on
+ * the host (that default would hand the agent the orchestrator's
+ * unauthenticated 127.0.0.1 API), `-t none -u none` stop namespace ports
+ * from being published on the host, and `--no-map-gw` stops the gateway
+ * address from reaching host services. DNS still works everywhere because
+ * queries to SANDBOX_DNS_ADDR are forwarded to the host's resolver.
  *
  * The workspace root (the per-run directory, not just `workspace/`) is
  * bind-mounted read-write so credential homes and resume scripts that live
@@ -34,7 +67,7 @@ export interface WrapInBwrapOptions {
  * when it already exists.
  */
 export function wrapInBwrap(
-  bwrap: string,
+  tools: SandboxTools,
   workspaceRoot: string,
   command: string,
   args: string[],
@@ -87,9 +120,40 @@ export function wrapInBwrap(
   const playwrightCache = `${BREVI_HOME}/cache/ms-playwright`;
   if (isDir(playwrightCache)) roBind(playwrightCache);
 
+  // Bound after /etc so it shadows the host resolv.conf; DNS then goes
+  // through pasta's forwarder regardless of the host resolver setup. Bound
+  // only when it is a regular file: following a symlink here would bind an
+  // attacker-chosen host file into the sandbox.
+  const resolvConf = options.resolvConfPath ?? SANDBOX_RESOLV_PATH;
+  if (isRegularFile(resolvConf)) argv.push("--ro-bind", resolvConf, "/etc/resolv.conf");
+
   argv.push("--bind", workspaceRoot, workspaceRoot);
   argv.push("--", command, ...args);
-  return { file: bwrap, args: argv, env };
+
+  // pasta stays in the foreground (-f), waits for bwrap, and exits with its
+  // code, so timeouts and exit-code checks see the inner command. bwrap's
+  // --die-with-parent is keyed to pasta: killing pasta tears down the run.
+  // prettier-ignore
+  const pastaArgs = [
+    "--config-net",
+    "--quiet",
+    "--foreground",
+    "-t", "none", "-u", "none", "-T", "none", "-U", "none",
+    "--no-map-gw",
+    "--dns-forward", SANDBOX_DNS_ADDR,
+    "--",
+    tools.bwrap,
+    ...argv,
+  ];
+  return { file: tools.pasta, args: pastaArgs, env };
+}
+
+function isRegularFile(path: string): boolean {
+  try {
+    return lstatSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** PATH entries that are not already covered by RO_BINDS and are not $HOME itself. */

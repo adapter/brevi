@@ -13,7 +13,7 @@ brevi runs on your machine: a CLI, an orchestrator that polls Linear, and a dash
 - **git**, and a GitHub account with access to the repositories you want brevi to work on.
 - A **Linear** account, with issues you can assign to yourself.
 - A coding agent credential brevi can find or that you can paste: a Claude Code login / Anthropic API key, a Codex (ChatGPT or OpenAI) login, or a Grok CLI login / xAI API key.
-- Optional: **Linux with bubblewrap** (`apt install bubblewrap`, or `brevi setup`) so this machine can execute isolated runs. See [Sandboxes](/guides/sandboxes/). A Mac is a scheduler only until you enroll a Linux worker.
+- Optional: **Linux with bubblewrap and passt** (`apt install bubblewrap passt`, or `brevi setup`) so this machine can execute isolated runs. See [Sandboxes](/guides/sandboxes/). A Mac is a scheduler only until you enroll a Linux worker.
 
 ## Install
 
@@ -44,7 +44,7 @@ Prefer a GUI to a terminal? Mission Control is the same brevi as a downloadable,
 
 1. **Run `brevi`**
 
-   The first launch (no `~/.brevi/config.json` yet) starts with the init flow, then the orchestrator binds `http://localhost:4400`, serves the dashboard, and opens it in your browser. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up. On Linux, init offers to install bubblewrap so this machine can execute runs.
+   The first launch (no `~/.brevi/config.json` yet) starts with the init flow, then the orchestrator binds `http://localhost:4400`, serves the dashboard, and opens it in your browser. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up. On Linux, init offers to install bubblewrap and passt so this machine can execute runs.
 
 2. **Open the Configuration page**
 

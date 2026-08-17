@@ -6,8 +6,9 @@ The execution environment for agent runs. One `Sandbox` holds one run's workspac
 
 - `types.ts`: the `Sandbox` / `SandboxProvider` interface
 - `select.ts`: `createSandboxProvider()` always returns `BwrapProvider` after `ensureAvailable()`
-- `bwrap/`: bubblewrap provider (Linux namespaces)
+- `bwrap/`: bubblewrap provider (Linux namespaces); every launch runs through pasta (passt) for a private netns with outbound-only user-mode networking, no host loopback access
 - `exec.ts`, `host.ts`, `paths.ts`: shared exec/streaming and path helpers
+- `hostfs.ts`: symlink-safe host-side reads/writes into agent-controlled trees (realpath containment + O_NOFOLLOW)
 
 ## Gotchas
 

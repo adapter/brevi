@@ -426,21 +426,21 @@ async function checkSandboxSection(config: BreviConfig): Promise<Section> {
   const checks: CheckResult[] = [];
   const problems = await collectBwrapProblems();
   if (problems.length === 0) {
-    checks.push({ name: "bwrap", status: "pass", detail: "ready (Linux, bubblewrap, user namespaces)" });
+    checks.push({ name: "bwrap", status: "pass", detail: "ready (Linux, bubblewrap, passt, user namespaces)" });
     checks.push(...(await checkHostTools(config)));
   } else if (process.platform === "linux") {
     checks.push({
       name: "bwrap",
       status: "fail",
       detail: problems.join("; "),
-      hint: "Run `brevi setup` to install bubblewrap, or enroll a Linux worker that already has it.",
+      hint: "Run `brevi setup` to install bubblewrap and passt, or enroll a Linux worker that already has them.",
     });
   } else {
     checks.push({
       name: "bwrap",
       status: "warn",
       detail: problems.join("; "),
-      hint: "This machine cannot execute runs. Enroll a Linux worker with bubblewrap.",
+      hint: "This machine cannot execute runs. Enroll a Linux worker with bubblewrap and passt.",
     });
   }
 
