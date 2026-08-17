@@ -32,13 +32,13 @@
     "@brevi/shared": "*",
     "@lydell/node-pty": "^1.1.0",
     "execa": "^10.0.1",
-    "ws": "^8.21.2"
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@repo/typescript-config": "*",
-    "@types/node": "^26.1.2",
+    "@types/node": "^26.2.0",
     "@types/ws": "^8.18.1",
-    "oxlint": "^1.77.0",
+    "oxlint": "^1.78.0",
     "typescript": "^7.0.2"
   }
 }
