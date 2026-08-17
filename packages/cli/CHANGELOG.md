@@ -1,5 +1,33 @@
 # @brevi/cli
 
+## 0.6.0
+
+### Minor Changes
+
+- 180f65b: Runs now push the first implementation and open a draft pull request before the review phase, so work survives a later failure and lands ready for review.
+- 6ae1b65: Execution moves off the host: run `brevi worker` on any machine, and the orchestrator dispatches runs to the connected fleet and streams their output back.
+- a73ccea: Mission Control can now enroll other machines as workers: mint a pairing token, run one command on that machine, then watch, rename, drain, or revoke it live.
+- e492c77: Runs whose worker goes offline are now automatically requeued onto another one instead of failing, and a queued run's card shows why it hasn't started yet.
+- 67ea2c5: The host now auto-spawns a supervised local worker on Linux, shown as "This machine" on the Workers page; hosts that cannot execute explain queued runs.
+- bda2d3d: Firecracker rootfs images are now prebuilt: brevi downloads and caches a checksum-verified image per version, so Docker is no longer needed on the host.
+- 9225614: Add a one-line Linux installer that sets up brevi as a systemd worker service, provisions Firecracker, and pairs it with your host automatically.
+- ffba16c: Adds `brevi mac`, which turns an Apple silicon M3+ Mac running macOS 15+ into a fully isolated Firecracker worker by managing a nested Linux guest VM.
+- d80a45f: `brevi` and `brevi start` now attach to an already-running orchestrator, and `stop`, `update` and `doctor` recognise one owned by the new desktop app.
+- 629fb0a: Run detail adds a Take another look button: rebase a completed run's open PR onto its base, address review feedback, and push with force-with-lease.
+- 1361f59: Sidebar run cards gain inline Cancel, Retry, and Take another look actions plus a GitHub-colored PR chip that tracks open, draft, merged, and closed.
+- 4177792: Mission Control now edits every config.json field: new Agent, Orchestrator and Server pages, completed Sandbox and Repositories, one validated save path.
+- 841c377: The default per-execution sandbox timeout is now 4 hours instead of 1 hour, giving agents more headroom on long implementation or review passes.
+- 791513d: Add a Grok connector to Configuration so you can save a verified xAI API key, and show every connector in a single-column accordion instead of two columns.
+- 9131a79: Runs execute in Linux bwrap sandboxes with private pasta networking: no host loopback access, no unisolated fallback, and setup installs passt.
+- e100f38: Put Linear team keys inside the Linear accordion, always use concise PR descriptions, and remove default-repository routing from Repositories.
+- 87cbfae: Repository memories: a run now records what it learned about a repo, and the next run there starts with those facts in its prompt instead of exploring from zero.
+
+### Patch Changes
+
+- aaf588b: Run cost tracking is now agent-agnostic and aggregated per model: the dashboard cost breakdown shows one row per model summed across all attempts and phases.
+- 9e61167: Fix run costs reporting $0.00 for a model ccusage cannot price, such as Opus 5, which left per-model breakdowns and run totals understating real spend.
+- 804f7c5: Attach terminals in retained sandboxes stay authenticated for claude, codex, and git pushes in every shell, and reconnected credentials apply on re-attach.
+
 ## 0.5.0
 
 ### Minor Changes
