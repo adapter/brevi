@@ -14,9 +14,8 @@ function quote(value: string): string {
 
 /**
  * Variables the profile owns outright. Cleared before the configured state is
- * exported: a process-provider attach shell inherits the orchestrator's or
- * CLI's host environment, and a stale host OPENAI_API_KEY (or a credential
- * disconnected since the sandbox was retained) must not survive the sourcing.
+ * exported: an attach shell must not keep a stale host OPENAI_API_KEY (or a
+ * credential disconnected since the sandbox was retained).
  */
 const MANAGED_ENV_VARS = [
   "ANTHROPIC_API_KEY",
@@ -64,7 +63,7 @@ export function buildCredentialProfile(options: BuildCredentialProfileOptions): 
   if (gitAskpassPath) lines.push(`export GIT_ASKPASS=${quote(gitAskpassPath)}`);
   // POSIX sh sources $ENV for interactive shells, so a plain `sh` opened
   // beside the resumed conversation re-sources this profile (and a host ENV
-  // pointing somewhere else can't leak into a process-provider attach).
+  // pointing somewhere else can't leak into the attach session).
   lines.push(`export ENV=${quote(profilePath)}`);
   return `${lines.join("\n")}\n`;
 }
@@ -89,6 +88,8 @@ export function buildGitAskpass(token: string): string {
 
 export interface BuildResumeScriptOptions {
   workspacePath: string;
+  /** Process HOME beside the checkout; must not be the workspace itself. */
+  homePath: string;
   /** Absolute path of the credential profile (see buildCredentialProfile) to source. */
   profilePath: string;
   command: string;
@@ -107,10 +108,12 @@ export interface BuildResumeScriptOptions {
  * lives until that shell exits.
  */
 export function buildResumeScript(options: BuildResumeScriptOptions): string {
-  const { workspacePath, profilePath, command, sessionId } = options;
+  const { workspacePath, homePath, profilePath, command, sessionId } = options;
   const lines = [
     "#!/bin/sh",
     `. ${quote(profilePath)}`,
+    `export HOME=${quote(homePath)}`,
+    "export TMPDIR=/tmp",
     `cd ${quote(workspacePath)}`,
     `${quote(command)} --resume ${quote(sessionId)}`,
     `printf '\\n[brevi] conversation ended; this shell stays authenticated. exit to detach.\\n'`,

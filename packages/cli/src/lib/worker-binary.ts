@@ -49,8 +49,7 @@ export interface WorkerBinaryManifest {
  * a mispublished release directory, or a cache or proxy serving a stale object,
  * hands back a perfectly self-consistent manifest for another release or another
  * architecture, and every checksum below would then verify the wrong binary into
- * place while the updater reported the requested version installed. Mirrors the
- * rootfs manifest's own check (packages/sandbox/src/firecracker/rootfs.ts).
+ * place while the updater reported the requested version installed.
  */
 function parseManifest(raw: unknown, url: string, expected: { cliVersion: string; arch: string }): WorkerBinaryManifest {
   if (typeof raw !== "object" || raw === null) {

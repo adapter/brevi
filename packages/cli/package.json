@@ -10,7 +10,7 @@
   },
   "homepage": "https://brevi.dev",
   "bugs": "https://github.com/adapter/brevi/issues",
-  "description": "Local sandbox and orchestrator for coding agents. Connects Linear + GitHub, runs @brevi-tagged tickets in Firecracker microVMs, and opens PRs with demos.",
+  "description": "Local sandbox and orchestrator for coding agents. Connects Linear + GitHub, runs @brevi-tagged tickets in bwrap sandboxes, and opens PRs with demos.",
   "bin": {
     "brevi": "./dist/index.js"
   },
@@ -18,7 +18,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target=node --format=esm --external open --external @lydell/node-pty && cp -R ../../apps/app/dist dist/app && cp -R ../sandbox/scripts dist/scripts",
+    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target=node --format=esm --external open --external @lydell/node-pty && cp -R ../../apps/app/dist dist/app",
     "build:binary": "bun run scripts/build-binary.ts",
     "dev": "tsc --watch",
     "lint": "oxlint --max-warnings 0",

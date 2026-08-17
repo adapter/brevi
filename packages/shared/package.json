@@ -28,10 +28,6 @@
       "types": "./dist/settings.d.ts",
       "default": "./dist/settings.js"
     },
-    "./sizes": {
-      "types": "./dist/sizes.d.ts",
-      "default": "./dist/sizes.js"
-    },
     "./types": {
       "types": "./dist/types.d.ts",
       "default": "./dist/types.js"

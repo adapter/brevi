@@ -95,7 +95,6 @@ export default function App() {
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
         <SiteHeader
           conn={conn}
-          health={health}
           config={config}
           linearStatus={linearStatus}
           page={page}
@@ -150,7 +149,6 @@ export default function App() {
             <Setup
               config={config}
               linearStatus={linearStatus}
-              health={health}
               onConfig={applyConfig}
               onDone={() => openRun(null)}
             />

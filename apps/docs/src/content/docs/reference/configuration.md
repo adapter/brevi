@@ -16,7 +16,6 @@ Every field on this page is editable from the dashboard's Configuration page, at
 | Connectors | Connect/Disconnect per provider, `linear.teamKeys`, `r2` |
 | Repositories | `repos` |
 | Agent | `agent` (models, effort, command, args, Codex review) |
-| Sandbox | `sandbox`, including the Firecracker fields |
 | Workers | `fleet`, plus the enrolled workers themselves |
 | Memory | `memory`, plus the stored memories themselves |
 | Orchestrator | `trigger`, `pollIntervalSeconds`, `restart` |
@@ -24,12 +23,13 @@ Every field on this page is editable from the dashboard's Configuration page, at
 
 Each card is saved explicitly, and a save sends only the fields on that card: nothing else in the file is rewritten, so two tabs (or a tab and your editor) cannot clobber each other. Fields with a non-empty default show it as placeholder text and offer a reset once the value differs from it. Invalid input is rejected with the same message the schema would produce, and the file on disk is never left invalid: it is validated in full, then replaced atomically (and left readable only by you).
 
-Almost everything applies to the next run without a restart. Five fields are read once at startup and are marked with a **restart** badge in the UI: `server.port`, `server.host`, `fleet.host`, `fleet.port`, and `sandbox.provider`.
+Almost everything applies to the next run without a restart. Four fields are read once at startup and are marked with a **restart** badge in the UI: `server.port`, `server.host`, `fleet.host`, and `fleet.port`.
 
-Two groups of fields are deliberately not editable there:
+One group of fields is deliberately not editable there:
 
 - **Credentials.** They are masked whenever the config is read back (see [Redaction](#redaction)), so they are never rendered as editable values; use the Connect and Disconnect buttons instead. `connect.linearClientSecret` is the one write-only field: it can be replaced, never read back. `linear.refreshToken` and `linear.tokenExpiresAt` are owned by the OAuth flow.
-- **`sandbox.firecracker.vcpus` and `memMib`.** When either is set, the Sandbox page shows the resulting allocation read-only with the override named, plus a button that clears both so the size preset applies again.
+
+`sandbox.concurrency`, `sandbox.timeoutMinutes`, and `sandbox.retentionHours` have no dashboard card (the Sandbox page is gone). Edit them in `~/.brevi/config.json`; they apply live.
 
 Hand edits keep working. The file stays the source of truth in both directions: brevi watches it and picks up an external edit without a restart, and the dashboard updates by itself. An edit that fails validation is logged and ignored, leaving the running settings alone.
 
@@ -61,15 +61,7 @@ A freshly initialised config, with every default filled in:
   },
   "memory": { "enabled": true, "maxEntries": 60, "maxChars": 8000 },
   "sandbox": {
-    "provider": "auto",
     "concurrency": 1,
-    "firecracker": {
-      "binary": "firecracker",
-      "kernelImage": "",
-      "rootfs": "",
-      "rootfsBaseUrl": "https://images.brevi.dev/rootfs",
-      "size": "medium"
-    },
     "timeoutMinutes": 240,
     "retentionHours": 24
   },
@@ -91,8 +83,6 @@ A freshly initialised config, with every default filled in:
   "pollIntervalSeconds": 60
 }
 ```
-
-`kernelImage` and `rootfs` are empty by default, which means "the images brevi manages" under `~/.brevi/images/`; set either to point at your own.
 
 ## `linear`
 
@@ -175,7 +165,7 @@ The coding agent executed inside the sandbox.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `command` | string | `"claude"` | The agent CLI brevi runs. It must be available where the run executes: on the host's `PATH` under the process provider, baked into the rootfs image under Firecracker. |
+| `command` | string | `"claude"` | The agent CLI brevi runs. It must be on the worker host's `PATH`; bwrap bind-mounts that binary (and its `PATH` directories) into the sandbox. |
 | `args` | string[] | `[]` | Extra arguments appended after brevi's own. |
 | `model` | string | - | When set, the whole run uses this one model with no subagent delegation, overriding `orchestratorModel` and `implementModel`. |
 | `orchestratorModel` | string | `"claude-fable-5"` | Model the main agent loop runs on (planning, review, delegation). Claude agents only. |
@@ -201,9 +191,7 @@ When `codexReview` is true, the primary agent is Claude, and a Codex credential 
 
 Without a Codex credential the review is likewise skipped cleanly and the run behaves exactly as before. The review is best effort throughout: a reviewer or the synthesis pass that fails or exhausts its `sandbox.timeoutMinutes` budget skips part or all of the review, and the run goes straight to finalizing without a fix pass instead of failing. The review roughly doubles the agent spend of a run; set `codexReview: false` to turn it off. Review executions appear in the run's cost breakdown as "review (requirements)", "review (bugs)", "review (regressions)", "review (synthesis)", and the fix pass as "review fixes".
 
-Under the Firecracker provider, the review runs the Codex CLI inside the sandbox, so an existing host on an older rootfs image needs the current image before the review can run: brevi downloads the current prebuilt image automatically (`brevi setup`, or on demand at startup); from-source setups instead rebuild with `packages/sandbox/scripts/build-rootfs.sh`. Under the process provider the host's `codex` binary is used directly.
-
-Live per-model cost sampling during Claude runs likewise needs `ccusage` in the rootfs image under the Firecracker provider: hosts on an older image get it the same way, by downloading the current prebuilt image (or rebuilding from source). Without it, runs still work and cost falls back to today's end-of-run, stream-parsed behavior.
+The review runs the worker host's `codex` binary inside the same bwrap sandbox. Live per-model cost sampling during Claude runs uses `ccusage` from the worker `PATH` or a host-side cache under `~/.brevi/cache/ccusage` (installed with `npm --ignore-scripts`, never bind-mounted into the sandbox). Without it, runs still work and cost falls back to today's end-of-run, stream-parsed behavior.
 
 At least one of the six credential fields (`anthropicApiKey`, `claudeCodeOauthToken`, `codexApiKey`, `codexAuthJson`, `xaiApiKey`, `grokAuthJson`) must be set or every run fails at startup with `no agent credentials configured`. Populate them from the dashboard's Configuration page rather than by hand; the dashboard verifies keys before saving.
 
@@ -225,29 +213,15 @@ A wrong memory is worse than no memory, because every later run in that repo is 
 
 ## `sandbox`
 
-Where runs execute. These fields are read by the **worker** that executes a run, not by the scheduling host: each worker resolves them from its own `~/.brevi/config.json`, so a fleet of workers can each run a different provider, concurrency, or VM size.
+Where runs execute. These fields are read by the **worker** that executes a run, not by the scheduling host: each worker resolves them from its own `~/.brevi/config.json`. There is no provider switch: every worker uses bwrap. There is no Sandbox page in the dashboard; edit these in the file.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `provider` | `"auto"` \| `"firecracker"` \| `"process"` | `"auto"` | See [Sandboxes](/guides/sandboxes/). |
-| `concurrency` | integer 1-16 | `1` | How many sandboxed runs this worker executes at once. Each Firecracker microVM reserves its own memory (7.5 GB for the default `medium` size preset, see `firecracker.size`) and one tap device from the pool created by [the network setup script](/guides/sandboxes/) (16 by default), so the worker's host needs enough of both for all of them running simultaneously. Adjustable live from the dashboard; takes effect immediately, no restart needed. |
+| `concurrency` | integer 1-16 | `1` | How many sandboxed runs this worker executes at once. Adjustable live; takes effect immediately, no restart needed. |
 | `timeoutMinutes` | integer ≥ 1 | `240` | Hard wall-clock limit applied per agent execution: the implementation pass, each of the parallel Codex reviewers, the synthesis pass, and the fix pass each get their own budget, rather than one limit for the whole run. The default 240 minutes gives each execution four hours. |
 | `retentionHours` | number ≥ 0 | `24` | How many hours a finished (completed or failed) run's sandbox disk is kept for interactive resume, either from the dashboard's "Open terminal" button or `brevi attach <runId>`. `0` disables retention. A retained sandbox's compute is stopped; it costs disk only, no memory or CPU. |
-| `firecracker` | object | see below | Only consulted when the Firecracker provider is used. |
 
-### `sandbox.firecracker`
-
-| Field | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `binary` | string | `"firecracker"` | Resolved on `PATH` unless it's an absolute path. |
-| `kernelImage` | string | `""` | Uncompressed Linux kernel. Empty resolves to `~/.brevi/images/vmlinux`, the image `brevi setup` downloads. |
-| `rootfs` | string | `""` | Ext4 image with node, git, both agent CLIs (`@anthropic-ai/claude-code`, `@openai/codex`), and `ccusage` preinstalled. Empty means brevi manages it: a from-source build at `~/.brevi/images/rootfs.ext4` (`build-rootfs.sh`) wins, and when there's no valid image there brevi falls back to the versioned cache under `~/.brevi/cache/rootfs/`, downloading a checksum-verified image on demand. A path set here is used as-is and is never downloaded or built over. An image that's empty, corrupt, or whose manifest version doesn't match brevi's fails preflight until it's rebuilt or redownloaded. |
-| `rootfsBaseUrl` | string | `"https://images.brevi.dev/rootfs"` | Base URL prebuilt rootfs images are downloaded from. Point it at a mirror for self-hosted or air-gapped setups. |
-| `size` | `"small"` \| `"medium"` \| `"large"` | `"medium"` | VM size preset: `small` (1 vCPU, 3.75 GB), `medium` (2 vCPU, 7.5 GB), `large` (4 vCPU, 15 GB). Selectable live from the dashboard's Sandbox page (Configuration > Sandbox) when the active provider is Firecracker; a change applies to newly booted VMs only, running VMs are untouched. |
-| `vcpus` | integer ≥ 1 | unset | Explicit vCPU override. Wins over `size` when set; existing config files with an explicit value keep their exact behavior. Picking a preset in the dashboard clears it. |
-| `memMib` | integer ≥ 512 | unset | Explicit memory override, in MiB. Wins over `size` when set; existing config files with an explicit value keep their exact behavior. Picking a preset in the dashboard clears it. |
-
-A config file from before size presets that sets only one of `vcpus`/`memMib` (and no `size`) keeps the old default for the other (2 vCPUs, 4096 MiB): the preset never changes an allocation such a config was already getting.
+A leftover `sandbox.provider` or other unknown `sandbox.*` key in an older file is stripped on load, and `brevi doctor` warns that it is ignored.
 
 ## `fleet`
 
@@ -264,11 +238,11 @@ Which machines are enrolled is not configured here. Workers are runtime state, k
 
 The worker channel gets its own listener because the dashboard's does more than serve workers: `server.host` also carries the unauthenticated dashboard and management API, so exposing it to the network would let any reachable peer mint a pairing token and enroll a worker of its own. The worker channel authenticates (a single-use pairing token, then a durable per-worker credential), so it can safely bind wider without widening that API. The `fleet.host` listener serves nothing but `/ws/worker`; every other request on it gets a `404`. When it fails to bind (port in use, address unavailable), brevi logs it and keeps running without it, and workers on this machine can still enroll through the dashboard's own listener.
 
-The listener binds once at startup, so `host` and `port` need a restart; the two timing fields apply live. All four are editable from the dashboard's Workers page (Configuration > Workers), which is also where a pairing token is minted and the ready-to-copy `brevi worker` command is shown. See [Running on another machine](/guides/sandboxes/#running-on-another-machine) for enrolling a worker end to end.
+The listener binds once at startup, so `host` and `port` need a restart; the two timing fields apply live. All four are editable from the dashboard's Workers page (Configuration > Workers), which is also where a pairing token is minted and the ready-to-copy `brevi worker` command is shown. See [Workers](/guides/workers/) for enrolling a worker end to end.
 
 ### Placement
 
-A queued run is placed on a connected worker by capability and free capacity: a Firecracker worker is preferred over a process one, each worker's `maxConcurrency` caps how many dispatched runs it juggles at once, and a run that requested a specific Firecracker VM size (`small` / `medium` / `large`) only goes to a worker that can boot it. A worker an operator has set to `draining` is skipped entirely: it finishes what it already holds and is never offered anything new. When no connected worker qualifies, the run simply stays queued instead of failing; the reason (no workers connected, every worker draining, the fleet at capacity, no connected worker can boot the requested VM size) is recorded on the run's `queueReason` field and shown on its card in the dashboard until placement succeeds.
+A queued run is placed on a connected worker by free capacity: each worker's `maxConcurrency` caps how many dispatched runs it juggles at once. A worker an operator has set to `draining` is skipped entirely: it finishes what it already holds and is never offered anything new. When no connected worker qualifies, the run simply stays queued instead of failing; the reason (no workers connected, every worker draining, the fleet at capacity) is recorded on the run's `queueReason` field and shown on its card in the dashboard until placement succeeds.
 
 ### Leases and recovery
 

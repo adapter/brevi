@@ -325,7 +325,9 @@ export function RunDetail({
                   {run.sandbox.workerId && (
                     <Field label="Worker">{worker ? worker.name : run.sandbox.workerId}</Field>
                   )}
-                  {run.sandbox.id && <Field label="VM">{run.sandbox.id}</Field>}
+                  {run.sandbox.id && run.sandbox.id !== run.id && (
+                    <Field label="Sandbox id">{run.sandbox.id}</Field>
+                  )}
                   <Field label="Run">{run.id}</Field>
                 </div>
               </Card>
@@ -481,11 +483,10 @@ function QueuedBanner({
       {hostExecution && (
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
           This machine can&apos;t run agents itself.{" "}
-          {hostExecution.reason === "macos-vm-not-installed" ? (
+          {hostExecution.reason === "bwrap-unavailable" ? (
             <>
-              Set up the macOS worker (
-              <code className="font-mono text-[11px]">brevi mac install</code>) or enroll another
-              machine from the{" "}
+              Install bubblewrap (<code className="font-mono text-[11px]">brevi setup</code>) or
+              enroll another machine from the{" "}
             </>
           ) : (
             "Enroll another machine from the "

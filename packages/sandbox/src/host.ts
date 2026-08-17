@@ -1,6 +1,5 @@
 import { access, constants } from "node:fs/promises";
 import { delimiter, join } from "node:path";
-import { BREVI_HOME } from "@brevi/shared";
 
 /** True when the path exists and is both readable and writable by this process. */
 export async function isReadWritable(path: string): Promise<boolean> {
@@ -25,19 +24,6 @@ export async function resolveBinary(nameOrPath: string): Promise<string | undefi
     if (await accessible(candidate, constants.X_OK)) return candidate;
   }
   return undefined;
-}
-
-/**
- * Resolves the configured firecracker binary like resolveBinary, but when the config
- * still holds the schema default ("firecracker") also falls back to the copy that
- * `brevi setup` installs under ~/.brevi/bin, which is not on PATH.
- */
-export async function resolveFirecrackerBinary(binary: string): Promise<string | undefined> {
-  const resolved = await resolveBinary(binary);
-  if (resolved !== undefined) return resolved;
-  if (binary !== "firecracker") return undefined;
-  const installed = join(BREVI_HOME, "bin", "firecracker");
-  return (await accessible(installed, constants.X_OK)) ? installed : undefined;
 }
 
 async function accessible(path: string, mode: number): Promise<boolean> {

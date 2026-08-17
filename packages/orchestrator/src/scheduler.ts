@@ -263,13 +263,6 @@ function dialableHost(bindHost: string): { host: string; remote: boolean } {
 }
 
 /**
- * Copy `source` onto `target` field by field, recursing into plain objects
- * and dropping keys `source` no longer has. Unlike replacing the object, the
- * identity of `target` and of every nested object survives, which the live
- * config depends on: the sandbox provider is handed `config.sandbox.firecracker`
- * once at startup and reads the size preset off that same object at every VM
- * boot.
- */
 /**
  * Write a dotted path into a plain-object tree, creating missing levels.
  * Only used for the fixed credential paths, which contain no dots.
@@ -2341,9 +2334,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       repo,
       config: this.config,
       prompts,
-      // Only a worker that can boot this preset qualifies for the dispatch;
-      // the registry filters on it before ever offering the run to one.
-      vmSize: this.config.sandbox.firecracker.size,
     };
   }
 

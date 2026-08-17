@@ -4,14 +4,12 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   CONFIG_DEFAULTS,
-  FIRECRACKER_SIZES,
   resolveWorkerOs,
   WORKSPACES_DIR,
   type BreviConfig,
   type CancelMessage,
   type DiscardMessage,
   type DispatchMessage,
-  type FirecrackerVmSize,
   type Run,
   type RunCompleteAckMessage,
   type RunCompleteMessage,
@@ -20,7 +18,7 @@ import {
   type WorkerCapabilities,
   type WorkerState,
 } from "@brevi/shared";
-import { createSandboxProvider, isReadWritable, type SandboxProvider } from "@brevi/sandbox";
+import { createSandboxProvider, resolveBinary, type SandboxProvider } from "@brevi/sandbox";
 import { loadConfig } from "@brevi/orchestrator";
 import { isTerminal, LinearService } from "@brevi/orchestrator/internal";
 import { createAttachSessions, type AttachSessions } from "./attach.js";
@@ -229,7 +227,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   // A machine that only ever runs `brevi worker` has no reason to have run
   // `brevi init`, so an absent (or unreadable) config is not fatal here the
   // way it is for every other command: fall back to the schema's own
-  // defaults, which is a process-provider worker with concurrency 1.
+  // defaults: bwrap at concurrency 1.
   const config = await loadConfig(options.configPath).catch((error: unknown) => {
     console.log(`[brevi] no usable local config (${errorMessage(error)}); continuing with defaults`);
     return CONFIG_DEFAULTS;
@@ -239,8 +237,8 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   // credential an earlier enrollment on this host left behind, if any.
   const identity = await resolveEnrollment(options);
 
-  // Installed before provider setup, which can download a multi-GB rootfs:
-  // a supervisor that dies during it must still take this process down.
+  // Installed before provider setup (the bwrap probe) so a supervisor that
+  // dies during it still takes this process down.
   // Until shutdown() exists there is nothing to drain, so a bare exit is the
   // graceful stop; the handler is re-pointed at shutdown() further down.
   let onSupervisorGone = (): void => {
@@ -252,32 +250,25 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
       ? watchSupervisor(options.supervisorPid, () => onSupervisorGone())
       : undefined;
 
-  console.log(`[brevi] resolving the ${config.sandbox.provider} sandbox provider...`);
-  const provider: SandboxProvider = await createSandboxProvider({
-    requested: config.sandbox.provider,
-    firecracker: config.sandbox.firecracker,
-    concurrency,
-    // Prebuilt rootfs images are cached per @brevi/cli release, so the worker's
-    // own version is the cache key its images resolve under. The worker is the
-    // machine that boots VMs now, so it is also the one that downloads them:
-    // surface the progress rather than sitting silent through a multi-GB pull.
-    cliVersion: VERSION,
-    log: (line) => console.log(`[brevi] ${line}`),
-  });
-  await provider.ensureAvailable();
+  console.log("[brevi] resolving the bwrap sandbox...");
+  const provider: SandboxProvider = await createSandboxProvider();
+  const agentCommands = await availableAgentCommands(config.agent.command);
+  if (agentCommands.length === 0) {
+    throw new Error(
+      "no supported agent command was found on PATH; install Claude or Codex (npm install -g @anthropic-ai/claude-code @openai/codex) before starting brevi worker",
+    );
+  }
+  console.log(`[brevi] agent commands available: ${agentCommands.join(", ")}`);
 
   const capabilities: WorkerCapabilities = {
     os: resolveWorkerOs(process.platform, process.env),
     arch: process.arch,
     provider: provider.name,
-    kvm: await isReadWritable("/dev/kvm"),
+    agentCommands,
     maxConcurrency: concurrency,
-    vmSizes: provider.name === "firecracker" ? (Object.keys(FIRECRACKER_SIZES) as FirecrackerVmSize[]) : [],
     version: VERSION,
   };
-  console.log(
-    `[brevi] provider ${provider.name} (kvm ${capabilities.kvm ? "yes" : "no"}, ${capabilities.os}/${process.arch}), concurrency ${concurrency}`,
-  );
+  console.log(`[brevi] provider ${provider.name} (${capabilities.os}/${process.arch}), concurrency ${concurrency}`);
 
   /** Runs this process has executed since it started; the only source attach.ts has for a run's agentSessionId and retained-disk bookkeeping. */
   const knownRuns = new Map<string, Run>();
@@ -329,7 +320,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   let attachSessions: AttachSessions;
 
   const handleDispatch = (dispatch: DispatchMessage): void => {
-    const { lease, kind, run, config: dispatchedConfig, prompts, vmSize } = dispatch;
+    const { lease, kind, run, config: dispatchedConfig, prompts } = dispatch;
     if (shuttingDown) {
       connection.send({ type: "dispatch-rejected", leaseId: lease.id, runId: run.id, reason: "worker is shutting down" });
       return;
@@ -360,23 +351,15 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     connection.send({ type: "dispatch-accepted", leaseId: lease.id, runId: run.id });
     claimedLeases.set(lease.id, lease);
 
-    // A worker's provider and image paths are local to its machine: the
-    // dispatched config's sandbox.* is the host's view (or blank, since the
-    // host never boots a sandbox itself), never what this worker executes
-    // with. The VM size is different, though: it's not a local machine
-    // detail but a placement decision the host already made (see PD-40), so
-    // it overrides just the local firecracker config's `size`, keeping every
-    // other local firecracker field (binary, image paths, and an explicit
-    // vcpus/memMib override, which still wins at boot time through
-    // resolveFirecrackerResources regardless of what size ends up here). In
-    // short: the host chooses the size, the worker chooses the machine.
-    const localFirecracker = config.sandbox.firecracker;
+    // Concurrency and timeout are local to this worker. Everything else
+    // (credentials, repos, agent) comes from the dispatch.
     const runConfig: BreviConfig = {
       ...dispatchedConfig,
       sandbox: {
         ...dispatchedConfig.sandbox,
-        provider: config.sandbox.provider,
-        firecracker: provider.name === "firecracker" && vmSize ? { ...localFirecracker, size: vmSize } : localFirecracker,
+        concurrency: config.sandbox.concurrency,
+        timeoutMinutes: config.sandbox.timeoutMinutes,
+        retentionHours: config.sandbox.retentionHours,
       },
     };
 
@@ -537,9 +520,8 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
       // run-complete stuck unacknowledged in its lease's buffer until
       // whatever host eventually reconnects to (the host has no idea the
       // run ended in the meantime); destroying sandboxes before step 2 or
-      // skipping the wait in step 3 leaves Firecracker VMs (or
-      // process-provider children) running with nothing left to report
-      // their exit.
+      // skipping the wait in step 3 leaves sandboxed children running
+      // with nothing left to report their exit.
       for (const active of activeRuns.values()) active.abort.abort();
       const deadline = Date.now() + SHUTDOWN_DEADLINE_MS;
       const executions = [...activeRuns.values()].map((active) => active.execution);
@@ -702,6 +684,24 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   );
 
   await stopped;
+}
+
+/**
+ * Commands this worker can accept from the host. Standard commands are
+ * probed even when the worker has no local config, while a configured custom
+ * command opts that executable into placement too. Resolved paths are
+ * advertised as aliases so an explicit host path can still match.
+ */
+async function availableAgentCommands(configured: string): Promise<string[]> {
+  const candidates = new Set(["claude", "codex", "grok", configured]);
+  const available = new Set<string>();
+  for (const command of candidates) {
+    const resolved = await resolveBinary(command);
+    if (resolved === undefined) continue;
+    available.add(command);
+    available.add(resolved);
+  }
+  return [...available].sort();
 }
 
 /**

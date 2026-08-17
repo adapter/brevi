@@ -88,15 +88,14 @@ export interface FleetResponse {
 
 /**
  * Whether the machine running the orchestrator can execute runs, and through
- * what: a host-supervised local worker (Linux), the managed macOS worker VM,
- * or nothing. Computed at startup by the process booting the orchestrator,
- * reported on /api/health, and used by Mission Control to explain a queue
- * that cannot drain on its own; the reason says what would fix it.
+ * what: a host-supervised local worker (Linux with bwrap), or nothing.
+ * Computed at startup by the process booting the orchestrator, reported on
+ * /api/health, and used by Mission Control to explain a queue that cannot
+ * drain on its own; the reason says what would fix it.
  */
 export type HostExecution =
   | { kind: "local-worker" }
-  | { kind: "mac-vm" }
-  | { kind: "none"; reason: "macos-vm-not-installed" | "unsupported-platform" };
+  | { kind: "none"; reason: "bwrap-unavailable" | "unsupported-platform" };
 
 /** Body of POST /api/workers/:id/rename. */
 export interface WorkerRenameRequest {

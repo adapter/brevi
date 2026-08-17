@@ -2,8 +2,7 @@
 # see packages/cli/scripts/build-binary.ts) and publishes it to Cloudflare R2
 # so the Linux worker installer (packages/worker/scripts/install.sh) can
 # fetch it without a node/bun/npm install of its own. Publishing is keyed by
-# the @brevi/cli release version, in lockstep with the rootfs image this
-# workflow's sibling (rootfs.yml) publishes: every release publishes
+# the @brevi/cli release version: every release publishes
 # worker/<cliVersion>/<arch>/, even one where the binary's own contents did
 # not meaningfully change.
 #
@@ -123,8 +122,7 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         run: bun run --filter=@brevi/cli build:binary
 
-      # Catches the standalone build silently losing its embedded version,
-      # which would break the rootfs cache key clients derive from it.
+      # Catches the standalone build silently losing its embedded version.
       - name: Sanity check the binary reports the right version
         if: steps.check.outputs.skip != 'true'
         env:

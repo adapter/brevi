@@ -49,16 +49,14 @@ export const MASKED_SECRET = "***";
 /**
  * Fields the process binds once at startup: the dashboard listener's address
  * and port, the fleet (worker channel) listener's address and port, and the
- * sandbox provider, which is created (and preflighted) during `start()`.
- * Everything else in the config is read per run or per poll, so it reaches the
- * next run without a restart.
+ * listener. Everything else in the config is read per run or per poll, so it
+ * reaches the next run without a restart.
  */
 export const SETTINGS_RESTART_PATHS = [
   "server.port",
   "server.host",
   "fleet.host",
   "fleet.port",
-  "sandbox.provider",
 ];
 
 /** Whether a saved patch took effect immediately or waits for a restart. */
@@ -135,7 +133,7 @@ export function mergeConfigPatch(
   return merged;
 }
 
-/** Every leaf path a patch touches, dotted, e.g. "sandbox.firecracker.size". */
+/** Every leaf path a patch touches, dotted, e.g. "sandbox.concurrency". */
 export function configPatchPaths(patch: ConfigPatch, prefix: string[] = []): string[] {
   const paths: string[] = [];
   for (const [key, value] of Object.entries(patch)) {

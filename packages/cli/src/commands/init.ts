@@ -1,21 +1,18 @@
 import { existsSync } from "node:fs";
 import { loadConfig, saveConfig } from "@brevi/orchestrator";
-import { collectFirecrackerProblems } from "@brevi/sandbox";
+import { collectBwrapProblems } from "@brevi/sandbox";
 import { CONFIG_PATH, type BreviConfig } from "@brevi/shared";
-import { confirm, intro, log, note, outro, select, spinner } from "@clack/prompts";
+import { confirm, intro, log, note, outro, spinner } from "@clack/prompts";
 import type { Command } from "commander";
 import pc from "picocolors";
 import { checkCliDependencies } from "../lib/dependencies.js";
 import { errorMessage, exitOnCancel, formatZodIssues, isZodLikeError } from "../lib/util.js";
-import { readPackageVersion } from "../lib/version.js";
 import { runSetup } from "./setup.js";
-
-type SandboxProvider = "auto" | "firecracker" | "process";
 
 export function registerInitCommand(program: Command): void {
   program
     .command("init")
-    .description("Create the brevi config and choose a sandbox provider")
+    .description("Create the brevi config")
     .action(async () => {
       try {
         await runInit();
@@ -63,12 +60,10 @@ export async function runInit({ firstRun = false }: RunInitOptions = {}): Promis
     "Everything else is set up from the dashboard: connect Linear, GitHub, and agent keys in the Connections panel, then pick repositories straight from your GitHub account.",
   );
 
-  const provider = await collectSandboxProvider(existing);
-
   // Preserve everything else from an existing config (credentials, repos, ...).
-  const draft = { ...existing, sandbox: { ...existing?.sandbox, provider } };
+  const draft = { ...existing };
 
-  note(summarize(provider, existing), "Configuration summary");
+  note(summarize(existing), "Configuration summary");
 
   const confirmed = exitOnCancel(
     await confirm({ message: "Save this configuration?", initialValue: true }),
@@ -94,7 +89,7 @@ export async function runInit({ firstRun = false }: RunInitOptions = {}): Promis
   }
   s.stop(`Saved to ${CONFIG_PATH}`);
 
-  await offerFirecrackerSetup(saved);
+  await offerBwrapSetup();
   await checkCliDependencies(saved);
 
   outro(
@@ -110,20 +105,17 @@ export async function runInit({ firstRun = false }: RunInitOptions = {}): Promis
   return true;
 }
 
-/**
- * When the saved provider can use firecracker but the host isn't provisioned
- * yet, offers to run the setup flow inline. Declining changes nothing.
- */
-async function offerFirecrackerSetup(saved: BreviConfig): Promise<void> {
-  if (process.platform !== "linux" || saved.sandbox.provider === "process") return;
+/** On Linux, offer to install bubblewrap and passt when missing. Declining changes nothing. */
+async function offerBwrapSetup(): Promise<void> {
+  if (process.platform !== "linux") return;
   if (!process.stdin.isTTY || !process.stdout.isTTY) return;
 
-  const problems = await collectFirecrackerProblems(saved.sandbox.firecracker, readPackageVersion());
+  const problems = await collectBwrapProblems();
   if (problems.length === 0) return;
 
   const setupNow = exitOnCancel(
     await confirm({
-      message: "Set up the firecracker sandbox now? (downloads images, uses sudo)",
+      message: "Install bubblewrap and passt now so this machine can execute runs?",
       initialValue: true,
     }),
   );
@@ -131,11 +123,7 @@ async function offerFirecrackerSetup(saved: BreviConfig): Promise<void> {
 
   const ready = await runSetup({ standalone: false });
   if (!ready) {
-    log.warn(
-      saved.sandbox.provider === "firecracker"
-        ? "brevi start will fail until the remaining problems are fixed."
-        : "brevi will fall back to the process provider (no isolation) until the remaining problems are fixed.",
-    );
+    log.warn("This machine cannot execute runs until bubblewrap and passt are installed. Enroll a Linux worker, or re-run brevi setup.");
   }
 }
 
@@ -149,43 +137,12 @@ async function loadExisting(): Promise<BreviConfig | undefined> {
   }
 }
 
-async function collectSandboxProvider(existing: BreviConfig | undefined): Promise<SandboxProvider> {
-  const provider = exitOnCancel(
-    await select({
-      message: "Sandbox provider",
-      initialValue: existing?.sandbox.provider ?? "auto",
-      options: [
-        {
-          value: "auto" as const,
-          label: "auto",
-          hint: "recommended: firecracker on Linux with KVM, process otherwise",
-        },
-        {
-          value: "firecracker" as const,
-          label: "firecracker",
-          hint: "strongest isolation; requires Linux + KVM",
-        },
-        { value: "process" as const, label: "process", hint: "no isolation, dev only" },
-      ],
-    }),
-  );
-
-  if (provider === "firecracker" && process.platform !== "linux") {
-    log.warn(
-      `firecracker needs Linux + KVM; this machine is ${process.platform}. brevi won't be able to start a sandbox until you switch providers or move to Linux.`,
-    );
-  }
-
-  return provider;
-}
-
-function summarize(provider: string, existing: BreviConfig | undefined): string {
+function summarize(existing: BreviConfig | undefined): string {
   const connection = (label: string, connected: boolean | undefined): string =>
     `${label}: ${connected ? "connected" : "not connected (use the dashboard)"}`;
   const repoKeys = existing ? Object.keys(existing.repos) : [];
 
   return [
-    `Sandbox provider: ${provider}`,
     connection("Linear", Boolean(existing?.linear.apiKey)),
     connection("GitHub", Boolean(existing?.github.token)),
     connection("Anthropic", Boolean(existing?.agent.anthropicApiKey)),

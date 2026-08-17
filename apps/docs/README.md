@@ -11,9 +11,10 @@ src/content/docs/
 ├── guides/
 │   ├── connections.md        Connect flows, credential storage, api.brevi.dev
 │   ├── tickets.md            eligibility, repo routing, run output, reruns
-│   └── sandboxes.md          provider selection, Firecracker setup, caveats
+│   ├── sandboxes.md          bwrap isolation on Linux workers
+│   └── workers.md            Linux installer, local worker, fleet
 └── reference/
-    ├── cli.md                brevi init / ui / start / status
+    ├── cli.md                brevi init / setup / start / status / worker
     ├── configuration.md      ~/.brevi/config.json schema
     └── api.md                orchestrator HTTP + WS protocol, api.brevi.dev
 ```

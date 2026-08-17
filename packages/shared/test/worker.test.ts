@@ -52,7 +52,7 @@ const run: Run = {
   id: "run-1",
   ticket,
   status: "running",
-  sandbox: { provider: "firecracker", workerId: "worker-1", id: "vm-1" },
+  sandbox: { provider: "bwrap", workerId: "worker-1", id: "sbx-1" },
   createdAt: "2026-08-11T10:00:00.000Z",
   queuedAt: "2026-08-11T10:00:01.000Z",
   startedAt: "2026-08-11T10:00:02.000Z",
@@ -118,39 +118,6 @@ describe("dispatch", () => {
     expect(decoded.prompts.memories).toEqual([]);
     expect(decoded.prompts.recordMemories).toBe(false);
   });
-
-  it("carries the Firecracker size preset the host placed the run at", () => {
-    const decoded = roundTripToWorker({
-      type: "dispatch",
-      lease: { id: "lease-1", runId: run.id, issuedAt: "2026-08-11T10:00:01.000Z" },
-      kind: "implementation",
-      run,
-      repoKey: "brevi",
-      repo,
-      prompts: { prDescription: "concise" },
-      config,
-      vmSize: "large",
-    });
-    expect(decoded.type).toBe("dispatch");
-    if (decoded.type !== "dispatch") return;
-    expect(decoded.vmSize).toBe("large");
-  });
-
-  it("rejects a vmSize outside the Firecracker presets", () => {
-    expect(
-      parseHostMessage({
-        type: "dispatch",
-        lease: { id: "lease-1", runId: run.id, issuedAt: "2026-08-11T10:00:01.000Z" },
-        kind: "implementation",
-        run,
-        repoKey: "brevi",
-        repo,
-        prompts: { prDescription: "concise" },
-        config,
-        vmSize: "huge",
-      }),
-    ).toBeUndefined();
-  });
 });
 
 describe("registration", () => {
@@ -163,17 +130,15 @@ describe("registration", () => {
       capabilities: {
         os: "linux",
         arch: "x64",
-        provider: "firecracker",
-        kvm: true,
+        provider: "bwrap",
+        agentCommands: ["claude", "codex"],
         maxConcurrency: 4,
-        vmSizes: ["small", "medium", "large"],
         version: "0.5.0",
       },
       activeLeases: [{ id: "lease-1", runId: run.id, issuedAt: "2026-08-11T10:00:01.000Z" }],
     });
     expect(decoded.type).toBe("register");
     if (decoded.type !== "register") return;
-    expect(decoded.capabilities.vmSizes).toEqual(["small", "medium", "large"]);
     expect(decoded.activeLeases).toHaveLength(1);
     // Identity comes from the auth envelope, never from a field the worker
     // fills in for itself: the register frame has no workerId of its own.
@@ -189,10 +154,9 @@ describe("registration", () => {
       capabilities: {
         os: "darwin",
         arch: "arm64",
-        provider: "process",
-        kvm: false,
+        provider: "bwrap",
+        agentCommands: ["claude"],
         maxConcurrency: 1,
-        vmSizes: [],
         version: "0.5.0",
       },
       activeLeases: [],
@@ -210,10 +174,9 @@ describe("registration", () => {
       capabilities: {
         os: "linux",
         arch: "x64",
-        provider: "process" as const,
-        kvm: false,
+        provider: "bwrap" as const,
+        agentCommands: ["claude"],
         maxConcurrency: 1,
-        vmSizes: [],
         version: "0.5.0",
       },
       activeLeases: [],
@@ -221,6 +184,25 @@ describe("registration", () => {
     expect(parseWorkerMessage({ ...base, auth: { kind: "none" } })).toBeUndefined();
     expect(parseWorkerMessage({ ...base, auth: { kind: "pairing", token: "" } })).toBeUndefined();
     expect(parseWorkerMessage({ ...base, auth: { kind: "credential", workerId: "wk-1" } })).toBeUndefined();
+  });
+
+  it("refuses a worker that is not bwrap", () => {
+    const registration = {
+      type: "register",
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      auth: { kind: "pairing" as const, token: "bwp_pairing" },
+      name: "builder",
+      capabilities: {
+        os: "linux",
+        arch: "x64",
+        provider: "legacy",
+        agentCommands: ["claude"],
+        maxConcurrency: 1,
+        version: "0.5.0",
+      },
+      activeLeases: [],
+    };
+    expect(parseWorkerMessage(registration)).toBeUndefined();
   });
 
   it("rejects a concurrency the CLI must refuse too", () => {
@@ -232,10 +214,9 @@ describe("registration", () => {
       capabilities: {
         os: "linux",
         arch: "x64",
-        provider: "process" as const,
-        kvm: false,
+        provider: "bwrap" as const,
+        agentCommands: ["claude"],
         maxConcurrency: WORKER_MAX_CONCURRENCY + 1,
-        vmSizes: [],
         version: "0.5.0",
       },
       activeLeases: [],
@@ -365,7 +346,7 @@ describe("completion", () => {
         estimated: false,
       },
       agentSessionId: "session-1",
-      sandbox: { provider: "firecracker", id: "vm-1", retainedUntil: "2026-08-11T12:30:00.000Z" },
+      sandbox: { provider: "bwrap", id: "sbx-1", retainedUntil: "2026-08-11T12:30:00.000Z" },
     });
 
     expect(decoded.type).toBe("run-complete");

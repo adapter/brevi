@@ -21,7 +21,7 @@ export function registerAttachCommand(program: Command): void {
 
       let res: Response;
       try {
-        // No abort timeout here: booting a Firecracker microVM can take a while.
+        // No abort timeout here: rehydrating a retained sandbox can take a while.
         res = await fetch(url, { method: "POST", headers: { Accept: "application/json" } });
       } catch {
         console.log(pc.yellow(`✖ brevi is not running on port ${port}`));

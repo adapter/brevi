@@ -36,11 +36,15 @@ import type {
  */
 
 /**
+ * 3 since bwrap-only isolation: a version-2 worker can still register with a
+ * non-bwrap provider, and the host would dispatch unisolated runs. A
+ * version-2 frame is rejected on registration.
+ *
  * 2 since enrollment: `register` carries an auth envelope instead of a shared
  * pairing token, and the host answers with the worker's assigned id, so a
  * version-1 worker's frame is not merely older, it is unauthenticatable.
  */
-export const WORKER_PROTOCOL_VERSION = 2;
+export const WORKER_PROTOCOL_VERSION = 3;
 /** WebSocket path workers dial on the host. */
 export const WORKER_WS_PATH = "/ws/worker";
 /**
@@ -214,7 +218,7 @@ export type RunStatusInSync = InSync<z.infer<typeof runStatusSchema>, RunStatus>
 export const prStateSchema = z.enum(["open", "draft", "merged", "closed"]);
 export type PrStateInSync = InSync<z.infer<typeof prStateSchema>, PrState>;
 
-export const sandboxProviderNameSchema = z.enum(["firecracker", "process"]);
+export const sandboxProviderNameSchema = z.string().min(1);
 export type SandboxProviderNameInSync = InSync<z.infer<typeof sandboxProviderNameSchema>, SandboxProviderName>;
 
 export const runSchema = z.object({
@@ -307,14 +311,12 @@ export const workerCapabilitiesSchema = z.object({
   /** process.platform of the worker host, e.g. "linux"; the managed macOS VM's worker reports MACOS_VM_OS ("macos-vm") instead (see resolveWorkerOs). */
   os: z.string(),
   arch: z.string(),
-  /** Sandbox provider the worker resolved locally. */
-  provider: sandboxProviderNameSchema,
-  /** True when /dev/kvm is usable, so the host can tell isolated workers apart. */
-  kvm: z.boolean(),
+  /** Sandbox provider the worker runs. Only bwrap workers may register. */
+  provider: z.literal("bwrap"),
+  /** Agent commands this worker resolved on its own PATH at registration time. */
+  agentCommands: z.array(z.string().min(1)).min(1),
   /** How many dispatched runs this worker executes at once. */
   maxConcurrency: z.number().int().min(1).max(WORKER_MAX_CONCURRENCY),
-  /** Firecracker VM size presets this worker can boot; empty for process workers. */
-  vmSizes: z.array(z.enum(["small", "medium", "large"])).default([]),
   /** @brevi/cli version the worker runs. */
   version: z.string(),
 });
@@ -598,10 +600,10 @@ export type LeaseGapMessage = z.infer<typeof leaseGapMessageSchema>;
 //
 // A finished run's retained sandbox lives on the worker that executed it, so
 // `brevi attach` and the dashboard's web terminal cannot reach it directly.
-// The worker runs the PTY (a local shell for the process provider, `ssh -t`
-// into the guest for Firecracker) and the host relays its bytes between that
-// PTY and the browser or CLI socket. Terminal bytes travel as UTF-8 strings,
-// exactly as they already do on the dashboard's attach socket.
+// The worker runs the PTY inside the retained bwrap sandbox and the host
+// relays its bytes between that PTY and the browser or CLI socket. Terminal
+// bytes travel as UTF-8 strings, exactly as they already do on the
+// dashboard's attach socket.
 
 export const attachDataMessageSchema = z.object({
   type: z.literal("attach-data"),
@@ -715,18 +717,10 @@ export const dispatchMessageSchema = z.object({
   prompts: dispatchPromptsSchema,
   /**
    * The per-run credentials the run needs (GitHub token, agent keys, Linear
-   * key). The worker overrides the sandbox provider fields (`sandbox.*`)
-   * with its own local ones instead of trusting the host's copy, since a
-   * worker's provider and Firecracker image paths are local to its machine.
+   * key). The worker applies its own local sandbox concurrency and timeout
+   * rather than trusting the host's copy.
    */
   config: configSchema,
-  /**
-   * Firecracker size preset the host placed this run at (see PD-40). A
-   * Firecracker worker boots the run's VM with it instead of its local
-   * default; every other provider ignores it. Explicit `vcpus`/`memMib`
-   * overrides in the worker's own config still win, as they do for any size.
-   */
-  vmSize: z.enum(["small", "medium", "large"]).optional(),
 });
 export type DispatchMessage = z.infer<typeof dispatchMessageSchema>;
 

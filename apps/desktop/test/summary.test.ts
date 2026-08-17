@@ -30,7 +30,7 @@ function run(id: string, status: RunStatus, opts: Partial<Run> = {}): Run {
     id,
     ticket: ticket(id),
     status,
-    sandbox: { provider: "process" },
+    sandbox: { provider: "bwrap" },
     createdAt: "2026-08-11T00:00:00.000Z",
     attempts: [],
     costs: [],

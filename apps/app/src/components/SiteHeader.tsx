@@ -1,4 +1,4 @@
-import type { BreviConfig, HealthResponse, LinearStatus } from "@brevi/shared";
+import type { BreviConfig, LinearStatus } from "@brevi/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -15,21 +15,18 @@ const CONNECTION = {
 
 export function SiteHeader({
   conn,
-  health,
   config,
   linearStatus,
   page,
   onOpenConfig,
 }: {
   conn: Connection;
-  health: HealthResponse | null;
   config: BreviConfig | null;
   linearStatus: LinearStatus | null;
   page: Page;
   onOpenConfig: () => void;
 }) {
   const c = CONNECTION[conn];
-  const provider = health?.sandboxProvider ?? config?.sandbox.provider;
   const disconnected =
     config !== null &&
     (PROVIDERS.some((spec) => spec.id !== "linear" && !spec.connected(config)) ||
@@ -62,20 +59,6 @@ export function SiteHeader({
       </Button>
 
       <div className="ml-auto flex min-w-0 items-center gap-2.5">
-        {provider && (
-          <Badge
-            variant="secondary"
-            /* Hidden on phones and again at md..lg, where an open 18rem
-               sidebar leaves the header too narrow for both badges. */
-            className="gap-1.5 px-2 py-1.5 max-sm:hidden md:max-lg:hidden"
-          >
-            <span className="text-haze-700">Sandbox</span>
-            <span className="font-mono text-[11px] leading-none tracking-normal normal-case text-haze-200">
-              {provider}
-            </span>
-          </Badge>
-        )}
-
         {/* `shrink` overrides the badge's shrink-0 so the label can truncate
             instead of the inset clipping the whole badge. */}
         <Badge variant="secondary" className={`min-w-0 shrink gap-2 px-2 py-1.5 ${c.text}`}>

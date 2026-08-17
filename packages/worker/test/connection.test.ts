@@ -28,10 +28,9 @@ const CREDENTIAL = "bwc_test-credential";
 const CAPABILITIES: WorkerCapabilities = {
   os: "linux",
   arch: "x64",
-  provider: "process",
-  kvm: false,
+  provider: "bwrap",
+  agentCommands: ["claude", "codex"],
   maxConcurrency: 4,
-  vmSizes: [],
   version: "0.0.0-test",
 };
 

@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
  * baked-in value is only consulted after both candidates have failed, which
  * is exactly the situation the binary is in: an npm install always has a
  * package.json to read, so no environment variable can talk it into
- * misreporting its version (which is also the rootfs image cache key).
+ * misreporting its version.
  */
 export function readPackageVersion(): string {
   for (const rel of ["../package.json", "../../package.json"]) {

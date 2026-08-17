@@ -12,10 +12,9 @@ import { FleetStore } from "../src/fleet.js";
 const capabilities: WorkerCapabilities = {
   os: "linux",
   arch: "x64",
-  provider: "process",
-  kvm: false,
+  provider: "bwrap",
+  agentCommands: ["claude"],
   maxConcurrency: 1,
-  vmSizes: [],
   version: "0.1.0",
 };
 

@@ -30,27 +30,21 @@ const SAMPLE_INTERVAL_MS = 45_000;
 /**
  * Find a working `ccusage` invocation inside the sandbox, or undefined when
  * none is available. Checked in order:
- *   1. The sandbox PATH (the Firecracker rootfs bakes it in; a process-provider
- *      host with it installed globally also passes this way).
- *   2. For the process provider only, a host-side cache under BREVI_HOME:
- *      installed once so repeated runs never trigger a per-sample network
- *      fetch (an `npx`/`bunx`-style invocation would). Firecracker has no
- *      equivalent fallback: a rootfs without ccusage baked in just disables
- *      live sampling for that run.
+ *   1. The sandbox PATH (a host with it installed globally).
+ *   2. A host-side cache under BREVI_HOME, installed once so repeated runs
+ *      never trigger a per-sample network fetch.
  */
 export async function resolveCcusageCommand(
   sandbox: Sandbox,
-  providerName: string,
+  _providerName: string,
   signal: AbortSignal,
 ): Promise<string | undefined> {
   try {
     const probe = await sandbox.exec("ccusage", ["--version"], { timeoutMs: 15_000, signal });
     if (probe.exitCode === 0) return "ccusage";
   } catch {
-    // fall through to the process-provider cache below
+    // fall through to the host cache below
   }
-
-  if (providerName !== "process") return undefined;
 
   const cacheDir = join(BREVI_HOME, "cache", "ccusage");
   const binPath = join(cacheDir, "node_modules", ".bin", "ccusage");
@@ -61,7 +55,7 @@ export async function resolveCcusageCommand(
       // cancelSignal so cancelling the run (or shutting down) kills the
       // install instead of holding the run's sandbox and concurrency slot
       // until the install finishes or times out.
-      await execa("npm", ["install", "--prefix", cacheDir, "ccusage", "--no-audit", "--no-fund", "--loglevel=error"], {
+      await execa("npm", ["install", "--prefix", cacheDir, "ccusage", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"], {
         timeout: 180_000,
         cancelSignal: signal,
       });
@@ -244,8 +238,8 @@ export interface CcusageSampler {
 
 /**
  * Reduces the ccusage report to the current execution's session row before it
- * leaves the sandbox. The report covers every session ccusage can see (on the
- * process provider that is the host's entire shared transcript history), and
+ * leaves the sandbox. The report covers every session ccusage can see (the
+ * sandbox HOME's transcript history), and
  * the provider capture buffer keeps only the tail of stdout, so the full
  * report must never be what crosses that buffer: it would truncate from the
  * front and every sample would fail to parse. ccusage's own `--id` filter is
@@ -299,10 +293,9 @@ const CODEX_SESSION_FILTER_JS = [
 /**
  * The one-shot Codex read command. `codex session` (rather than `claude
  * session`) pins the read to the Codex rollout files under CODEX_HOME. The
- * in-sandbox filter exists for the same reason as the Claude pipeline's: on
- * the process provider a default CODEX_HOME is the host's own `~/.codex`
- * with its entire session history, which would overflow the provider's
- * capture buffer if it crossed unfiltered.
+ * in-sandbox filter exists for the same reason as the Claude pipeline's: a
+ * default CODEX_HOME with a large session history would overflow the
+ * provider's capture buffer if it crossed unfiltered.
  */
 const CODEX_READ_PIPELINE = `"$1" codex session --json --offline | node -e '${CODEX_SESSION_FILTER_JS}' "$2"`;
 

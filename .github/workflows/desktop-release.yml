@@ -21,7 +21,7 @@
 #     "Release packages" PR merge (release.yml) lands as a human-initiated
 #     push, which triggers workflows; tags the changesets action pushes with
 #     GITHUB_TOKEN cannot trigger workflows, so this version-bump commit on
-#     main is the reliable release signal. Same reasoning as rootfs.yml.
+#     main is the reliable release signal.
 #   - push of an "@brevi/cli@*" tag, which covers a manually pushed tag.
 #   - workflow_dispatch, for a packaging dry run (the default) or, with
 #     `publish: true`, a manually triggered real release. A dry run always
@@ -349,8 +349,8 @@ jobs:
           printf 'uploading %s\n' "${assets[@]}"
           gh release upload "$TAG" "${assets[@]}" --clobber
 
-      # Same layout rootfs.yml uses: a versioned, immutable prefix for
-      # rollback, and a "latest" prefix that is the live feed the app
+      # Use a versioned, immutable prefix for rollback, and a "latest"
+      # prefix that is the live feed the app
       # actually polls. The channel file references its sibling artifacts
       # by bare filename, so they have to sit right next to it in both
       # prefixes; the stable aliases exist purely so the docs site has a
@@ -392,7 +392,7 @@ jobs:
 
           # Versioned prefix: the immutable archive a rollback republishes
           # from. Channel file last, so a half-uploaded version is never
-          # resolvable as "this version exists" (same rule rootfs.yml uses).
+          # resolvable as "this version exists".
           for f in "${artifacts[@]}"; do
             name=$(basename "$f")
             $wrangler r2 object put "brevi-downloads/desktop/v$VERSION/$name" \

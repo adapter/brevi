@@ -1,10 +1,8 @@
 /**
- * Copies the worker installer and its network-setup helper into
- * apps/docs/public/, so they're served as static files at
- * https://brevi.dev/install.sh and https://brevi.dev/setup-network.sh (the
- * one-line `curl | sudo sh` install for a worker machine). The scripts
- * inside packages/worker and packages/sandbox remain the single source of
- * truth; nothing under public/ is checked in.
+ * Copies the worker installer into apps/docs/public/, so it's served as a
+ * static file at https://brevi.dev/install.sh (the one-line `curl | sudo sh`
+ * install for a worker machine). The script inside packages/worker remains
+ * the single source of truth; nothing under public/ is checked in.
  *
  * Runs before `astro build` / `astro dev`; the output is gitignored.
  */
@@ -15,10 +13,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const PUBLIC_DIR = join(ROOT, "apps/docs/public");
 
-const PAYLOAD = [
-  { src: "packages/worker/scripts/install.sh", name: "install.sh" },
-  { src: "packages/sandbox/scripts/setup-network.sh", name: "setup-network.sh" },
-];
+const PAYLOAD = [{ src: "packages/worker/scripts/install.sh", name: "install.sh" }];
 
 mkdirSync(PUBLIC_DIR, { recursive: true });
 

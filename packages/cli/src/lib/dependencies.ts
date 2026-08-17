@@ -1,11 +1,10 @@
 import { execFile, spawn } from "node:child_process";
-import { collectFirecrackerProblems, resolveBinary } from "@brevi/sandbox";
+import { resolveBinary } from "@brevi/sandbox";
 import type { BreviConfig } from "@brevi/shared";
 import { confirm, log, note } from "@clack/prompts";
 import pc from "picocolors";
 import { detectInstallMethod } from "./update.js";
 import { errorMessage, exitOnCancel } from "./util.js";
-import { readPackageVersion } from "./version.js";
 
 /**
  * Result of probing a tool. Only "ok" counts as usable: an executable that is on PATH but
@@ -70,19 +69,14 @@ export async function checkCliDependencies(saved: BreviConfig): Promise<void> {
   const missingRequired = results.filter((result) => result.required && !result.ok);
   if (missingRequired.length > 0) {
     log.warn(
-      `Runs on the process provider will fail until ${missingRequired.map((result) => result.name).join(", ")} ${missingRequired.length === 1 ? "is" : "are"} installed. Re-run ${pc.cyan("brevi init")} to check again.`,
+      `Runs will fail until ${missingRequired.map((result) => result.name).join(", ")} ${missingRequired.length === 1 ? "is" : "are"} installed. Re-run ${pc.cyan("brevi init")} to check again.`,
     );
   }
 }
 
-/** Whether the host itself needs the agent CLIs on PATH, i.e. the process provider is in play. */
-async function agentsHostRequired(saved: BreviConfig): Promise<boolean> {
-  const provider = saved.sandbox.provider;
-  if (provider === "process") return true;
-  if (provider === "firecracker") return false;
-  // "auto": firecracker on a passing Linux host, process provider otherwise.
-  if (process.platform !== "linux") return true;
-  return (await collectFirecrackerProblems(saved.sandbox.firecracker, readPackageVersion())).length > 0;
+/** Whether this host executes runs itself (Linux). Agent CLIs come from the host PATH. */
+async function agentsHostRequired(_saved: BreviConfig): Promise<boolean> {
+  return process.platform === "linux";
 }
 
 async function checkTool(def: ToolDef, required: boolean): Promise<ToolResult> {
@@ -231,8 +225,8 @@ function npmGlobalInstaller(pkg: string): (required: boolean) => Promise<Install
 
 const AGENT_CLI_NOTE = (name: string) => (required: boolean) =>
   required
-    ? "required: the process sandbox provider runs the agent CLI directly on the host"
-    : `optional: the firecracker sandbox image already bundles ${name}`;
+    ? "required: bwrap runs the host agent CLI inside the sandbox"
+    : `optional: ${name}`;
 
 const claudeTool: ToolDef = {
   name: "claude",

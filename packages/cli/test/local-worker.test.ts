@@ -8,26 +8,19 @@ import {
 } from "../src/lib/local-worker.js";
 
 describe("decideHostExecution", () => {
-  it("gives Linux a local worker regardless of the mac VM flag", () => {
-    expect(decideHostExecution("linux", false)).toEqual({ kind: "local-worker" });
+  it("gives Linux a local worker when bwrap is available", () => {
     expect(decideHostExecution("linux", true)).toEqual({ kind: "local-worker" });
   });
 
-  it("gives macOS the managed VM when it is installed", () => {
-    expect(decideHostExecution("darwin", true)).toEqual({ kind: "mac-vm" });
-  });
-
-  it("gives macOS a not-installed reason when the VM isn't set up", () => {
-    expect(decideHostExecution("darwin", false)).toEqual({
-      kind: "none",
-      reason: "macos-vm-not-installed",
-    });
+  it("gives Linux a bwrap-unavailable reason when bwrap is missing", () => {
+    expect(decideHostExecution("linux", false)).toEqual({ kind: "none", reason: "bwrap-unavailable" });
   });
 
   it("gives every other platform an unsupported-platform reason", () => {
+    expect(decideHostExecution("darwin", true)).toEqual({ kind: "none", reason: "unsupported-platform" });
+    expect(decideHostExecution("darwin", false)).toEqual({ kind: "none", reason: "unsupported-platform" });
     expect(decideHostExecution("win32", false)).toEqual({ kind: "none", reason: "unsupported-platform" });
-    expect(decideHostExecution("win32", true)).toEqual({ kind: "none", reason: "unsupported-platform" });
-    expect(decideHostExecution("freebsd", false)).toEqual({ kind: "none", reason: "unsupported-platform" });
+    expect(decideHostExecution("freebsd", true)).toEqual({ kind: "none", reason: "unsupported-platform" });
   });
 });
 

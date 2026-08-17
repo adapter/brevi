@@ -17,7 +17,7 @@ const probeEntry = join(here, "helpers", "config-probe.ts");
 
 interface EnsureResult {
   firstLaunch: boolean;
-  provider: string;
+  concurrency: number;
 }
 
 /** Runs `count` sequential ensureConfig() calls in one subprocess, against a fresh temp $HOME. */
@@ -39,7 +39,7 @@ describe("ensureConfig", () => {
   test("reports firstLaunch: true and writes schema defaults when no config file exists", () => {
     const [result] = runProbe(1);
     expect(result?.firstLaunch).toBe(true);
-    expect(result?.provider).toBe("auto");
+    expect(result?.concurrency).toBe(1);
   });
 
   test("reports firstLaunch: false once a config file exists", () => {

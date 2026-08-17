@@ -42,51 +42,6 @@ export const repoConfigSchema = z.object({
   demo: z.enum(["always", "auto", "never"]).default("auto"),
 });
 
-export const firecrackerConfigSchema = z.preprocess(
-  (raw) => {
-    // Before size presets existed, vcpus and memMib had independent defaults
-    // (2 and 4096). A legacy config carrying only one of them used the old
-    // default for the other; letting the preset fill that half would change
-    // the config's allocation, so the old default is pinned instead. A config
-    // that names a size (or sets neither field) resolves through the preset.
-    if (raw !== null && typeof raw === "object") {
-      const cfg = raw as { size?: unknown; vcpus?: unknown; memMib?: unknown };
-      if (cfg.size === undefined && (cfg.vcpus !== undefined || cfg.memMib !== undefined)) {
-        return { vcpus: 2, memMib: 4096, ...cfg };
-      }
-    }
-    return raw;
-  },
-  z.object({
-    /** Path to the firecracker binary. */
-    binary: z.string().default("firecracker"),
-    /**
-     * Uncompressed Linux kernel image (vmlinux). Empty means the image brevi
-     * manages, `~/.brevi/images/vmlinux` (see resolveFirecrackerImages).
-     */
-    kernelImage: z.string().default(""),
-    /**
-     * Ext4 rootfs with node, git, and the coding agent preinstalled. Empty
-     * means the image brevi manages: a prebuilt image downloaded and cached
-     * per release, or a from-source build at `~/.brevi/images/rootfs.ext4`.
-     * A path set here is used verbatim and is never downloaded over.
-     */
-    rootfs: z.string().default(""),
-    /** Base URL prebuilt rootfs images are downloaded from; point at a mirror for self-hosted or air-gapped setups. */
-    rootfsBaseUrl: z.string().default("https://images.brevi.dev/rootfs"),
-    /**
-     * VM size preset: small (1 vCPU / 3.75 GB), medium (2 vCPU / 7.5 GB), or
-     * large (4 vCPU / 15 GB). Adjustable live from the dashboard's Sandbox
-     * page; applies to newly booted VMs.
-     */
-    size: z.enum(["small", "medium", "large"]).default("medium"),
-    /** Explicit vCPU override (config file only); when set it wins over `size`. */
-    vcpus: z.number().int().min(1).optional(),
-    /** Explicit memory override in MiB (config file only); when set it wins over `size`. */
-    memMib: z.number().int().min(512).optional(),
-  }),
-);
-
 export const configSchema = z.object({
   linear: z
     .object({
@@ -145,9 +100,8 @@ export const configSchema = z.object({
   agent: z
     .object({
       /**
-       * Coding agent CLI brevi executes. It has to be available where the run
-       * executes: on the host's PATH under the process provider, baked into
-       * the rootfs image under Firecracker.
+       * Coding agent CLI brevi executes. It has to be on the worker host's
+       * PATH (bwrap bind-mounts the host binaries into the sandbox).
        */
       command: z.string().default("claude"),
       args: z.array(z.string()).default([]),
@@ -207,7 +161,7 @@ export const configSchema = z.object({
    * concern lives, the command that actually builds it, a convention that is
    * easy to get wrong). They are kept on the host under ~/.brevi/memories,
    * outside any sandbox, and injected into the next run's prompt so a fresh
-   * microVM does not re-pay the exploration cost of the last one.
+   * sandbox does not re-pay the exploration cost of the last one.
    */
   memory: z
     .object({
@@ -229,21 +183,9 @@ export const configSchema = z.object({
   sandbox: z
     .object({
       /**
-       * "auto" picks firecracker on Linux with KVM, process otherwise. Read
-       * by the worker that executes runs, not by the scheduling host: each
-       * worker resolves this from its own `~/.brevi/config.json`.
-       */
-      provider: z.enum(["auto", "firecracker", "process"]).default("auto"),
-      /** Read by the worker that executes runs, from its own `~/.brevi/config.json`. */
-      firecracker: firecrackerConfigSchema.prefault({}),
-      /**
-       * How many sandboxed runs may execute at once. Each Firecracker microVM
-       * reserves its own memory (the firecracker.size preset, 7680 MiB for
-       * the default medium, unless an explicit memMib override is set) and
-       * one tap device from the pool setup-network.sh provisions (16 by
-       * default), so keep this in line with what the host can hold. Read by
-       * the worker that executes runs: each worker reads its own copy from
-       * its own `~/.brevi/config.json` and caps its own concurrency with it.
+       * How many sandboxed runs may execute at once. Read by the worker that
+       * executes runs: each worker reads its own copy from its own
+       * `~/.brevi/config.json` and caps its own concurrency with it.
        */
       concurrency: z.number().int().min(1).max(MAX_SANDBOX_CONCURRENCY).default(1),
       /**
@@ -352,7 +294,6 @@ export const configSchema = z.object({
 
 export type BreviConfig = z.infer<typeof configSchema>;
 export type RepoConfig = z.infer<typeof repoConfigSchema>;
-export type FirecrackerConfig = z.infer<typeof firecrackerConfigSchema>;
 
 /** Mask a secret when set; keep "" so clients can tell "not connected" apart. */
 function mask(secret: string): string {

@@ -19,7 +19,7 @@ npm install -g @brevi/cli
 | Command | What it does |
 | --- | --- |
 | `brevi` | Start the orchestrator and open the dashboard; runs init first on a fresh machine |
-| `brevi init` | Create the config and choose a sandbox provider (`auto` / `firecracker` / `process`) |
+| `brevi init` | Create the config |
 | `brevi start` | Start headless (no browser) |
 | `brevi status` | Show orchestrator health and recent runs |
 | `brevi doctor` | Check the whole setup: config, server, sandbox, connectors, CLIs (`--ai` for a Claude-powered diagnosis) |

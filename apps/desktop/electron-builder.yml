@@ -101,8 +101,7 @@ artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
 # upload them. Uploading is the release workflow's job: it pushes the
 # artifacts and channel files with wrangler and `gh release upload` into a
 # static directory in the public Cloudflare R2 bucket `brevi-downloads`
-# (served at downloads.brevi.dev), the same shape the Firecracker rootfs
-# images use in .github/workflows/rootfs.yml.
+# (served at downloads.brevi.dev).
 publish:
   provider: generic
   url: https://downloads.brevi.dev/desktop/latest
