@@ -38,8 +38,9 @@ export interface WrapInBwrapOptions {
    */
   newSession?: boolean;
   /**
-   * Injected via `--clearenv` / `--setenv`. When omitted, a minimal HOME /
-   * TMPDIR / PATH is set so the inner process never inherits the host env.
+   * Complete environment inherited by pasta, bwrap, and the inner command.
+   * The caller must spawn with host environment inheritance disabled. When
+   * omitted, a minimal HOME / TMPDIR / PATH is used.
    */
   env?: Record<string, string>;
   /** Override the resolv.conf override source (tests only). */
@@ -80,21 +81,9 @@ export function wrapInBwrap(
     PATH: process.env.PATH ?? "/usr/bin:/bin",
   };
 
-  const argv: string[] = [
-    "--die-with-parent",
-    "--unshare-user",
-    "--unshare-pid",
-    "--unshare-uts",
-    "--unshare-ipc",
-    "--clearenv",
-  ];
+  const argv: string[] = ["--die-with-parent", "--unshare-user", "--unshare-pid", "--unshare-uts", "--unshare-ipc"];
   if (options.newSession !== false) argv.push("--new-session");
   argv.push("--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/dev/shm", "--chdir", cwd);
-
-  for (const [key, value] of Object.entries(env)) {
-    if (key === "") continue;
-    argv.push("--setenv", key, value);
-  }
 
   const bound = new Set<string>();
   const roBind = (src: string, dest = src): void => {

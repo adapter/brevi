@@ -38,7 +38,7 @@ export type SandboxConnection = {
 export interface SandboxLaunch {
   file: string;
   args: string[];
-  /** Sanitized environment for the bwrap process and, via --setenv, the inner command. */
+  /** Complete sanitized environment inherited by the wrapper and inner command. */
   env: Record<string, string>;
 }
 

@@ -36,14 +36,18 @@ describe("wrapInBwrap", () => {
   });
 
   test("runs the command after -- and binds the workspace root", () => {
+    const env = { ...ENV, ANTHROPIC_API_KEY: "sk-secret-value" };
     const launch = wrapInBwrap(TOOLS, "/tmp/run-1", "claude", ["-p", "hi"], "/tmp/run-1/workspace", {
-      env: ENV,
+      env,
     });
-    expect(launch.env).toEqual(ENV);
+    expect(launch.env).toEqual(env);
     const args = bwrapArgs(launch.args);
     expect(args).toContain("--die-with-parent");
     expect(args).toContain("--unshare-user");
-    expect(args).toContain("--clearenv");
+    expect(args).not.toContain("--clearenv");
+    expect(args).not.toContain("--setenv");
+    expect(args).not.toContain("ANTHROPIC_API_KEY");
+    expect(args).not.toContain("sk-secret-value");
     expect(args).toContain("--new-session");
     expect(args).toContain("--tmpfs");
     expect(args).toContain("/dev/shm");
@@ -55,9 +59,6 @@ describe("wrapInBwrap", () => {
     expect(args.slice(dash)).toEqual(["--", "claude", "-p", "hi"]);
     expect(args).toContain("--chdir");
     expect(args[args.indexOf("--chdir") + 1]).toBe("/tmp/run-1/workspace");
-    expect(args).toContain("--setenv");
-    expect(args[args.indexOf("--setenv") + 1]).toBe("HOME");
-    expect(args[args.indexOf("--setenv") + 2]).toBe("/tmp/run-1/home");
   });
 
   test("binds the resolv.conf override over /etc/resolv.conf, but never a symlink", () => {
@@ -123,7 +124,7 @@ describe("wrapInBwrap", () => {
     });
     const args = bwrapArgs(launch.args);
     expect(args).not.toContain("--new-session");
-    expect(args).toContain("--clearenv");
+    expect(args).not.toContain("--clearenv");
   });
 
   test("does not bind the operator home or the whole cache tree", () => {

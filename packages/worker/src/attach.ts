@@ -150,7 +150,9 @@ export function createAttachSessions(deps: AttachSessionsDeps): AttachSessions {
       );
       await sandbox.exec("chmod", ["755", scriptPath]);
 
-      const launch = sandbox.wrap("/bin/sh", [scriptPath], undefined, { newSession: false });
+      const launch = sandbox.wrap("/bin/sh", [scriptPath], undefined, {
+        newSession: false,
+      });
       const file = launch.file;
       const args = launch.args;
 
@@ -159,9 +161,9 @@ export function createAttachSessions(deps: AttachSessionsDeps): AttachSessions {
         releaseSession(session);
         return;
       }
-      // launch.env is the same allowlist exec uses (no worker credential, HOME
-      // is the workspace). wrap also --clearenv/--setenv so a forgotten env
-      // here cannot leak the host environment into the session.
+      // launch.env is the same complete allowlist exec uses (no worker
+      // credential, HOME is the workspace). Passing it as the PTY's full env
+      // prevents host variables from leaking into the wrapper or session.
       session.pty = spawn(file, args, {
         name: "xterm-256color",
         cols,
