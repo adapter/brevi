@@ -5,9 +5,15 @@ import type { MachineUsage, UsageResponse } from "@brevi/shared";
 import { mergeModelRows } from "@brevi/shared/usage";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { api } from "../lib/api";
 import { Plate } from "./Bits";
-import { Refresh } from "./Icons";
+import { ChevronRight, Refresh } from "./Icons";
 
 /**
  * The Usage page: agent spend over time, per machine, read with ccusage's
@@ -55,7 +61,10 @@ function windowDays(range: Range): string[] {
 
 const usd = (value: number) =>
   value >= 100 ? `$${Math.round(value)}` : `$${value.toFixed(2)}`;
-const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+const compact = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
 
 /** Short axis/tooltip label for a "YYYY-MM-DD" key, e.g. "Aug 17". */
 function dayLabel(key: string): string {
@@ -65,7 +74,13 @@ function dayLabel(key: string): string {
 }
 
 /** A rect path whose top corners are rounded; data ends round, baseline doesn't. */
-function topRoundedRect(x: number, y: number, w: number, h: number, r: number): string {
+function topRoundedRect(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+): string {
   const radius = Math.min(r, w / 2, h);
   return [
     `M ${x} ${y + h}`,
@@ -84,6 +99,17 @@ export function UsagePage() {
   const [loading, setLoading] = useState(true);
   const [range, setRange] = useState<Range>(30);
   const [hovered, setHovered] = useState<number | null>(null);
+  /** Machine ids hidden from the view; empty means every machine counts. */
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+
+  const toggleMachine = (id: string) => {
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const load = useCallback(() => {
     setLoading(true);
@@ -91,7 +117,9 @@ export function UsagePage() {
     api
       .usage()
       .then((response) => setData(response))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .catch((err: unknown) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      )
       .finally(() => setLoading(false));
   }, []);
 
@@ -108,14 +136,21 @@ export function UsagePage() {
       const byDate = new Map(machine.days.map((day) => [day.date, day]));
       return { machine, byDate };
     });
+    // Segments stay aligned with the full machine list so colors follow the
+    // machine, never its position in the current selection; a deselected
+    // machine contributes zero instead of shifting its neighbours' hues.
     const columns = days.map((date) => {
-      const segments = byMachine.map(({ byDate }) => byDate.get(date)?.costUsd ?? 0);
+      const segments = byMachine.map(({ machine, byDate }) =>
+        excluded.has(machine.id) ? 0 : (byDate.get(date)?.costUsd ?? 0),
+      );
       return { date, segments, total: segments.reduce((a, b) => a + b, 0) };
     });
     const models = mergeModelRows(
-      ...byMachine.flatMap(({ byDate }) =>
-        days.map((date) => byDate.get(date)?.models ?? []),
-      ),
+      ...byMachine
+        .filter(({ machine }) => !excluded.has(machine.id))
+        .flatMap(({ byDate }) =>
+          days.map((date) => byDate.get(date)?.models ?? []),
+        ),
     );
     const totals = byMachine.map(({ machine, byDate }) => {
       const inWindow = days
@@ -123,6 +158,7 @@ export function UsagePage() {
         .filter((day): day is NonNullable<typeof day> => day !== undefined);
       return {
         machine,
+        selected: !excluded.has(machine.id),
         costUsd: inWindow.reduce((a, d) => a + d.costUsd, 0),
         inputTokens: inWindow.reduce((a, d) => a + d.inputTokens, 0),
         outputTokens: inWindow.reduce((a, d) => a + d.outputTokens, 0),
@@ -131,16 +167,36 @@ export function UsagePage() {
       };
     });
     return { columns, totals, models };
-  }, [machines, days]);
+  }, [machines, days, excluded]);
 
-  const rangeCost = view.totals.reduce((a, t) => a + t.costUsd, 0);
+  const selectedTotals = view.totals.filter((t) => t.selected);
+  const selectedCount = selectedTotals.length;
+  const rangeCost = selectedTotals.reduce((a, t) => a + t.costUsd, 0);
   // Cache-inclusive, matching ccusage's own totalTokens: with prompt caching
   // the raw inputTokens figure is a sliver of what actually reached the model.
-  const rangeTokens = view.totals.reduce(
-    (a, t) => a + t.inputTokens + t.outputTokens + t.cacheReadTokens + t.cacheWriteTokens,
+  const rangeTokens = selectedTotals.reduce(
+    (a, t) =>
+      a +
+      t.inputTokens +
+      t.outputTokens +
+      t.cacheReadTokens +
+      t.cacheWriteTokens,
     0,
   );
-  const rangeOut = view.totals.reduce((a, t) => a + t.outputTokens, 0);
+  const rangeOut = selectedTotals.reduce((a, t) => a + t.outputTokens, 0);
+  // The By model table totals its own rows: days without a model breakdown
+  // (older workers) count toward the tiles but cannot be split by model.
+  const modelCost = view.models.reduce((a, m) => a + m.costUsd, 0);
+  const modelTokens = view.models.reduce(
+    (a, m) =>
+      a +
+      m.inputTokens +
+      m.outputTokens +
+      m.cacheReadTokens +
+      m.cacheWriteTokens,
+    0,
+  );
+  const modelOut = view.models.reduce((a, m) => a + m.outputTokens, 0);
   const failing = machines.filter((machine) => machine.error);
 
   return (
@@ -148,7 +204,51 @@ export function UsagePage() {
       <header className="flex items-center gap-2.5">
         <h2 className="text-[16px] font-semibold text-haze-50">Usage</h2>
         <span className="ml-auto flex items-center gap-2">
-          <div className="flex items-center rounded-full border border-ink-600 p-0.5" role="group" aria-label="Time range">
+          {machines.length > 1 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="plate"
+                    aria-label="Choose machines"
+                  />
+                }
+              >
+                {selectedCount === machines.length
+                  ? "All machines"
+                  : `${selectedCount} of ${machines.length} machines`}
+                <ChevronRight className="size-3 rotate-90 text-haze-600" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-56">
+                {view.totals.map(({ machine, selected, costUsd }, i) => (
+                  <DropdownMenuCheckboxItem
+                    key={machine.id}
+                    checked={selected}
+                    closeOnClick={false}
+                    onCheckedChange={() => toggleMachine(machine.id)}
+                  >
+                    <span
+                      className="inline-block size-2 shrink-0 rounded-full"
+                      style={{ background: SERIES[i % SERIES.length] }}
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1 truncate text-[12px]">
+                      {machine.name}
+                    </span>
+                    <span className="pl-2 font-mono text-[10.5px] tabular-nums text-haze-500">
+                      {machine.error ? "no data" : usd(costUsd)}
+                    </span>
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          <div
+            className="flex items-center rounded-full border border-ink-600 p-0.5"
+            role="group"
+            aria-label="Time range"
+          >
             {RANGES.map((r) => (
               <button
                 key={r}
@@ -156,30 +256,37 @@ export function UsagePage() {
                 onClick={() => setRange(r)}
                 aria-pressed={range === r}
                 className={`touch-target cursor-pointer rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  range === r ? "bg-ink-750 text-haze-50" : "text-haze-500 hover:text-haze-200"
+                  range === r
+                    ? "bg-ink-750 text-haze-50"
+                    : "text-haze-500 hover:text-haze-200"
                 }`}
               >
                 {r}d
               </button>
             ))}
           </div>
-          <Button variant="outline" size="plate" onClick={load} disabled={loading}>
+          <Button
+            variant="outline"
+            size="plate"
+            onClick={load}
+            disabled={loading}
+          >
             <Refresh className={`size-3 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </Button>
         </span>
       </header>
       <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
-        What the agents on this machine and every connected worker have spent, day by day, as
-        reported by ccusage from their Claude Code and Codex transcripts. Not limited to brevi
-        runs: everything ccusage can see on a machine counts. Token totals include cache reads
-        and writes; the Input column counts only fresh, uncached input.
+        What the agents on this machine and every connected worker have spent,
+        day by day, as reported by ccusage from their Claude Code and Codex
+        transcripts. Not limited to brevi runs: everything ccusage can see on a
+        machine counts. Token totals include cache reads and writes.
       </p>
 
       {loading && !data ? (
         <p className="mt-6 text-[12.5px] leading-relaxed text-haze-600">
-          Reading usage on each machine. The first read can take a minute while ccusage is
-          installed.
+          Reading usage on each machine. The first read can take a minute while
+          ccusage is installed.
         </p>
       ) : error && !data ? (
         <div className="mt-6 rounded-lg border border-rust-500/35 bg-rust-500/8 p-3">
@@ -188,8 +295,14 @@ export function UsagePage() {
       ) : (
         <>
           <div className="mt-5 grid grid-cols-3 gap-2.5">
-            <StatTile label={`Cost, last ${range} days`} value={usd(rangeCost)} />
-            <StatTile label="Tokens, total" value={compact.format(rangeTokens)} />
+            <StatTile
+              label={`Cost, last ${range} days`}
+              value={usd(rangeCost)}
+            />
+            <StatTile
+              label="Tokens, total"
+              value={compact.format(rangeTokens)}
+            />
             <StatTile label="Output tokens" value={compact.format(rangeOut)} />
           </div>
 
@@ -198,16 +311,23 @@ export function UsagePage() {
               <Plate className="text-haze-400">Cost per day</Plate>
               {machines.length > 1 && (
                 <span className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1">
-                  {machines.map((machine, i) => (
-                    <span key={machine.id} className="flex items-center gap-1.5">
+                  {machines.map((machine, i) =>
+                    excluded.has(machine.id) ? null : (
                       <span
-                        className="inline-block size-2 rounded-full"
-                        style={{ background: SERIES[i % SERIES.length] }}
-                        aria-hidden="true"
-                      />
-                      <span className="text-[11px] text-haze-300">{machine.name}</span>
-                    </span>
-                  ))}
+                        key={machine.id}
+                        className="flex items-center gap-1.5"
+                      >
+                        <span
+                          className="inline-block size-2 rounded-full"
+                          style={{ background: SERIES[i % SERIES.length] }}
+                          aria-hidden="true"
+                        />
+                        <span className="text-[11px] text-haze-300">
+                          {machine.name}
+                        </span>
+                      </span>
+                    ),
+                  )}
                 </span>
               )}
             </div>
@@ -235,13 +355,15 @@ export function UsagePage() {
                 </thead>
                 <tbody>
                   {view.models.map((row) => {
-                    const share = rangeCost > 0 ? row.costUsd / rangeCost : 0;
+                    const share = modelCost > 0 ? row.costUsd / modelCost : 0;
                     return (
                       <tr
                         key={`${row.provider}/${row.model}`}
                         className="border-t border-ink-700/70 text-haze-200"
                       >
-                        <td className="py-1.5 pr-3 font-mono text-[11.5px]">{row.model}</td>
+                        <td className="py-1.5 pr-3 font-mono text-[11.5px]">
+                          {row.model}
+                        </td>
                         <td className="py-1.5 pr-3 text-haze-400">
                           {PROVIDER_LABEL[row.provider] ?? row.provider}
                         </td>
@@ -250,7 +372,10 @@ export function UsagePage() {
                         </td>
                         <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
                           {compact.format(
-                            row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheWriteTokens,
+                            row.inputTokens +
+                              row.outputTokens +
+                              row.cacheReadTokens +
+                              row.cacheWriteTokens,
                           )}
                         </td>
                         <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
@@ -261,7 +386,9 @@ export function UsagePage() {
                             <span className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-ink-700">
                               <span
                                 className="block h-full rounded-full bg-haze-400"
-                                style={{ width: `${Math.max(share * 100, 2)}%` }}
+                                style={{
+                                  width: `${Math.max(share * 100, 2)}%`,
+                                }}
                               />
                             </span>
                             <span className="font-mono text-[10.5px] tabular-nums text-haze-500">
@@ -273,55 +400,34 @@ export function UsagePage() {
                     );
                   })}
                 </tbody>
+                <tfoot>
+                  <tr className="border-t border-ink-600 text-haze-50">
+                    <td className="py-1.5 pr-3 font-medium" colSpan={2}>
+                      Total
+                    </td>
+                    <td className="py-1.5 pr-3 text-right font-mono font-medium tabular-nums">
+                      {usd(modelCost)}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right font-mono font-medium tabular-nums">
+                      {compact.format(modelTokens)}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right font-mono font-medium tabular-nums">
+                      {compact.format(modelOut)}
+                    </td>
+                    <td className="py-1.5 pl-3" />
+                  </tr>
+                </tfoot>
               </table>
             </Card>
           )}
 
-          <Card className="mt-2.5 block overflow-x-auto px-4 py-3.5">
-            <Plate className="text-haze-400">By machine</Plate>
-            <table className="mt-2.5 w-full text-left text-[12px]">
-              <thead>
-                <tr className="text-[10.5px] font-medium text-haze-600">
-                  <th className="py-1 pr-3 font-medium">Machine</th>
-                  <th className="py-1 pr-3 text-right font-medium">Cost</th>
-                  <th className="py-1 pr-3 text-right font-medium">Tokens</th>
-                  <th className="py-1 pr-3 text-right font-medium">Input</th>
-                  <th className="py-1 pr-3 text-right font-medium">Output</th>
-                  <th className="py-1 pr-3 text-right font-medium">Cache read</th>
-                  <th className="py-1 text-right font-medium">Cache write</th>
-                </tr>
-              </thead>
-              <tbody>
-                {view.totals.map(({ machine, ...t }, i) => (
-                  <tr key={machine.id} className="border-t border-ink-700/70 text-haze-200">
-                    <td className="py-1.5 pr-3">
-                      <span className="flex items-center gap-1.5">
-                        <span
-                          className="inline-block size-2 shrink-0 rounded-full"
-                          style={{ background: SERIES[i % SERIES.length] }}
-                          aria-hidden="true"
-                        />
-                        {machine.name}
-                      </span>
-                    </td>
-                    <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{usd(t.costUsd)}</td>
-                    <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
-                      {compact.format(t.inputTokens + t.outputTokens + t.cacheReadTokens + t.cacheWriteTokens)}
-                    </td>
-                    <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{compact.format(t.inputTokens)}</td>
-                    <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{compact.format(t.outputTokens)}</td>
-                    <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{compact.format(t.cacheReadTokens)}</td>
-                    <td className="py-1.5 text-right font-mono tabular-nums">{compact.format(t.cacheWriteTokens)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Card>
-
           {failing.length > 0 && (
             <div className="mt-2.5 rounded-lg border border-iris-400/35 bg-iris-400/8 p-3">
               {failing.map((machine) => (
-                <p key={machine.id} className="text-[12px] leading-relaxed text-iris-400">
+                <p
+                  key={machine.id}
+                  className="text-[12px] leading-relaxed text-iris-400"
+                >
                   {machine.name}: {machine.error}
                 </p>
               ))}
@@ -375,13 +481,31 @@ function UsageChart({
 
   return (
     <div className="relative mt-2" onMouseLeave={() => onHover(null)}>
-      <svg viewBox={`0 0 ${W} ${H}`} className="block w-full" role="img" aria-label="Cost per day, stacked by machine">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="block w-full"
+        role="img"
+        aria-label="Cost per day, stacked by machine"
+      >
         {gridLines.map((f) => {
           const y = PAD.top + plotH - f * plotH;
           return (
             <g key={f}>
-              <line x1={PAD.left} x2={W - PAD.right} y1={y} y2={y} stroke="var(--color-ink-700)" strokeWidth="1" />
-              <text x={PAD.left - 6} y={y + 3} textAnchor="end" fontSize="10" fill="var(--color-haze-600)">
+              <line
+                x1={PAD.left}
+                x2={W - PAD.right}
+                y1={y}
+                y2={y}
+                stroke="var(--color-ink-700)"
+                strokeWidth="1"
+              />
+              <text
+                x={PAD.left - 6}
+                y={y + 3}
+                textAnchor="end"
+                fontSize="10"
+                fill="var(--color-haze-600)"
+              >
                 {usd(ceil * f)}
               </text>
             </g>
@@ -415,7 +539,14 @@ function UsageChart({
                   fill={SERIES[m % SERIES.length]}
                 />
               ) : (
-                <rect key={m} x={x} y={yCursor} width={barW} height={h} fill={SERIES[m % SERIES.length]} />
+                <rect
+                  key={m}
+                  x={x}
+                  y={yCursor}
+                  width={barW}
+                  height={h}
+                  fill={SERIES[m % SERIES.length]}
+                />
               ),
             );
             // 2px surface gap between stacked segments.
@@ -458,19 +589,26 @@ function UsageChart({
               : { left: `${((PAD.left + (hovered + 1) * step) / W) * 100}%` }
           }
         >
-          <p className="text-[11px] font-medium text-haze-200">{dayLabel(hoveredColumn.date)}</p>
+          <p className="text-[11px] font-medium text-haze-200">
+            {dayLabel(hoveredColumn.date)}
+          </p>
           {machines.map((machine, m) => {
             const v = hoveredColumn.segments[m] ?? 0;
             if (v === 0) return null;
             return (
-              <p key={machine.id} className="mt-1 flex items-center gap-1.5 text-[11px] text-haze-300">
+              <p
+                key={machine.id}
+                className="mt-1 flex items-center gap-1.5 text-[11px] text-haze-300"
+              >
                 <span
                   className="inline-block size-2 shrink-0 rounded-full"
                   style={{ background: SERIES[m % SERIES.length] }}
                   aria-hidden="true"
                 />
                 {machine.name}
-                <span className="ml-auto pl-3 font-mono tabular-nums text-haze-200">{usd(v)}</span>
+                <span className="ml-auto pl-3 font-mono tabular-nums text-haze-200">
+                  {usd(v)}
+                </span>
               </p>
             );
           })}

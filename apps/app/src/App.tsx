@@ -3,14 +3,13 @@ import type React from "react";
 import type { Run } from "@brevi/shared";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "./components/AppSidebar";
 import { ConfigurationPage } from "./components/Configuration";
 import { Overview } from "./components/Overview";
 import { RunDetail } from "./components/RunDetail";
 import { Setup } from "./components/Setup";
 import { UsagePage } from "./components/Usage";
-import { SiteHeader } from "./components/SiteHeader";
 import { Close, Warn } from "./components/Icons";
 import { repoDisplay } from "./lib/repo";
 import { isActive } from "./lib/status";
@@ -77,6 +76,7 @@ export default function App() {
       style={{ "--sidebar-width": "18rem" } as React.CSSProperties}
     >
       <AppSidebar
+        conn={conn}
         tickets={tickets}
         runs={runs}
         now={now}
@@ -99,8 +99,14 @@ export default function App() {
         onOpenWorkers={() => openConfig("workers")}
       />
 
-      <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
-        <SiteHeader conn={conn} />
+      <SidebarInset className="relative flex h-svh min-w-0 flex-col overflow-hidden">
+        {/* No top bar: below xl the offcanvas sidebar still needs its toggle. */}
+        <div className="absolute top-2.5 left-2.5 z-30 xl:hidden">
+          <SidebarTrigger
+            aria-label="Toggle runs"
+            className="rounded-lg border border-ink-700 bg-ink-850 text-haze-400 shadow-sm"
+          />
+        </div>
 
         {notice && (
           <Alert

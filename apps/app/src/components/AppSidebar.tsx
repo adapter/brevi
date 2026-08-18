@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { BreviConfig, HealthResponse, LinearStatus, Run, Ticket, WorkerView } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -6,6 +7,13 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Sidebar,
   SidebarContent,
@@ -24,11 +32,19 @@ import {
 } from "../lib/linear";
 import { repoDisplay } from "../lib/repo";
 import { isActive, isTerminal, STATUS_TONE } from "../lib/status";
-import type { Page } from "../lib/useOrchestrator";
+import type { Connection, Page } from "../lib/useOrchestrator";
 import { Plate, StatusDot } from "./Bits";
 import { PROVIDERS } from "./config/ConnectorsSection";
 import { Archive, ChevronRight, Gear, Graph, Play, Plus, Repo, Unarchive } from "./Icons";
 import { ThemeToggle } from "./ThemeToggle";
+
+/** Orchestrator connection states, compact enough for the sidebar header. */
+const CONNECTION = {
+  connecting: { label: "Connecting", dot: "bg-haze-600", text: "text-haze-500", pulse: false },
+  live: { label: "Live", dot: "bg-mint-500", text: "text-haze-500", pulse: true },
+  reconnecting: { label: "Reconnecting", dot: "bg-iris-400", text: "text-haze-500", pulse: true },
+  offline: { label: "Offline", dot: "bg-rust-500", text: "text-rust-400", pulse: false },
+} as const;
 
 /** Everything one project (repo key) holds, in the order the list renders it. */
 interface ProjectGroup {
@@ -45,6 +61,7 @@ interface ProjectGroup {
 }
 
 export function AppSidebar({
+  conn,
   tickets,
   runs,
   now,
@@ -66,6 +83,7 @@ export function AppSidebar({
   onAddRepo,
   onOpenWorkers,
 }: {
+  conn: Connection;
   tickets: Ticket[];
   runs: Run[];
   now: number;
@@ -103,6 +121,8 @@ export function AppSidebar({
   const onConfig = page.startsWith("config:");
 
   const { isMobile, setOpenMobile } = useSidebar();
+  /** Which list the one sidebar group shows: live work or the archive. */
+  const [list, setList] = useState<"runs" | "archived">("runs");
   const openRun = (runId: string) => {
     if (isMobile) setOpenMobile(false);
     onOpenRun(runId);
@@ -138,7 +158,20 @@ export function AppSidebar({
               v{health.version}
             </span>
           )}
-          <span className="ml-auto">
+          <span className="ml-auto flex items-center gap-1">
+            <span
+              className={`mr-1 flex items-center gap-1.5 ${CONNECTION[conn].text}`}
+              title={conn === "offline" ? "Orchestrator offline" : CONNECTION[conn].label}
+            >
+              <span
+                className={`inline-block size-[6px] rounded-full ${CONNECTION[conn].dot} ${
+                  CONNECTION[conn].pulse ? "animate-beacon" : ""
+                }`}
+              />
+              <span className="text-[10.5px] leading-none font-medium">
+                {CONNECTION[conn].label}
+              </span>
+            </span>
             <ThemeToggle />
           </span>
         </div>
@@ -147,10 +180,42 @@ export function AppSidebar({
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupLabel className="gap-2 pr-1">
-            <Plate className="text-haze-400">Runs</Plate>
-            {runCount > 0 && (
-              <span className="font-mono text-[10px] leading-none text-haze-700">{runCount}</span>
-            )}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Choose list"
+                    className="touch-target flex cursor-pointer items-center gap-1.5 rounded-md text-left"
+                  />
+                }
+              >
+                <Plate className="text-haze-400">{list === "runs" ? "Runs" : "Archived"}</Plate>
+                <span className="font-mono text-[10px] leading-none text-haze-700">
+                  {list === "runs" ? runCount : archived.length}
+                </span>
+                <ChevronRight className="size-3 rotate-90 text-haze-700" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="min-w-40">
+                <DropdownMenuRadioGroup
+                  value={list}
+                  onValueChange={(value) => setList(value as "runs" | "archived")}
+                >
+                  <DropdownMenuRadioItem value="runs">
+                    Runs
+                    <span className="ml-auto pl-3 font-mono text-[10.5px] text-haze-600">
+                      {runCount}
+                    </span>
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="archived">
+                    Archived
+                    <span className="ml-auto pl-3 font-mono text-[10.5px] text-haze-600">
+                      {archived.length}
+                    </span>
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <span className="ml-auto">
               <Button
                 variant="ghost"
@@ -165,6 +230,30 @@ export function AppSidebar({
             </span>
           </SidebarGroupLabel>
           <SidebarGroupContent>
+            {list === "archived" ? (
+              archived.length === 0 ? (
+                <p className="px-2 py-2 text-[12.5px] leading-relaxed text-haze-700">
+                  Nothing archived yet. Finished runs land here once archived, by hand or on
+                  their own.
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-1 px-1">
+                  {archived.map((run) => (
+                    <li key={run.id}>
+                      <RunRow
+                        run={run}
+                        now={now}
+                        selected={run.id === selectedRunId}
+                        busy={busy[run.id] === true}
+                        onOpen={() => openRun(run.id)}
+                        onArchive={() => onUnarchiveRun(run.id)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )
+            ) : (
+              <>
             {showQueueOnly && hostExecution?.kind === "none" && (
               <QueueOnlyNotice reason={hostExecution.reason} onOpenWorkers={onOpenWorkers} />
             )}
@@ -195,42 +284,11 @@ export function AppSidebar({
                 ))}
               </div>
             )}
+              </>
+            )}
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Pinned to the sidebar's bottom edge, out of the way of live work. */}
-        {archived.length > 0 && (
-          <div className="mt-auto border-t border-sidebar-border px-3 py-2">
-            <Collapsible>
-              <CollapsibleTrigger className="group/archived touch-target flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-ink-800/60">
-                <ChevronRight className="size-3 shrink-0 text-haze-700 transition-transform group-data-[panel-open]/archived:rotate-90" />
-                <Archive className="size-3.5 shrink-0 text-haze-600" />
-                <span className="min-w-0 truncate text-[12.5px] font-medium text-haze-400">
-                  Archived
-                </span>
-                <span className="ml-auto font-mono text-[10px] leading-none text-haze-700">
-                  {archived.length}
-                </span>
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <ul className="flex flex-col gap-1 pt-0.5 pr-0.5 pb-1.5 pl-5">
-                  {archived.map((run) => (
-                    <li key={run.id}>
-                      <RunRow
-                        run={run}
-                        now={now}
-                        selected={run.id === selectedRunId}
-                        busy={busy[run.id] === true}
-                        onOpen={() => openRun(run.id)}
-                        onArchive={() => onUnarchiveRun(run.id)}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              </CollapsibleContent>
-            </Collapsible>
-          </div>
-        )}
       </SidebarContent>
 
       <SidebarFooter className="gap-0.5 border-t border-sidebar-border p-2">
