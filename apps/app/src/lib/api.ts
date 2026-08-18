@@ -18,6 +18,7 @@ import type {
   RunEvent,
   SettingsUpdateResponse,
   Ticket,
+  UsageResponse,
   WorkerRenameRequest,
   WorkerProvisionRequest,
   WorkerProvisionResponse,
@@ -115,6 +116,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ patch }),
     }),
+  usage: () => json<UsageResponse>("/api/usage"),
   workers: () => json<FleetResponse>("/api/workers"),
   renameWorker: (id: string, name: string) =>
     json<FleetResponse>(`/api/workers/${encodeURIComponent(id)}/rename`, {

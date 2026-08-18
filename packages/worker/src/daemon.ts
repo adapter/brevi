@@ -20,7 +20,7 @@ import {
 } from "@brevi/shared";
 import { createSandboxProvider, resolveBinary, type SandboxProvider } from "@brevi/sandbox";
 import { loadConfig } from "@brevi/orchestrator";
-import { isTerminal, LinearService } from "@brevi/orchestrator/internal";
+import { isTerminal, LinearService, readMachineUsage } from "@brevi/orchestrator/internal";
 import { createAttachSessions, type AttachSessions } from "./attach.js";
 import { connectToHost, type WorkerConnection } from "./connection.js";
 import { executeFollowUp } from "./followup.js";
@@ -665,6 +665,22 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
         return;
       case "attach-close":
         attachSessions.close(message.attachId);
+        return;
+      case "usage-report":
+        // Read this machine's ccusage daily report and answer; a failed read
+        // still answers, so the host's request never has to time out.
+        void readMachineUsage()
+          .then((days) =>
+            connection.send({ type: "usage-report-result", requestId: message.requestId, days }),
+          )
+          .catch((error: unknown) =>
+            connection.send({
+              type: "usage-report-result",
+              requestId: message.requestId,
+              days: [],
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
         return;
       // registered/rejected/revoked are handled inside connection.ts itself.
       default:

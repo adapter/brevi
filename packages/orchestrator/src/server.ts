@@ -343,6 +343,14 @@ function buildApp(
 
   app.get("/api/runs", (c) => c.json(orchestrator.listRuns()));
 
+  app.get("/api/usage", async (c) => {
+    try {
+      return c.json(await orchestrator.usage());
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
   app.get("/api/runs/:id", (c) => {
     const run = orchestrator.getRun(c.req.param("id"));
     if (!run) return c.json({ error: "run not found" }, 404);

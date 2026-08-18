@@ -627,6 +627,28 @@ export const attachErrorMessageSchema = z.object({
 });
 export type AttachErrorMessage = z.infer<typeof attachErrorMessageSchema>;
 
+/** One calendar day of ccusage-reported usage, mirroring UsageDay in usage.ts. */
+export const usageDaySchema = z.object({
+  date: z.string(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheReadTokens: z.number(),
+  cacheWriteTokens: z.number(),
+  costUsd: z.number(),
+});
+
+/**
+ * The worker's answer to a usage-report request: the machine's daily usage
+ * as ccusage sees it, or why the read produced nothing.
+ */
+export const usageReportResultMessageSchema = z.object({
+  type: z.literal("usage-report-result"),
+  requestId: z.string(),
+  days: z.array(usageDaySchema),
+  error: z.string().optional(),
+});
+export type UsageReportResultMessage = z.infer<typeof usageReportResultMessageSchema>;
+
 export const workerMessageSchema = z.discriminatedUnion("type", [
   registerMessageSchema,
   heartbeatMessageSchema,
@@ -642,6 +664,7 @@ export const workerMessageSchema = z.discriminatedUnion("type", [
   attachDataMessageSchema,
   attachExitMessageSchema,
   attachErrorMessageSchema,
+  usageReportResultMessageSchema,
 ]);
 export type WorkerMessage = z.infer<typeof workerMessageSchema>;
 
@@ -868,6 +891,16 @@ export const attachCloseMessageSchema = z.object({
 });
 export type AttachCloseMessage = z.infer<typeof attachCloseMessageSchema>;
 
+/**
+ * Ask the worker for its machine's daily usage (ccusage's daily report).
+ * Answered with usage-report-result carrying the same requestId.
+ */
+export const usageReportMessageSchema = z.object({
+  type: z.literal("usage-report"),
+  requestId: z.string(),
+});
+export type UsageReportMessage = z.infer<typeof usageReportMessageSchema>;
+
 export const hostMessageSchema = z.discriminatedUnion("type", [
   registeredMessageSchema,
   rejectedMessageSchema,
@@ -884,6 +917,7 @@ export const hostMessageSchema = z.discriminatedUnion("type", [
   attachInputMessageSchema,
   attachResizeMessageSchema,
   attachCloseMessageSchema,
+  usageReportMessageSchema,
 ]);
 export type HostMessage = z.infer<typeof hostMessageSchema>;
 

@@ -32,6 +32,8 @@ export { AgentLimitError, agentProvider, detectLimit, isAgentFailureEvent, resum
 
 export { LinearService, type LinearAuthHooks } from "./linear.js";
 
+export { readMachineUsage } from "./machineUsage.js";
+
 export { memoryKeyFor, readRunMemories } from "./memory.js";
 
 export { uploadRunEvidence, type UploadedEvidence } from "./r2.js";

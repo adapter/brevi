@@ -98,11 +98,12 @@ export type ConfigSection =
   | "orchestrator"
   | "server";
 
-export type Page = "home" | "setup" | `config:${ConfigSection}`;
+export type Page = "home" | "setup" | "usage" | `config:${ConfigSection}`;
 
 /** Non-run pages live at fixed paths; anything else is the home/run view. */
 function pageFromPath(pathname: string): Page {
   if (/^\/setup\/?$/.test(pathname)) return "setup";
+  if (/^\/usage\/?$/.test(pathname)) return "usage";
   const match =
     /^\/config(?:\/(connectors|repositories|agent|workers|memory|orchestrator|server))?\/?$/.exec(
       pathname,
@@ -378,6 +379,15 @@ export function useOrchestrator() {
     [selectRun],
   );
 
+  /** Open the Usage page at its own URL. */
+  const openUsage = useCallback(() => {
+    if (window.location.pathname !== "/usage") {
+      window.history.pushState(null, "", desktopPath("/usage"));
+    }
+    dispatch({ t: "page", page: "usage" });
+    selectRun(null);
+  }, [selectRun]);
+
   // A bare /config URL is valid (defaults to Connectors) but should not stay
   // in the address bar as-is: normalize it to the real section URL on load
   // without adding a history entry, so refresh reflects the actual page.
@@ -512,6 +522,7 @@ export function useOrchestrator() {
     events: state.events,
     openRun,
     openConfig,
+    openUsage,
     runTicket,
     cancelRun,
     retryRun,

@@ -58,6 +58,13 @@
   --color-pr-merged: #8250df;
   --color-pr-closed: #cf222e;
 
+  /* Usage-chart series (see the dark block for the assignment rules). */
+  --color-series-1: #2e6fd8;
+  --color-series-2: #9a6a10;
+  --color-series-3: #0e8e6e;
+  --color-series-4: #4a6ada;
+  --color-series-5: #d13438;
+
   --color-btn: #171717;
   --color-btn-foreground: #ffffff;
 }
@@ -124,6 +131,17 @@
   --color-pr-draft: #8b949e;
   --color-pr-merged: #a371f7;
   --color-pr-closed: #f85149;
+
+  /*
+    Usage-chart categorical series, in fixed assignment order. Validated for
+    lightness band, CVD separation, and contrast against the card surface in
+    both themes; series i keeps the same hue family across themes.
+  */
+  --color-series-1: #4a86e8;
+  --color-series-2: #b8862f;
+  --color-series-3: #12967a;
+  --color-series-4: #7d8bea;
+  --color-series-5: #d95751;
 
   /* Inverted-monochrome action colour: white on graphite, black on porcelain. */
   --color-btn: #f5f5f5;

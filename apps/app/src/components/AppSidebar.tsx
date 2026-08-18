@@ -27,7 +27,7 @@ import { isActive, isTerminal, STATUS_TONE } from "../lib/status";
 import type { Page } from "../lib/useOrchestrator";
 import { Plate, StatusDot } from "./Bits";
 import { PROVIDERS } from "./config/ConnectorsSection";
-import { Archive, ChevronRight, Gear, Play, Repo, Unarchive } from "./Icons";
+import { Archive, ChevronRight, Gear, Graph, Play, Plus, Repo, Unarchive } from "./Icons";
 import { ThemeToggle } from "./ThemeToggle";
 
 /** Everything one project (repo key) holds, in the order the list renders it. */
@@ -62,6 +62,8 @@ export function AppSidebar({
   onArchiveRun,
   onUnarchiveRun,
   onOpenConfig,
+  onOpenUsage,
+  onAddRepo,
   onOpenWorkers,
 }: {
   tickets: Ticket[];
@@ -83,6 +85,9 @@ export function AppSidebar({
   onArchiveRun: (runId: string) => void;
   onUnarchiveRun: (runId: string) => void;
   onOpenConfig: () => void;
+  onOpenUsage: () => void;
+  /** Opens the Repositories config page, where a repo is added and mapped to Linear. */
+  onAddRepo: () => void;
   /** Opens the Workers config page, for the queue-only notice below. */
   onOpenWorkers: () => void;
 }) {
@@ -141,11 +146,23 @@ export function AppSidebar({
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel className="gap-2">
+          <SidebarGroupLabel className="gap-2 pr-1">
             <Plate className="text-haze-400">Runs</Plate>
             {runCount > 0 && (
               <span className="font-mono text-[10px] leading-none text-haze-700">{runCount}</span>
             )}
+            <span className="ml-auto">
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Add a repository"
+                title="Add a repository and connect it to Linear"
+                onClick={onAddRepo}
+                className="text-haze-600 hover:text-haze-200"
+              >
+                <Plus className="size-3" />
+              </Button>
+            </span>
           </SidebarGroupLabel>
           <SidebarGroupContent>
             {showQueueOnly && hostExecution?.kind === "none" && (
@@ -178,43 +195,58 @@ export function AppSidebar({
                 ))}
               </div>
             )}
-            {archived.length > 0 && (
-              <div className="mt-2 border-t border-sidebar-border px-1 pt-2">
-                <Collapsible>
-                  <CollapsibleTrigger className="group/archived touch-target flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-ink-800/60">
-                    <ChevronRight className="size-3 shrink-0 text-haze-700 transition-transform group-data-[panel-open]/archived:rotate-90" />
-                    <Archive className="size-3.5 shrink-0 text-haze-600" />
-                    <span className="min-w-0 truncate text-[12.5px] font-medium text-haze-400">
-                      Archived
-                    </span>
-                    <span className="ml-auto font-mono text-[10px] leading-none text-haze-700">
-                      {archived.length}
-                    </span>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <ul className="flex flex-col gap-1 pt-0.5 pr-0.5 pb-1.5 pl-5">
-                      {archived.map((run) => (
-                        <li key={run.id}>
-                          <RunRow
-                            run={run}
-                            now={now}
-                            selected={run.id === selectedRunId}
-                            busy={busy[run.id] === true}
-                            onOpen={() => openRun(run.id)}
-                            onArchive={() => onUnarchiveRun(run.id)}
-                          />
-                        </li>
-                      ))}
-                    </ul>
-                  </CollapsibleContent>
-                </Collapsible>
-              </div>
-            )}
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {/* Pinned to the sidebar's bottom edge, out of the way of live work. */}
+        {archived.length > 0 && (
+          <div className="mt-auto border-t border-sidebar-border px-3 py-2">
+            <Collapsible>
+              <CollapsibleTrigger className="group/archived touch-target flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-ink-800/60">
+                <ChevronRight className="size-3 shrink-0 text-haze-700 transition-transform group-data-[panel-open]/archived:rotate-90" />
+                <Archive className="size-3.5 shrink-0 text-haze-600" />
+                <span className="min-w-0 truncate text-[12.5px] font-medium text-haze-400">
+                  Archived
+                </span>
+                <span className="ml-auto font-mono text-[10px] leading-none text-haze-700">
+                  {archived.length}
+                </span>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <ul className="flex flex-col gap-1 pt-0.5 pr-0.5 pb-1.5 pl-5">
+                  {archived.map((run) => (
+                    <li key={run.id}>
+                      <RunRow
+                        run={run}
+                        now={now}
+                        selected={run.id === selectedRunId}
+                        busy={busy[run.id] === true}
+                        onOpen={() => openRun(run.id)}
+                        onArchive={() => onUnarchiveRun(run.id)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </CollapsibleContent>
+            </Collapsible>
+          </div>
+        )}
       </SidebarContent>
 
-      <SidebarFooter className="border-t border-sidebar-border p-2">
+      <SidebarFooter className="gap-0.5 border-t border-sidebar-border p-2">
+        <button
+          type="button"
+          onClick={onOpenUsage}
+          aria-current={page === "usage" ? "page" : undefined}
+          className={`touch-target flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] font-medium transition-colors ${
+            page === "usage"
+              ? "bg-ink-750 text-haze-50"
+              : "text-haze-400 hover:bg-ink-800/70 hover:text-haze-100"
+          }`}
+        >
+          <Graph className="size-3.5" />
+          Usage
+        </button>
         <button
           type="button"
           onClick={() => onOpenConfig()}

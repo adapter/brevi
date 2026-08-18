@@ -9,6 +9,7 @@ import { ConfigurationPage } from "./components/Configuration";
 import { Overview } from "./components/Overview";
 import { RunDetail } from "./components/RunDetail";
 import { Setup } from "./components/Setup";
+import { UsagePage } from "./components/Usage";
 import { SiteHeader } from "./components/SiteHeader";
 import { Close, Warn } from "./components/Icons";
 import { repoDisplay } from "./lib/repo";
@@ -34,6 +35,7 @@ export default function App() {
     page,
     openRun,
     openConfig,
+    openUsage,
     runTicket,
     cancelRun,
     retryRun,
@@ -92,6 +94,8 @@ export default function App() {
         onArchiveRun={(id) => void archiveRun(id)}
         onUnarchiveRun={(id) => void unarchiveRun(id)}
         onOpenConfig={() => openConfig()}
+        onOpenUsage={openUsage}
+        onAddRepo={() => openConfig("repositories")}
         onOpenWorkers={() => openConfig("workers")}
       />
 
@@ -145,6 +149,8 @@ export default function App() {
                 missingRun={selectedRunId !== null && loaded}
               />
             )
+          ) : page === "usage" ? (
+            <UsagePage />
           ) : page === "setup" ? (
             <Setup
               config={config}

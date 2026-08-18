@@ -44,8 +44,11 @@ import {
   type WorkerState,
   type WorkerView,
   urlHost,
+  type MachineUsage,
+  type UsageResponse,
 } from "@brevi/shared";
 import { saveConfig, serializeConfig } from "./config.js";
+import { readMachineUsage } from "./machineUsage.js";
 import {
   discoverAnthropicCredential,
   discoverCodexCredential,
@@ -464,6 +467,63 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   /** Every enrolled worker, merged with its live connection state, for the Workers page. */
   listWorkers(): WorkerView[] {
     return this.#workers?.list() ?? [];
+  }
+
+  /** Cached usage collection; ccusage reads across machines are not free. */
+  #usageCache?: { at: number; promise: Promise<UsageResponse> };
+
+  /**
+   * Usage over time for every machine: the host itself plus each enrolled
+   * worker, each read with ccusage's daily report. Collects at most once a
+   * minute; concurrent callers share the in-flight collection. Workers
+   * flagged local run on the host's own machine and would double-count it,
+   * so the host read covers them.
+   */
+  usage(): Promise<UsageResponse> {
+    const cached = this.#usageCache;
+    if (cached && Date.now() - cached.at < 60_000) return cached.promise;
+    const promise = this.#collectUsage();
+    this.#usageCache = { at: Date.now(), promise };
+    promise.catch(() => {
+      if (this.#usageCache?.promise === promise) this.#usageCache = undefined;
+    });
+    return promise;
+  }
+
+  async #collectUsage(): Promise<UsageResponse> {
+    const errorText = (error: unknown) =>
+      error instanceof Error ? error.message : String(error);
+    const host = readMachineUsage()
+      .then((days): MachineUsage => ({ id: "host", name: "This machine", days }))
+      .catch((error): MachineUsage => ({
+        id: "host",
+        name: "This machine",
+        days: [],
+        error: errorText(error),
+      }));
+    const remote = (this.#workers?.list() ?? [])
+      .filter((worker) => !worker.local)
+      .map((worker) => {
+        if (worker.connection !== "online" || !this.#workers) {
+          return Promise.resolve<MachineUsage>({
+            id: worker.id,
+            name: worker.name,
+            days: [],
+            error: "worker is offline",
+          });
+        }
+        return this.#workers
+          .requestUsage(worker.id)
+          .then((days): MachineUsage => ({ id: worker.id, name: worker.name, days }))
+          .catch((error): MachineUsage => ({
+            id: worker.id,
+            name: worker.name,
+            days: [],
+            error: errorText(error),
+          }));
+      });
+    const machines = [await host, ...(await Promise.all(remote))];
+    return { machines, collectedAt: new Date().toISOString() };
   }
 
   /**
