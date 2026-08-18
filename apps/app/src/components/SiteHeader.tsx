@@ -8,8 +8,8 @@ import { PROVIDERS } from "./config/ConnectorsSection";
 
 const CONNECTION = {
   connecting: { label: "Connecting", dot: "bg-haze-600", text: "text-haze-400", live: false },
-  live: { label: "Live", dot: "bg-mint-500", text: "text-mint-400", live: true },
-  reconnecting: { label: "Reconnecting", dot: "bg-ember-300", text: "text-ember-300", live: false },
+  live: { label: "Live", dot: "bg-mint-500", text: "text-haze-400", live: true },
+  reconnecting: { label: "Reconnecting", dot: "bg-iris-400", text: "text-haze-400", live: false },
   offline: { label: "Orchestrator offline", dot: "bg-rust-500", text: "text-rust-400", live: false },
 } as const;
 
@@ -35,7 +35,7 @@ export function SiteHeader({
   const onConfig = page.startsWith("config:");
 
   return (
-    <header className="relative z-20 flex h-14 shrink-0 items-center gap-2.5 border-b border-ink-700 bg-ink-900/80 px-4 backdrop-blur-md">
+    <header className="relative z-20 flex h-13 shrink-0 items-center gap-2.5 border-b border-ink-700 bg-background px-4">
       <SidebarTrigger className="-ml-1.5 text-haze-400 xl:hidden" aria-label="Toggle runs" />
 
       <Button
@@ -49,7 +49,7 @@ export function SiteHeader({
           Configuration
           {disconnected && (
             <span
-              className="absolute -top-1 -right-1.5 size-[6px] rounded-full bg-ember-400"
+              className="absolute -top-1 -right-1.5 size-[6px] rounded-full bg-iris-400"
               role="img"
               aria-label="A connection needs attention"
               title="A connection needs attention"

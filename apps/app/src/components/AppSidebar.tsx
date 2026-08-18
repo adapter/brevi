@@ -103,7 +103,7 @@ export function AppSidebar({
       <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
         <div className="flex items-center gap-2.5">
           <img src="/logo.png" alt="" className="size-[22px]" />
-          <span className="font-plate text-[15px] leading-none font-semibold tracking-[0.02em] text-haze-50">
+          <span className="text-[14px] leading-none font-semibold text-haze-50">
             brevi
           </span>
           {health?.version && (
@@ -237,7 +237,7 @@ function QueueOnlyNotice({
   onOpenWorkers: () => void;
 }) {
   return (
-    <div className="mx-1 mb-2 rounded-[5px] border border-haze-700/50 bg-haze-600/10 p-3">
+    <div className="mx-1 mb-2 rounded-lg border border-ink-700 bg-ink-850 p-3">
       <p className="text-[12px] leading-relaxed text-haze-400">
         This machine can&apos;t run agents itself. Queued runs will wait for a Linux worker with
         bubblewrap.{" "}
@@ -281,18 +281,15 @@ function TicketStrip({
   onRun: () => void;
   onOpenRun: (runId: string) => void;
 }) {
-  const band = active ? STATUS_TONE[active.status].fill : "bg-peri-400/60";
-
   return (
     <Card size="sm" className="group flex-row gap-0 overflow-hidden rounded-strip py-0">
-      <span className={`w-[3px] shrink-0 ${band}`} aria-hidden="true" />
-      <div className="min-w-0 flex-1 p-2.5">
+      <div className="min-w-0 flex-1 p-3">
         <div className="flex items-center gap-2">
           <a
             href={ticket.url}
             target="_blank"
             rel="noreferrer"
-            className="group/id touch-target inline-flex items-center gap-1 font-plate text-[10px] tracking-[0.08em] text-haze-300 hover:text-haze-50"
+            className="group/id touch-target inline-flex items-center gap-1 font-mono text-[11px] text-haze-400 hover:text-haze-50"
           >
             {ticket.identifier}
             <External className="size-3 text-haze-700 opacity-0 transition-opacity group-hover/id:opacity-100 pointer-coarse:opacity-100" />
@@ -384,7 +381,7 @@ function RunStrip({
   return (
     <div
       className={`relative flex overflow-hidden rounded-strip bg-card ring-1 transition-colors hover:bg-ink-800 ${
-        selected ? "bg-ink-800 ring-haze-600/50" : "ring-foreground/10"
+        selected ? "bg-ink-800 ring-ink-500" : "ring-foreground/10"
       }`}
     >
       {/* The whole card is one link; controls float above it. */}
@@ -399,8 +396,7 @@ function RunStrip({
         aria-label={`Open run for ${run.ticket.identifier}: ${run.ticket.title}`}
         className="absolute inset-0 rounded-strip"
       />
-      <span className={`w-[3px] shrink-0 ${tone.fill}`} aria-hidden="true" />
-      <div className="pointer-events-none relative min-w-0 flex-1 p-2.5">
+      <div className="pointer-events-none relative min-w-0 flex-1 p-3">
         <div className="flex items-center gap-1.5">
           <StatusDot status={run.status} size={6} />
           <span className={`plate ${tone.fg}`}>{tone.label}</span>
@@ -463,7 +459,7 @@ function RunStrip({
           </span>
         </div>
         <div className="mt-1.5 flex items-baseline gap-2">
-          <span className="shrink-0 font-plate text-[10px] tracking-[0.08em] text-haze-300">
+          <span className="shrink-0 font-mono text-[11px] text-haze-400">
             {run.ticket.identifier}
           </span>
           <span className="truncate text-[12.5px] leading-snug text-haze-50">

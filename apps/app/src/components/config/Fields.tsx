@@ -30,7 +30,7 @@ import { Check, Close, Minus, Plus, Refresh, Warn } from "../Icons";
  */
 
 const INPUT_CLASS =
-  "h-7 rounded-[4px] border-ink-600 bg-ink-950/70 px-2 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]";
+  "h-7 rounded-md border-ink-600 bg-ink-950/70 px-2 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]";
 
 /** One config subsection, saved as a unit. Enter anywhere inside submits it. */
 export function SettingsCard({
@@ -53,7 +53,7 @@ export function SettingsCard({
         }}
       >
         <CardHeader className="gap-0">
-          <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
+          <h3 className="text-[13px] font-semibold text-haze-50">
             {title}
           </h3>
           {description && (
@@ -94,7 +94,7 @@ export function SettingsCard({
               </p>
             )}
             {!draft.dirty && draft.applied === "restart" && (
-              <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-ember-300">
+              <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-iris-400">
                 <Warn className="mt-px size-3 shrink-0" />
                 Saved to config.json. Restart brevi for it to take effect.
               </p>
@@ -140,12 +140,12 @@ export function FieldRow({
         {htmlFor ? (
           <label
             htmlFor={htmlFor}
-            className="font-plate text-[11px] font-medium tracking-[0.06em] text-haze-200"
+            className="text-[12px] font-medium text-haze-200"
           >
             {label}
           </label>
         ) : (
-          <span className="font-plate text-[11px] font-medium tracking-[0.06em] text-haze-200">
+          <span className="text-[12px] font-medium text-haze-200">
             {label}
           </span>
         )}
@@ -744,7 +744,7 @@ export function SectionIntro({ title, children }: { title: string; children: Rea
 export function Advanced({ label = "Advanced", children }: { label?: string; children: ReactNode }) {
   return (
     <Collapsible className="border-t border-ink-700 pt-2.5">
-      <CollapsibleTrigger className="group/adv flex cursor-pointer items-center gap-1.5 py-1 font-plate text-[10px] font-medium tracking-[0.12em] text-haze-700 uppercase hover:text-haze-300">
+      <CollapsibleTrigger className="group/adv flex cursor-pointer items-center gap-1.5 py-1 text-[11px] font-medium text-haze-600 hover:text-haze-300">
         <span className="w-2.5 text-center font-mono text-[9px] transition-transform group-data-[panel-open]/adv:rotate-90">
           &#9656;
         </span>

@@ -101,14 +101,14 @@ export const PROVIDERS: ProviderSpec[] = [
 
 const TONE_DOT: Record<ConnectorTone, string> = {
   ok: "bg-mint-500",
-  warn: "bg-ember-400",
+  warn: "bg-iris-400",
   error: "bg-rust-400",
   idle: "bg-haze-700",
 };
 
 const TONE_LABEL: Record<ConnectorTone, string> = {
   ok: "text-mint-400",
-  warn: "text-ember-300",
+  warn: "text-iris-400",
   error: "text-rust-400",
   idle: "text-haze-700",
 };
@@ -149,7 +149,7 @@ function ConnectorItem({
             aria-label={statusLabel}
             title={statusLabel}
           />
-          <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
+          <h3 className="text-[13px] font-semibold text-haze-50">
             {name}
           </h3>
           <span className={`min-w-0 truncate text-[11px] ${TONE_LABEL[tone]}`}>{statusLabel}</span>
@@ -270,7 +270,7 @@ function LinearPollingFields({
         if (draft.dirty && !draft.invalid && !draft.saving) draft.save();
       }}
     >
-      <p className="font-plate text-[10px] font-medium tracking-[0.12em] text-haze-700 uppercase">
+      <p className="text-[11px] font-medium text-haze-600">
         Polling
       </p>
       <TagField
@@ -534,14 +534,14 @@ function ProviderRow({
         )}
 
         {refreshWarning && (
-          <p className="mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed text-ember-300">
+          <p className="mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed text-iris-400">
             <Warn className="mt-px size-3 shrink-0" />
             {refreshWarning} brevi retries automatically; polling resumes once a refresh succeeds.
           </p>
         )}
 
         {device && (
-          <div className="mt-2.5 rounded-[5px] border border-ink-600 bg-ink-950/70 p-3">
+          <div className="mt-2.5 rounded-lg border border-ink-600 bg-ink-950/70 p-3">
             <Plate className="text-haze-700">Enter this code on GitHub</Plate>
             <p className="mt-2 select-all font-mono text-[20px] font-semibold tracking-[0.2em] text-haze-50">
               {device.userCode}
@@ -601,7 +601,7 @@ function ProviderRow({
               placeholder={spec.inputLabel}
               autoComplete="off"
               spellCheck={false}
-              className="flex-1 rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+              className="flex-1 rounded-md bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
             />
             <Button type="submit" size="plate" disabled={pending || value.trim() === ""}>
               {pending ? "Checking" : "Save"}

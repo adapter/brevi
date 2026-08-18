@@ -15,7 +15,7 @@ export function StatusDot({ status, size = 7 }: { status: RunStatus; size?: numb
   const tone = STATUS_TONE[status];
   return (
     <span
-      className={`inline-block shrink-0 rounded-[1.5px] ${tone.fill} ${tone.fg} ${
+      className={`inline-block shrink-0 rounded-full ${tone.fill} ${tone.fg} ${
         status === "running" ? "animate-beacon" : ""
       }`}
       style={{ width: size, height: size }}
@@ -121,7 +121,7 @@ export function Section({
 /** A shell command the operator is meant to run, ready to copy. */
 export function Command({ text }: { text: string }) {
   return (
-    <code className="inline-flex max-w-full select-all items-start gap-2 rounded-[4px] border border-ink-600 bg-ink-950/70 px-2 py-1.5 font-mono text-[11.5px] text-haze-200">
+    <code className="inline-flex max-w-full select-all items-start gap-2 rounded-md border border-ink-600 bg-ink-950/70 px-2 py-1.5 font-mono text-[11.5px] text-haze-200">
       <span className="text-haze-700 select-none">$</span>
       <span className="min-w-0 break-all whitespace-pre-wrap">{text}</span>
     </code>

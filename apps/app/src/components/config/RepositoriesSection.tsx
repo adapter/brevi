@@ -216,7 +216,7 @@ export function RepositoriesSection({
                     disabled={!available}
                     spellCheck={false}
                     autoFocus
-                    className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+                    className="rounded-md bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
                   />
                   <Button
                     variant="ghost"
@@ -237,7 +237,7 @@ export function RepositoriesSection({
                   </p>
                 )}
                 {available && candidates.length > 0 && (
-                  <ul className="mt-2 overflow-hidden rounded-[5px] border border-ink-600">
+                  <ul className="mt-2 overflow-hidden rounded-lg border border-ink-600">
                     {candidates.map((repo) => (
                       <li key={repo.fullName} className="border-b border-ink-700 last:border-b-0">
                         <button
@@ -362,7 +362,7 @@ function RepoCard({
         onChange={(projects) => draft.set(at("projects"), projects)}
       />
       <Collapsible>
-        <CollapsibleTrigger className="group/details flex cursor-pointer items-center gap-1.5 border-t border-ink-700 py-2.5 font-plate text-[10px] font-medium tracking-[0.12em] text-haze-700 uppercase hover:text-haze-300">
+        <CollapsibleTrigger className="group/details flex cursor-pointer items-center gap-1.5 border-t border-ink-700 py-2.5 text-[11px] font-medium text-haze-600 hover:text-haze-300">
           <ChevronRight className="size-3 transition-transform group-data-[panel-open]/details:rotate-90" />
           Details
         </CollapsibleTrigger>

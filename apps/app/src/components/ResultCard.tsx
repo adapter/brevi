@@ -35,7 +35,7 @@ export function ResultCard({ run }: { run: Run }) {
           {run.ticket.identifier} in Linear
         </Link>
         {result.branch && (
-          <span className="inline-flex items-center gap-1.5 rounded-[4px] border border-ink-600 bg-ink-950/60 px-2 py-1.5 text-haze-300">
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-ink-600 bg-ink-950/60 px-2 py-1.5 text-haze-300">
             <Branch className="size-3 text-haze-600" />
             <span className="font-mono text-[11px] leading-none select-all">{result.branch}</span>
           </span>

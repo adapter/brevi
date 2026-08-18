@@ -50,7 +50,7 @@ export function ConfigurationPage({
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-5 sm:py-7 md:px-8">
       <header className="flex items-baseline gap-2.5">
-        <h2 className="font-plate text-[13px] font-semibold tracking-[0.08em] text-haze-50 uppercase">
+        <h2 className="text-[16px] font-semibold text-haze-50">
           Configuration
         </h2>
       </header>
@@ -75,8 +75,8 @@ export function ConfigurationPage({
                 e.preventDefault();
                 onSection(id);
               }}
-              className={`touch-target -mb-px shrink-0 border-b pb-2 font-plate text-[11.5px] font-semibold tracking-[0.08em] whitespace-nowrap uppercase ${
-                active ? "border-haze-300 text-haze-50" : "border-transparent text-haze-600 hover:text-haze-300"
+              className={`touch-target -mb-px shrink-0 border-b pb-2 text-[12px] font-medium whitespace-nowrap ${
+                active ? "border-haze-50 text-haze-50" : "border-transparent text-haze-600 hover:text-haze-300"
               }`}
             >
               {label}

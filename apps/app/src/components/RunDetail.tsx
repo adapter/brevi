@@ -144,12 +144,12 @@ export function RunDetail({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/70 bg-ink-900/90 px-4 py-2">
+      <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700 bg-background px-4 py-2">
         <a
           href={run.ticket.url}
           target="_blank"
           rel="noreferrer"
-          className="group touch-target inline-flex items-center gap-1.5 font-plate text-[11px] tracking-[0.06em] text-haze-200 hover:text-haze-50"
+          className="group touch-target inline-flex items-center gap-1.5 text-[12px] font-medium text-haze-200 hover:text-haze-50"
         >
           {run.ticket.identifier}
           <External className="size-3 text-haze-700 transition-colors group-hover:text-haze-300" />
@@ -274,7 +274,7 @@ export function RunDetail({
                       {run.error && (
                         <Alert
                           variant="destructive"
-                          className="mb-4 rounded-[5px] border-rust-500/35 bg-rust-500/8 p-3"
+                          className="mb-4 rounded-lg border-rust-500/35 bg-rust-500/8 p-3"
                         >
                           <AlertTitle className="plate text-rust-400">Error</AlertTitle>
                           <AlertDescription className="mt-1 min-w-0 font-mono text-[11.5px] leading-relaxed text-wrap break-words whitespace-pre-wrap text-rust-400/90 md:text-wrap">
@@ -400,11 +400,11 @@ function TabButton({
       disabled={disabled}
       title={title}
       onClick={onClick}
-      className={`-mb-px shrink-0 touch-target border-b-2 px-3 py-2 font-plate text-[11px] tracking-[0.06em] whitespace-nowrap transition-colors ${
+      className={`-mb-px shrink-0 touch-target border-b-2 px-3 py-2 text-[12px] font-medium whitespace-nowrap transition-colors ${
         active
-          ? "border-ember-500 text-haze-50"
+          ? "border-haze-50 text-haze-50"
           : disabled
-            ? "cursor-not-allowed border-transparent text-haze-800"
+            ? "cursor-not-allowed border-transparent text-haze-700"
             : "cursor-pointer border-transparent text-haze-600 hover:text-haze-200"
       }`}
     >
@@ -436,7 +436,7 @@ function WaitingBanner({
       ? `at ${clock(resumeAt as string)} (in ${elapsed(resumeMs - now)})`
       : "any moment now";
   return (
-    <div className="rounded-[5px] border border-iris-400/35 bg-iris-400/8 p-3">
+    <div className="rounded-lg border border-iris-400/35 bg-iris-400/8 p-3">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
         <span className="plate text-iris-400">{limit ? limitLabel(limit) : "Usage limit reached"}</span>
         <span className="font-mono text-[11px] text-haze-400">
@@ -478,7 +478,7 @@ function QueuedBanner({
   onOpenWorkers: () => void;
 }) {
   return (
-    <div className="rounded-[5px] border border-haze-700/50 bg-haze-600/10 p-3">
+    <div className="rounded-lg border border-ink-700 bg-ink-850 p-3">
       <p className="text-[12.5px] leading-relaxed text-haze-400">{reason}</p>
       {hostExecution && (
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
