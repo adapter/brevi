@@ -42,12 +42,10 @@ export function startLocalWorker(
   handle: OrchestratorHandle,
   log: (line: string) => void = (line) => console.log(`[brevi local-worker] ${line}`),
 ): LocalWorkerHandle {
-  const fleetPort = handle.fleetPort;
-  if (fleetPort === null) {
-    log("fleet listener is disabled (fleet.host is empty); local execution stays off");
-    return { stop: async () => undefined };
-  }
-  const hostUrl = `http://127.0.0.1:${fleetPort}`;
+  // The loopback dashboard listener serves WORKER_WS_PATH too, and unlike
+  // the network fleet listener it always exists, so a fresh install with
+  // fleet.host unset still gets local execution.
+  const hostUrl = handle.url;
 
   let stopping = false;
   let attempts = 0;
@@ -61,6 +59,7 @@ export function startLocalWorker(
       // Every (re)start mints a fresh credential; the previous one is dead
       // the moment this resolves, which is exactly right for a restart.
       const enrollment = await handle.ensureLocalWorker("This machine");
+      if (stopping) return;
       abort = new AbortController();
       log(`starting against ${hostUrl}`);
       await runWorker({
