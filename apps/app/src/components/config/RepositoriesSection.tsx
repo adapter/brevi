@@ -168,7 +168,7 @@ export function RepositoriesSection({
         nothing do not run.
       </SectionIntro>
 
-      <div className="mt-3 flex flex-col gap-2.5">
+      <div className="mt-3 flex flex-col gap-2">
         {mapped.map(([key]) => (
           <RepoCard
             key={key}
@@ -311,21 +311,20 @@ function RepoCard({
 
   return (
     <SettingsCard
-      title={repo.remote}
-      draft={draft}
-      description={
-        <span className="flex flex-wrap items-center gap-2">
+      title={
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+          <span className="min-w-0 truncate">{repo.remote}</span>
           <span
-            className="font-mono text-[10.5px] text-haze-600"
+            className="font-mono text-[10.5px] font-normal text-haze-600"
             title={`Tickets labeled repo:${repoKey} route here`}
           >
             repo:{repoKey}
           </span>
-          <span className="flex items-center gap-1 font-mono text-[10.5px] text-haze-600">
+          <span className="flex items-center gap-1 font-mono text-[10.5px] font-normal text-haze-600">
             <Branch className="size-3" />
             {repo.defaultBranch}
           </span>
-          <span className="ml-auto flex items-center gap-1.5">
+          <span className="ml-auto flex items-center gap-1.5 font-normal">
             {confirming ? (
               <>
                 <span className="text-[11.5px] text-haze-400">
@@ -361,6 +360,7 @@ function RepoCard({
           </span>
         </span>
       }
+      draft={draft}
     >
       <ProjectsRow
         repoKey={repoKey}
@@ -369,7 +369,7 @@ function RepoCard({
         onChange={(projects) => draft.set(at("projects"), projects)}
       />
       <Collapsible>
-        <CollapsibleTrigger className="group/details flex cursor-pointer items-center gap-1.5 border-t border-ink-700 py-2.5 text-[11px] font-medium text-haze-600 hover:text-haze-300">
+        <CollapsibleTrigger className="group/details flex cursor-pointer items-center gap-1.5 border-t border-ink-700 py-2 text-[11px] font-medium text-haze-600 hover:text-haze-300">
           <ChevronRight className="size-3 transition-transform group-data-[panel-open]/details:rotate-90" />
           Details
         </CollapsibleTrigger>

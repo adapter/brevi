@@ -141,7 +141,7 @@ function ConnectorItem({
       onOpenChange={onOpenChange}
       className="border-t border-ink-700 first:border-t-0"
     >
-      <div className="flex items-center gap-2 px-3 py-2.5">
+      <div className="flex items-center gap-2 px-3 py-2">
         <CollapsibleTrigger className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left">
           <span
             className={`inline-block size-[7px] shrink-0 rounded-full ${TONE_DOT[tone]}`}
@@ -214,7 +214,7 @@ export function ConnectorsSection({
   };
 
   return (
-    <section className="mt-6 flex flex-col gap-6">
+    <section className="mt-5 flex flex-col gap-5">
       {GROUPS.map((group) => {
         const specs = group.ids
           .map((id) => PROVIDERS.find((spec) => spec.id === id))

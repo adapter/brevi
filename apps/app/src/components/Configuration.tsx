@@ -13,7 +13,7 @@ const SECTIONS: { id: ConfigSection; label: string }[] = [
   { id: "connectors", label: "Connectors" },
   { id: "repositories", label: "Repositories" },
   { id: "agent", label: "Agent" },
-  { id: "workers", label: "Workers" },
+  { id: "fleet", label: "Fleet" },
   { id: "memory", label: "Memory" },
   { id: "orchestrator", label: "Orchestrator" },
   { id: "server", label: "Server" },
@@ -74,7 +74,7 @@ export function ConfigurationPage({
 
       <nav
         aria-label="Configuration sections"
-        className="no-scrollbar mt-5 flex items-center gap-4 overflow-x-auto border-b border-ink-700"
+        className="no-scrollbar mt-4 flex items-center gap-4 overflow-x-auto border-b border-ink-700"
       >
         {SECTIONS.map(({ id, label }) => {
           const active = section === id;
@@ -118,7 +118,7 @@ export function ConfigurationPage({
           <div hidden={section !== "agent"}>
             <AgentSection config={config} onConfig={onConfig} />
           </div>
-          <div hidden={section !== "workers"}>
+          <div hidden={section !== "fleet"}>
             <WorkersSection
               config={config}
               workers={workers}

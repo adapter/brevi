@@ -167,7 +167,7 @@ export function WorkersSection({
 
   return (
     <>
-      <SectionIntro title="Workers">
+      <SectionIntro title="Fleet">
         Every run executes on an enrolled Linux worker; Mission Control connects over SSH,
         installs the worker service, and keeps the pairing credential out of the renderer.
       </SectionIntro>

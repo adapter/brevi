@@ -39,7 +39,7 @@ export function SettingsCard({
   draft,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   description?: ReactNode;
   draft: SettingsDraft;
   children: ReactNode;
@@ -60,10 +60,10 @@ export function SettingsCard({
             <p className="mt-1.5 text-[12px] leading-relaxed text-haze-400">{description}</p>
           )}
         </CardHeader>
-        <CardContent className="mt-2.5 flex flex-col">{children}</CardContent>
+        <CardContent className="mt-1.5 flex flex-col">{children}</CardContent>
 
         {(draft.dirty || draft.error || draft.applied) && (
-          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink-700 px-(--card-spacing) pt-3">
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-ink-700 px-(--card-spacing) pt-2.5">
             {draft.dirty && (
               <>
                 <Button type="submit" size="plate" disabled={draft.saving || draft.invalid}>
@@ -132,7 +132,7 @@ export function FieldRow({
   const error = path && draft ? draft.issue(path) : undefined;
   const resettable = path && draft && !draft.isDefault(path);
   return (
-    <div className="flex flex-col gap-1.5 border-t border-ink-700 py-3 first:border-t-0 first:pt-0 last:pb-0 md:flex-row md:items-start md:gap-4">
+    <div className="flex flex-col gap-1.5 border-t border-ink-700 py-2 first:border-t-0 first:pt-0 last:pb-0 md:flex-row md:items-start md:gap-4">
       <div className="flex min-w-0 items-center gap-1.5 md:flex-1 md:pt-1">
         {/* Controls that aren't a single focusable input (segments, radios,
             switches) label themselves with aria-label instead; a <label> with
@@ -733,9 +733,9 @@ export function SecretField({
 /** The page heading every /config subpage opens with. */
 export function SectionIntro({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="mt-6">
+    <div className="mt-5">
       <h3 className="plate text-haze-400">{title}</h3>
-      <p className="mt-1.5 text-[12px] leading-relaxed text-haze-400">{children}</p>
+      <p className="mt-1 text-[12px] leading-relaxed text-haze-400">{children}</p>
     </div>
   );
 }

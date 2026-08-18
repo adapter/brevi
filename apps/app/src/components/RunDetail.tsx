@@ -482,7 +482,7 @@ function QueuedBanner({
             className="h-auto p-0 align-baseline text-[12.5px] text-haze-200 hover:text-haze-50"
             onClick={onOpenWorkers}
           >
-            Workers page
+            Fleet page
           </Button>
           .
         </p>

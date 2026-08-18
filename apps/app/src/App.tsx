@@ -114,7 +114,7 @@ export default function App() {
         onOpenConfig={() => openConfig()}
         onOpenUsage={openUsage}
         onAddRepo={() => openConfig("repositories")}
-        onOpenWorkers={() => openConfig("workers")}
+        onOpenWorkers={() => openConfig("fleet")}
       />
 
       <SidebarInset className="relative flex h-svh min-w-0 flex-col overflow-hidden">
@@ -158,7 +158,7 @@ export default function App() {
                   void (selectedRun.archivedAt ? unarchiveRun : archiveRun)(selectedRun.id)
                 }
                 onFollowUp={() => followUpRun(selectedRun.id)}
-                onOpenWorkers={() => openConfig("workers")}
+                onOpenWorkers={() => openConfig("fleet")}
               />
             ) : (
               <Overview

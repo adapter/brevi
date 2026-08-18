@@ -646,7 +646,7 @@ function QueueOnlyNotice({
           className="h-auto p-0 align-baseline text-[12px] text-haze-200 hover:text-haze-50"
           onClick={onOpenWorkers}
         >
-          Workers page
+          Fleet page
         </Button>
         .
       </p>
