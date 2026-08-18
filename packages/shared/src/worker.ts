@@ -77,6 +77,8 @@ export const WORKER_HEARTBEAT_MS = 15_000;
 export const WORKER_HEARTBEAT_TIMEOUT_MS = 45_000;
 /** Largest artifact the worker streams back inline, in bytes. */
 export const WORKER_MAX_ARTIFACT_BYTES = 25 * 1024 * 1024;
+/** Largest sanitized usage-snapshot payload (run-usage-snapshot's jsonl) a worker may send, in bytes. */
+export const WORKER_MAX_USAGE_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 /**
  * Most concurrent runs one worker may claim. The registration schema rejects
  * anything above this, so `brevi worker --concurrency` validates against the
@@ -514,6 +516,48 @@ export const runMemoriesMessageSchema = z.object({
 export type RunMemoriesMessage = z.infer<typeof runMemoriesMessageSchema>;
 
 /**
+ * A minimized, ccusage-compatible snapshot of one Claude session transcript,
+ * exported after every agent execution so the host can keep a durable usage
+ * archive under ~/.brevi/ccusage (see the orchestrator's CcusageArchive). It
+ * carries usage accounting fields only: prompt/response content, thinking,
+ * tool traffic, and worker filesystem paths never travel. The host replaces
+ * the session's archived file wholesale on every snapshot, which is what
+ * makes replays and re-exports of a grown session idempotent instead of
+ * double-counted.
+ */
+export const runUsageSnapshotMessageSchema = z.object({
+  type: z.literal("run-usage-snapshot"),
+  /**
+   * Absent when the snapshot is re-exported at the end of an attach session,
+   * whose run's lease was released long ago: such a frame travels the generic
+   * queue (best effort) and the host applies it without sequence admission,
+   * which stays safe because applying a snapshot is a wholesale replacement.
+   */
+  leaseId: z.string().optional(),
+  runId: z.string(),
+  /** Agent whose transcript the snapshot came from; only Claude produces one today. */
+  source: z.literal("claude"),
+  /** Stable logical project key: the archive directory the session file lands under, never a filesystem path. */
+  projectKey: z.string().min(1).max(200),
+  /** Claude session id; names the session's file in the archive. */
+  sessionId: z.string().min(1).max(200),
+  /** Sanitized usage-only session JSONL, bounded by WORKER_MAX_USAGE_SNAPSHOT_BYTES (the host re-checks the byte length). */
+  jsonl: z.string().max(WORKER_MAX_USAGE_SNAPSHOT_BYTES),
+  /** Hex SHA-256 of jsonl; the host drops a frame whose payload does not match it. */
+  contentHash: z.string().optional(),
+  /**
+   * Position of this frame in its lease's reporting stream, assigned by the
+   * worker's connection and strictly increasing per lease. The host applies a
+   * frame only when its seq is above the highest it has already applied for
+   * that lease, which is what makes a replay after a reconnect idempotent
+   * rather than a duplicated console. Absent from a worker that predates
+   * buffered replay; such a frame is always applied.
+   */
+  seq: z.number().int().nonnegative().optional(),
+});
+export type RunUsageSnapshotMessage = z.infer<typeof runUsageSnapshotMessageSchema>;
+
+/**
  * The last word on a dispatched run: it releases the lease, tells the host
  * which follow-on timer to arm, and carries the run's whole terminal state a
  * second time. The individual mutations already travelled as run-patch
@@ -676,6 +720,7 @@ export const workerMessageSchema = z.discriminatedUnion("type", [
   runEventMessageSchema,
   runArtifactMessageSchema,
   runMemoriesMessageSchema,
+  runUsageSnapshotMessageSchema,
   runCompleteMessageSchema,
   workerLogMessageSchema,
   leaseGapMessageSchema,

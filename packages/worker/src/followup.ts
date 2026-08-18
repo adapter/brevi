@@ -280,6 +280,7 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
       grokHome,
       ccusageCommand,
       labelFor: (label) => (followUpNumber > 1 ? `${label} ${followUpNumber}` : label),
+      reportUsageSnapshot: ctx.reportUsageSnapshot,
     });
 
     // ---- rebase (still preparing) -----------------------------------------

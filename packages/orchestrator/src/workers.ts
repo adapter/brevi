@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { EventEmitter } from "node:events";
@@ -8,6 +8,7 @@ import {
   registerMessageSchema,
   WORKER_HEARTBEAT_MS,
   WORKER_MAX_ARTIFACT_BYTES,
+  WORKER_MAX_USAGE_SNAPSHOT_BYTES,
   WORKER_PROTOCOL_VERSION,
   type ArtifactRef,
   type AttachDataMessage,
@@ -24,6 +25,7 @@ import {
   type RunCompleteMessage,
   type RunMemoriesMessage,
   type RunPatch,
+  type RunUsageSnapshotMessage,
   type SandboxProviderName,
   type UsageDay,
   type WorkerDenyReason,
@@ -31,6 +33,7 @@ import {
   type WorkerState,
   type WorkerView,
 } from "@brevi/shared";
+import { CcusageArchive } from "./ccusageArchive.js";
 import type { FleetStore, WorkerRecord } from "./fleet.js";
 import { LeaseStore, type PersistedLease } from "./leases.js";
 import { MemoryStore } from "./memory.js";
@@ -222,6 +225,8 @@ export interface WorkerRegistryOptions {
   fleet: FleetStore;
   /** Persisted leases; injectable so tests can point it at a temp directory. Defaults to a LeaseStore on LEASES_PATH. */
   leases?: LeaseStore;
+  /** Where worker usage snapshots are archived; injectable so tests can point it at a temp directory. Defaults to a CcusageArchive on CCUSAGE_DIR. */
+  usage?: CcusageArchive;
   /** A run reached a terminal or waiting state; the caller re-arms whatever follow-on timer that implies and tries to dispatch more of the queue. */
   onRunSettled(runId: string): void;
   /** A worker rejected (or lost) a dispatch before doing any work; the caller requeues the run. */
@@ -330,6 +335,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   readonly #memories: MemoryStore;
   readonly #fleet: FleetStore;
   readonly #leaseStore: LeaseStore;
+  readonly #usage: CcusageArchive;
   readonly #onRunSettled: (runId: string) => void;
   readonly #onRunRejected: (
     runId: string,
@@ -412,6 +418,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     this.#memories = options.memories;
     this.#fleet = options.fleet;
     this.#leaseStore = options.leases ?? new LeaseStore();
+    this.#usage = options.usage ?? new CcusageArchive();
     this.#onRunSettled = options.onRunSettled;
     this.#onRunRejected = options.onRunRejected;
     this.#onRunInterrupted = options.onRunInterrupted;
@@ -1167,8 +1174,9 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   }
 
   /**
-   * The replay gate the five reporting frame types (run-patch, run-event,
-   * run-artifact, run-memories, run-complete) go through after #leaseFor. A
+   * The replay gate the six reporting frame types (run-patch, run-event,
+   * run-artifact, run-memories, run-usage-snapshot, run-complete) go
+   * through after #leaseFor. A
    * worker replays its buffered frames after a reconnect (see
    * WORKER_REPLAY_BUFFER_LIMIT); without this the console, and the memory
    * and artifact stores, would gain a duplicate copy of everything the host
@@ -1731,7 +1739,8 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   /**
    * Resolve a lease-scoped frame's lease and guard its claimed runId against
    * the lease's actual one. Every lease-scoped frame type (dispatch-rejected,
-   * run-patch, run-event, run-artifact, run-memories, run-complete) carries
+   * run-patch, run-event, run-artifact, run-memories, run-usage-snapshot,
+   * run-complete) carries
    * both a leaseId and a runId, but only the lease is trustworthy: the runId
    * is dropped, with a warning, the moment it disagrees, and lease.runId is
    * what every store mutation and scheduler callback must use from here on.
@@ -1873,6 +1882,41 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
         );
         return;
       }
+      case "run-usage-snapshot": {
+        // An attach re-export arrives without a lease: the run's lease was
+        // released long before the terminal exited. It is validated the same
+        // way, applied directly (no sequence admission), and stays safe
+        // because a snapshot replaces its session's archive file wholesale.
+        // With no lease to vouch for the run binding, the run's recorded
+        // executor stands in: only the worker that ran it may re-export its
+        // usage, so no enrolled machine can rewrite another run's accounting.
+        if (message.leaseId === undefined) {
+          const run = this.#store.get(message.runId);
+          if (!run || run.sandbox.workerId !== workerId) return;
+          this.#track(
+            this.#saveUsageSnapshot(message.runId, message).catch(
+              (error: unknown) => {
+                console.error(
+                  `[brevi] usage snapshot for run ${message.runId} failed to archive: ` +
+                    `${error instanceof Error ? error.message : String(error)}`,
+                );
+              },
+            ),
+          );
+          return;
+        }
+        const lease = this.#leaseFor(
+          workerId,
+          message.leaseId,
+          message.runId,
+          "run-usage-snapshot",
+        );
+        if (!lease || !this.#admitFrame(lease, message.seq)) return;
+        this.#applyReported(lease, message.seq, () =>
+          this.#saveUsageSnapshot(lease.runId, message),
+        );
+        return;
+      }
       case "run-complete": {
         const lease = this.#leaseFor(
           workerId,
@@ -2006,6 +2050,42 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       this.#savedArtifacts.set(lease.id, saved);
     }
     saved.add(message.artifact.name);
+  }
+
+  /**
+   * Validate and archive one usage snapshot. Validation failures are dropped
+   * with a warning rather than thrown, same policy as #saveArtifact: a
+   * resend cannot fix them, and the lease's watermark has to advance past
+   * the frame. A genuine filesystem failure still throws, so the frame stays
+   * unapplied and the worker's resend retries it.
+   */
+  async #saveUsageSnapshot(
+    runId: string,
+    message: RunUsageSnapshotMessage,
+  ): Promise<void> {
+    const bytes = Buffer.byteLength(message.jsonl, "utf8");
+    if (bytes > WORKER_MAX_USAGE_SNAPSHOT_BYTES) {
+      console.warn(
+        `[brevi] worker sent an oversized usage snapshot (${bytes} bytes) for run ${runId}; dropped`,
+      );
+      return;
+    }
+    if (
+      message.contentHash !== undefined &&
+      createHash("sha256").update(message.jsonl).digest("hex") !== message.contentHash
+    ) {
+      console.warn(
+        `[brevi] usage snapshot for run ${runId} does not match its content hash; dropped`,
+      );
+      return;
+    }
+    if (!this.#usage.pathFor(message.source, message.projectKey, message.sessionId)) {
+      console.warn(
+        `[brevi] worker sent an unsafe usage snapshot path for run ${runId}; dropped`,
+      );
+      return;
+    }
+    await this.#usage.save(message.source, message.projectKey, message.sessionId, message.jsonl);
   }
 
   async #recordMemories(
