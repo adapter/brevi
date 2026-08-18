@@ -36,6 +36,12 @@ import type {
  */
 
 /**
+ * 4 since usage snapshots: a version-4 worker stamps `run-usage-snapshot`
+ * frames into its lease sequence and never drops them, but a version-3 host
+ * cannot parse the frame and would silently discard it, leaving a permanent
+ * hole its watermark can never cross and every `run-complete` behind it
+ * unacknowledged forever. That pairing has to be rejected, not wedged.
+ *
  * 3 since bwrap-only isolation: a version-2 worker can still register with a
  * non-bwrap provider, and the host would dispatch unisolated runs. A
  * version-2 frame is rejected on registration.
@@ -44,7 +50,7 @@ import type {
  * pairing token, and the host answers with the worker's assigned id, so a
  * version-1 worker's frame is not merely older, it is unauthenticatable.
  */
-export const WORKER_PROTOCOL_VERSION = 3;
+export const WORKER_PROTOCOL_VERSION = 4;
 /** WebSocket path workers dial on the host. */
 export const WORKER_WS_PATH = "/ws/worker";
 /**

@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { WORKER_MAX_USAGE_SNAPSHOT_BYTES } from "@brevi/shared";
-import { isContainedRegularFile, isSafePathSegment } from "@brevi/orchestrator/internal";
+import { readFileWithin } from "@brevi/sandbox";
+import { isSafePathSegment } from "@brevi/orchestrator/internal";
 
 /**
  * Post-execution export of usage-only Claude session snapshots (PD-74): find
@@ -162,12 +163,6 @@ export async function collectUsageSnapshots(options: CollectUsageSnapshotsOption
   }
   const snapshots: UsageSnapshot[] = [];
   for (const transcript of transcripts) {
-    // The transcript sits in an agent-writable tree: refuse symlinks and
-    // anything whose real location escapes the sandbox home.
-    if (!(await isContainedRegularFile(homePath, transcript.path))) {
-      log(`usage snapshot: transcript for session ${transcript.sessionId} is not a regular file inside the sandbox home; skipped`);
-      continue;
-    }
     const info = await stat(transcript.path).catch(() => undefined);
     if (!info || info.size > MAX_RAW_TRANSCRIPT_BYTES) {
       log(`usage snapshot: transcript for session ${transcript.sessionId} is unreadable or over ${MAX_RAW_TRANSCRIPT_BYTES} bytes; skipped`);
@@ -175,7 +170,12 @@ export async function collectUsageSnapshots(options: CollectUsageSnapshotsOption
     }
     let raw: string;
     try {
-      raw = await readFile(transcript.path, "utf8");
+      // The transcript sits in an agent-writable tree, and another process
+      // (a second attach session, say) can mutate it between any check and
+      // the read, so the read itself is the defense: a descriptor-based
+      // O_NOFOLLOW traversal that a racing symlink swap cannot redirect out
+      // of the sandbox home.
+      raw = await readFileWithin(homePath, transcript.path);
     } catch (error) {
       log(`usage snapshot: could not read session ${transcript.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
       continue;

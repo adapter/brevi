@@ -164,7 +164,7 @@ describe("collectUsageSnapshots", () => {
       symlinkSync(outside, join(dir, `${SESSION_ID}.jsonl`));
       const snapshots = await collectUsageSnapshots({ homePath: home, projectKey: "brevi-a-b", sessionId: SESSION_ID, log });
       expect(snapshots).toEqual([]);
-      expect(logs.some((line) => line.includes("not a regular file"))).toBe(true);
+      expect(logs.some((line) => line.includes("could not read session"))).toBe(true);
     } finally {
       rmSync(outside, { force: true });
     }
