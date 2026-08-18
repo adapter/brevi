@@ -432,6 +432,17 @@ describe("the rest of the contract", () => {
       data: Buffer.from("png").toString("base64"),
     },
     { type: "run-memories", leaseId: "lease-1", runId: run.id, repo: "adapter/brevi", learned: ["bun test"] },
+    {
+      type: "run-usage-snapshot",
+      leaseId: "lease-1",
+      runId: run.id,
+      source: "claude",
+      projectKey: "brevi-adapter-brevi",
+      sessionId: "11111111-2222-3333-4444-555555555555",
+      jsonl: '{"type":"assistant","timestamp":"2026-08-11T10:00:20.000Z","message":{"usage":{"input_tokens":5,"output_tokens":9}}}\n',
+      contentHash: "ab".repeat(32),
+      seq: 4,
+    },
     { type: "worker-log", level: "warn", message: "kvm is missing" },
     { type: "attach-data", attachId: "attach-1", data: "$ " },
     { type: "attach-exit", attachId: "attach-1", code: 0 },
@@ -477,6 +488,35 @@ describe("the rest of the contract", () => {
     expect(parseWorkerMessage({ type: "definitely-not-a-message" })).toBeUndefined();
     expect(parseHostMessage({ type: "dispatch" })).toBeUndefined();
     expect(parseWorkerMessage(undefined)).toBeUndefined();
+  });
+});
+
+describe("run usage snapshots", () => {
+  const snapshot: WorkerMessage = {
+    type: "run-usage-snapshot",
+    runId: run.id,
+    source: "claude",
+    projectKey: "brevi-adapter-brevi",
+    sessionId: "11111111-2222-3333-4444-555555555555",
+    jsonl: '{"type":"assistant","timestamp":"2026-08-11T10:00:20.000Z","message":{"usage":{"input_tokens":5,"output_tokens":9}}}\n',
+  };
+
+  it("still parses without a lease, seq, or content hash: the attach re-export travels bare", () => {
+    const decoded = roundTripToHost(snapshot);
+    expect(decoded.type).toBe("run-usage-snapshot");
+    if (decoded.type !== "run-usage-snapshot") return;
+    expect(decoded.leaseId).toBeUndefined();
+    expect(decoded.seq).toBeUndefined();
+    expect(decoded.contentHash).toBeUndefined();
+  });
+
+  it("rejects an empty project key or session id, which could never name an archive file", () => {
+    expect(parseWorkerMessage({ ...snapshot, projectKey: "" })).toBeUndefined();
+    expect(parseWorkerMessage({ ...snapshot, sessionId: "" })).toBeUndefined();
+  });
+
+  it("rejects a source it does not know; the archive layout is per agent", () => {
+    expect(parseWorkerMessage({ ...snapshot, source: "codex" })).toBeUndefined();
   });
 });
 

@@ -47,6 +47,7 @@ import { buildImplementationPrompt, buildReviewFixPrompt, type RepoMap } from ".
 import { provisionCredentials } from "./provision.js";
 import { codexReviewEnabled, runCodexReview } from "./review.js";
 import type { RunSink } from "./sink.js";
+import { collectUsageSnapshots, projectKeyFor, type UsageSnapshot } from "./usageSnapshot.js";
 
 export const BREVI_FOOTER = "🤖 Automated by [brevi]";
 
@@ -68,6 +69,12 @@ export interface RunContext {
    * above, which is a different thing with the same word in it.
    */
   prompts: Pick<DispatchPrompts, "prDescription" | "recordMemories">;
+  /**
+   * Delivers a post-execution ccusage snapshot to the host's usage archive
+   * (see usageSnapshot.ts); absent when the dispatch channel has no way to
+   * carry one. Best effort by contract: it must never fail the run.
+   */
+  reportUsageSnapshot?: (snapshot: UsageSnapshot) => void;
   provider: SandboxProvider;
   /** Required for implementation runs; follow-ups never touch Linear and run without it. */
   linear?: LinearService;
@@ -88,6 +95,8 @@ export interface AgentSessionOptions {
   ccusageCommand?: string;
   /** Decorates cost labels, e.g. appending " (attempt 2)". Defaults to identity. */
   labelFor?: (label: string) => string;
+  /** See RunContext.reportUsageSnapshot. */
+  reportUsageSnapshot?: (snapshot: UsageSnapshot) => void;
 }
 
 export interface AgentSession {
@@ -114,7 +123,7 @@ export interface AgentSession {
  * events.
  */
 export function createAgentSession(options: AgentSessionOptions): AgentSession {
-  const { runId, store, config, sandbox, signal, codexHome, grokHome, ccusageCommand } = options;
+  const { runId, store, config, sandbox, signal, codexHome, grokHome, ccusageCommand, reportUsageSnapshot } = options;
   const labelFor = options.labelFor ?? ((label: string) => label);
 
   const log = (stream: "stdout" | "stderr" | "system", text: string): void => {
@@ -239,6 +248,26 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     }
     if (entry) await store.addCost(runId, entry, executionId);
     usage = usageCollector(limitProvider);
+    // A usage-only ccusage snapshot of the execution's transcript, exported
+    // on every completion path (this runs for failed, cancelled, and
+    // limit-ended executions too, and again per retry or follow-up).
+    // Accounting is best effort by contract: any failure is a diagnostic on
+    // the run log, never a failed run.
+    if (reportUsageSnapshot && limitProvider === "claude" && currentSessionId) {
+      const sessionId = currentSessionId;
+      try {
+        const run = store.get(runId);
+        const snapshots = await collectUsageSnapshots({
+          homePath: sandbox.homePath,
+          projectKey: projectKeyFor(run?.ticket.repo),
+          sessionId,
+          log: (text) => log("system", text),
+        });
+        for (const snapshot of snapshots) reportUsageSnapshot(snapshot);
+      } catch (error) {
+        log("system", `usage snapshot failed for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   };
 
   const activeSandbox = sandbox;
@@ -446,6 +475,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       grokHome,
       ccusageCommand,
       labelFor: (label) => (attempt.number > 1 ? `${label} (attempt ${attempt.number})` : label),
+      reportUsageSnapshot: ctx.reportUsageSnapshot,
     });
 
     const { mainModel, mainEffort, delegate } = agentModelPlan(config);

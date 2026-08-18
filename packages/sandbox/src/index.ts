@@ -5,3 +5,4 @@ export { SeatbeltProvider, seatbeltAvailable, collectSeatbeltProblems } from "./
 export { seatbeltPolicy } from "./seatbelt/policy.js";
 export { wrapInBwrap } from "./bwrap/wrap.js";
 export { fileExists, isReadWritable, resolveBinary } from "./host.js";
+export { readdirWithin, readFileWithin } from "./hostfs.js";

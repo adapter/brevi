@@ -150,6 +150,19 @@ function completeFrame(leaseId: string, runId = "run-1"): WorkerMessage {
   return { type: "run-complete", leaseId, runId, outcome: "completed", artifacts: [], attempts: [], costs: [] };
 }
 
+/** A usage snapshot for the suite's one run; without a leaseId it models the attach re-export, which travels the generic queue. */
+function usageSnapshotFrame(leaseId: string | undefined, runId = "run-1"): WorkerMessage {
+  return {
+    type: "run-usage-snapshot",
+    ...(leaseId !== undefined ? { leaseId } : {}),
+    runId,
+    source: "claude",
+    projectKey: "brevi-adapter-brevi",
+    sessionId: "11111111-2222-3333-4444-555555555555",
+    jsonl: '{"type":"assistant","timestamp":"2026-08-11T10:00:20.000Z","message":{"usage":{"input_tokens":5,"output_tokens":9}}}\n',
+  };
+}
+
 /** seq of a reporting frame; every frame this suite sends is one of the five reporting types, which always carry it once stamped. */
 /** A lease-ack for the suite's one lease. `expiresAt` is always well in the future: the deadline fence is not what these exercise. */
 function leaseAck(seq: number): HostMessage {
@@ -469,6 +482,62 @@ describe("connectToHost replay buffer", () => {
       await waitFor(() => host.received.length === 2);
       expect(host.received[1]?.type).toBe("run-event");
       expect(seqOf(host.received[1]!)).toBe(2);
+    } finally {
+      connection.close();
+      await host.close();
+    }
+  });
+
+  it("sequences a lease-scoped usage snapshot, never sheds it under buffer pressure, and replays it across a reconnect", async () => {
+    const host = await startFakeHost();
+    const connection = connect(host);
+    try {
+      await waitFor(() => host.sessions.length === 1);
+
+      // A realistic stream: log events, then the snapshot, then enough more
+      // events to overflow the unacked buffer. The cap sheds the oldest
+      // run-event frames (the lease-gap announces it), but the snapshot is
+      // not in DROPPABLE_TYPES and must survive to replay.
+      for (let i = 0; i < 100; i++) connection.send(eventFrame("lease-a", "run-1", `line ${i}`));
+      connection.send(usageSnapshotFrame("lease-a"));
+      await waitFor(() => host.received.some((message) => message.type === "run-usage-snapshot"));
+      const first = host.received.find((message) => message.type === "run-usage-snapshot");
+      expect(seqOf(first!)).toBe(101);
+      for (let i = 0; i < WORKER_REPLAY_BUFFER_LIMIT - 50; i++) {
+        connection.send(eventFrame("lease-a", "run-1", `late line ${i}`));
+      }
+      await waitFor(() => host.received.some((message) => message.type === "lease-gap"));
+      const gap = host.received.find((message) => message.type === "lease-gap");
+      if (gap?.type !== "lease-gap") throw new Error("expected a lease-gap");
+      // What was given up on stops short of the snapshot: only the events
+      // ahead of it were shed.
+      expect(gap.throughSeq).toBeGreaterThanOrEqual(1);
+      expect(gap.throughSeq).toBeLessThan(101);
+
+      host.drop(host.sessions[0]!);
+      await waitFor(() => host.sessions.length === 2);
+      const replayFrom = host.received.length;
+      host.ack(host.sessions[1]!, leaseAck(0));
+      await waitFor(() =>
+        host.received.slice(replayFrom).some((message) => message.type === "run-usage-snapshot" && seqOf(message) === 101),
+      );
+    } finally {
+      connection.close();
+      await host.close();
+    }
+  });
+
+  it("sends a lease-less usage snapshot (the attach re-export) through the generic queue, unsequenced", async () => {
+    const host = await startFakeHost();
+    const connection = connect(host);
+    try {
+      await waitFor(() => host.sessions.length === 1);
+      connection.send(usageSnapshotFrame(undefined));
+      await waitFor(() => host.received.some((message) => message.type === "run-usage-snapshot"));
+      const frame = host.received.find((message) => message.type === "run-usage-snapshot");
+      if (frame?.type !== "run-usage-snapshot") throw new Error("expected a run-usage-snapshot");
+      expect(frame.leaseId).toBeUndefined();
+      expect(frame.seq).toBeUndefined();
     } finally {
       connection.close();
       await host.close();

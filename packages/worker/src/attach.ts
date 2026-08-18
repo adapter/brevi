@@ -5,6 +5,7 @@ import type { Sandbox, SandboxProvider } from "@brevi/sandbox";
 import { collectAgentEnv, playwrightBrowsersPath } from "./runner.js";
 import { provisionCredentials } from "./provision.js";
 import { buildResumeScript } from "./resume.js";
+import { collectUsageSnapshots, projectKeyFor } from "./usageSnapshot.js";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -95,6 +96,27 @@ export function createAttachSessions(deps: AttachSessionsDeps): AttachSessions {
     void releaseRun(session.runId);
   }
 
+  /**
+   * Re-export every Claude session under the run's sandbox home once an
+   * attached terminal exits: `claude --resume` grows the original session's
+   * transcript (or forks a new one), and the host's archive copy is replaced
+   * wholesale, so usage burned interactively is counted exactly once. The
+   * run's lease is long released, so the frame travels without one, best
+   * effort; a failure only logs.
+   */
+  async function exportUsageSnapshots(runId: string, sandbox: Sandbox): Promise<void> {
+    try {
+      const snapshots = await collectUsageSnapshots({
+        homePath: sandbox.homePath,
+        projectKey: projectKeyFor(getRun(runId)?.ticket.repo),
+        log: (text) => console.log(`[brevi] ${text} (run ${runId})`),
+      });
+      for (const snapshot of snapshots) send({ type: "run-usage-snapshot", runId, ...snapshot });
+    } catch (error) {
+      console.error(`[brevi] usage snapshot re-export failed for run ${runId}: ${errorMessage(error)}`);
+    }
+  }
+
   async function open(message: AttachOpenMessage): Promise<void> {
     const { attachId, runId, config, cols, rows } = message;
     const fail = (text: string): void => send({ type: "attach-error", attachId, message: text });
@@ -176,7 +198,9 @@ export function createAttachSessions(deps: AttachSessionsDeps): AttachSessions {
         session.pty = undefined;
         sessions.delete(attachId);
         send({ type: "attach-exit", attachId, code: exitCode });
-        releaseSession(session);
+        // Snapshots are read from the retained disk before this session's
+        // compute claim is released; the disk itself survives either way.
+        void exportUsageSnapshots(runId, sandbox).finally(() => releaseSession(session));
       });
     } catch (error) {
       sessions.delete(attachId);

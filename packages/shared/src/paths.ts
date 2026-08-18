@@ -31,6 +31,13 @@ export const WORKER_STATE_PATH = join(BREVI_HOME, "worker.json");
 export const LOGS_DIR = join(BREVI_HOME, "logs");
 /** Persistent orchestrator log used as diagnosis evidence. */
 export const ORCHESTRATOR_LOG_PATH = join(LOGS_DIR, "orchestrator.log");
+/**
+ * Host-side usage accounting archive of worker Claude session snapshots, in
+ * the layout ccusage reads via CLAUDE_CONFIG_DIR (see the orchestrator's
+ * CcusageArchive). Deliberately outside runs/ and workspaces/: cleaning up
+ * run artifacts or sandboxes must never delete usage accounting.
+ */
+export const CCUSAGE_DIR = join(BREVI_HOME, "ccusage");
 /** Fleet state the host keeps across restarts (see the orchestrator's LeaseStore). */
 export const FLEET_DIR = join(BREVI_HOME, "fleet");
 /** Outstanding run leases, reloaded on boot so a host restart does not lose in-flight runs. */

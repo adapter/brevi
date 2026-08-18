@@ -14,6 +14,7 @@ import {
   type RunLease,
   type RunMemoriesMessage,
   type RunPatchMessage,
+  type RunUsageSnapshotMessage,
   type WorkerAuth,
   type WorkerCapabilities,
   type WorkerDenyReason,
@@ -39,8 +40,14 @@ const REPLAY_UNBLOCK_MS = 10_000;
 /** How often this worker checks whether a lease it holds has passed its deadline; see the fencing note on `onLeaseLost`. */
 const LEASE_DEADLINE_SWEEP_MS = 5_000;
 
-/** The five lease-scoped reporting frame types; every other WorkerMessage travels through the generic queue instead. */
-type ReportingMessage = RunPatchMessage | RunEventMessage | RunArtifactMessage | RunMemoriesMessage | RunCompleteMessage;
+/** The six lease-scoped reporting frame types; every other WorkerMessage travels through the generic queue instead. A run-usage-snapshot only counts when it names a lease: an attach re-export has none, and rides the generic queue best effort. */
+type ReportingMessage =
+  | RunPatchMessage
+  | RunEventMessage
+  | RunArtifactMessage
+  | RunMemoriesMessage
+  | (RunUsageSnapshotMessage & { leaseId: string })
+  | RunCompleteMessage;
 
 function isReportingMessage(message: WorkerMessage): message is ReportingMessage {
   return (
@@ -48,11 +55,12 @@ function isReportingMessage(message: WorkerMessage): message is ReportingMessage
     message.type === "run-event" ||
     message.type === "run-artifact" ||
     message.type === "run-memories" ||
+    (message.type === "run-usage-snapshot" && message.leaseId !== undefined) ||
     message.type === "run-complete"
   );
 }
 
-/** Frame types the buffer cap may drop, tried in this order: run-event first (cheapest to lose, same policy as the generic queue), then run-artifact. A run-patch, run-memories, or run-complete is never dropped: any of those missing would leave the host's own copy of the run wrong, not just its console short a line. */
+/** Frame types the buffer cap may drop, tried in this order: run-event first (cheapest to lose, same policy as the generic queue), then run-artifact. A run-patch, run-memories, run-usage-snapshot, or run-complete is never dropped: any of those missing would leave the host's own copy of the run (or its usage accounting) wrong, not just its console short a line. */
 const DROPPABLE_TYPES: ReadonlyArray<ReportingMessage["type"]> = ["run-event", "run-artifact"];
 
 /**
@@ -193,8 +201,9 @@ function withJitter(baseMs: number): number {
  *   bounded (oldest run-event drops first once full, though none of this
  *   queue's frame types are actually run-events in practice), and flushes
  *   in order on the next successful registration.
- * - A per-lease replay buffer carries the five lease-scoped reporting frames
- *   (run-patch, run-event, run-artifact, run-memories, run-complete). A
+ * - A per-lease replay buffer carries the six lease-scoped reporting frames
+ *   (run-patch, run-event, run-artifact, run-memories, run-usage-snapshot,
+ *   run-complete). A
  *   reporting frame is never put in the generic queue: `send` stamps it with
  *   a per-lease, strictly increasing `seq` and routes it straight into its
  *   lease's buffer, where it stays until the host's `lease-ack` or
@@ -309,7 +318,8 @@ export function connectToHost(options: WorkerConnectionOptions): WorkerConnectio
         if (index >= 0) break;
       }
       // Nothing left that's safe to drop (only run-patch/run-memories/
-      // run-complete remain): let the buffer exceed the cap rather than
+      // run-usage-snapshot/run-complete remain): let the buffer exceed the
+      // cap rather than
       // corrupt the host's eventual copy of the run.
       if (index < 0) break;
       const [gone] = buffer.frames.splice(index, 1);

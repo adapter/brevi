@@ -6,6 +6,7 @@ import {
   copyDirIntoWithin,
   copyDirOutOfWithin,
   ensureDirWithin,
+  readdirWithin,
   readFileWithin,
   resolveDirWithin,
   writeFileWithin,
@@ -70,6 +71,31 @@ describe("readFileWithin", () => {
     expect(readFileWithin(root, join(root, "workspace", "link-dir", "file"))).rejects.toThrow(
       /ENOTDIR|ELOOP/,
     );
+  });
+});
+
+describe("readFileWithin with a byte cap", () => {
+  test("reads a file at or under the cap and refuses one over it", async () => {
+    const target = join(root, "workspace", "log.jsonl");
+    writeFileSync(target, "12345");
+    expect(await readFileWithin(root, target, 5)).toBe("12345");
+    expect(readFileWithin(root, target, 4)).rejects.toThrow(/over the 4-byte limit/);
+  });
+});
+
+describe("readdirWithin", () => {
+  test("lists entries under the root", async () => {
+    mkdirSync(join(root, "workspace", "a"));
+    writeFileSync(join(root, "workspace", "b.txt"), "x");
+    expect((await readdirWithin(root, join(root, "workspace"))).sort()).toEqual(["a", "b.txt"]);
+  });
+
+  test("refuses a directory reached through a symlinked component", async () => {
+    mkdirSync(join(outside, "elsewhere"));
+    writeFileSync(join(outside, "elsewhere", "secret.txt"), "s");
+    symlinkSync(join(outside, "elsewhere"), join(root, "linked"));
+    expect(readdirWithin(root, join(root, "linked"))).rejects.toThrow();
+    expect(readdirWithin(root, join(root, "linked", "nested"))).rejects.toThrow();
   });
 });
 

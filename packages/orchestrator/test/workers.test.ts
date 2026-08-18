@@ -12,6 +12,7 @@ import {
   type Ticket,
 } from "@brevi/shared";
 import { FakeSocket, flush } from "./fake-socket.js";
+import { CcusageArchive } from "../src/ccusageArchive.js";
 import { FleetStore } from "../src/fleet.js";
 import { LeaseStore } from "../src/leases.js";
 import { MemoryStore } from "../src/memory.js";
@@ -64,6 +65,7 @@ describe("WorkerRegistry", () => {
   let fleet: FleetStore;
   let config: BreviConfig;
   let leasesPath: string;
+  let usageDir: string;
   let registry: WorkerRegistry;
   let settled: string[];
   let rejected: { runId: string; reason: string }[];
@@ -82,6 +84,7 @@ describe("WorkerRegistry", () => {
     await fleet.init();
     config = configSchema.parse({ fleet: { reconnectGraceSeconds: 3600 } });
     leasesPath = join(dir, "fleet", "leases.json");
+    usageDir = join(dir, "ccusage");
     settled = [];
     rejected = [];
     interrupted = [];
@@ -93,6 +96,7 @@ describe("WorkerRegistry", () => {
       memories,
       fleet,
       leases: new LeaseStore(leasesPath),
+      usage: new CcusageArchive(usageDir),
       onRunSettled: (runId) => settled.push(runId),
       onRunRejected: (runId, reason) => rejected.push({ runId, reason }),
       onRunInterrupted: (runId, reason, kind) => interrupted.push({ runId, reason, kind }),
@@ -1048,6 +1052,141 @@ describe("WorkerRegistry", () => {
     // The artifact really is there, so its manifest entry is not reported lost.
     const logs = (await store.readEvents(run.id)).filter((event) => event.type === "log").map((event) => event.text);
     expect(logs.some((text) => text.includes("did not reach the host"))).toBe(false);
+  });
+
+  // --- usage snapshots ------------------------------------------------------
+
+  const SNAPSHOT_SESSION = "11111111-2222-3333-4444-555555555555";
+  const SNAPSHOT_LINE = '{"type":"assistant","timestamp":"2026-08-11T10:00:20.000Z","message":{"usage":{"input_tokens":5,"output_tokens":9}}}\n';
+
+  function snapshotFrame(leaseId: string | undefined, runId: string, overrides: Record<string, unknown> = {}) {
+    return {
+      type: "run-usage-snapshot" as const,
+      ...(leaseId !== undefined ? { leaseId } : {}),
+      runId,
+      source: "claude" as const,
+      projectKey: "brevi-adapter-brevi",
+      sessionId: SNAPSHOT_SESSION,
+      jsonl: SNAPSHOT_LINE,
+      ...overrides,
+    };
+  }
+
+  const snapshotPath = () => join(usageDir, "claude", "projects", "brevi-adapter-brevi", `${SNAPSHOT_SESSION}.jsonl`);
+
+  it("archives a usage snapshot where ccusage reads it, and a replay of the same seq is not reapplied", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    socket.receive(snapshotFrame(lease.id, run.id, { seq: 1 }));
+    await flush();
+    expect(readFileSync(snapshotPath(), "utf8")).toBe(SNAPSHOT_LINE);
+
+    // A replayed seq is refused outright, so even a replay carrying different
+    // bytes (which a real worker never produces) cannot rewrite the archive.
+    socket.receive(snapshotFrame(lease.id, run.id, { seq: 1, jsonl: "{}\n" }));
+    await flush();
+    expect(readFileSync(snapshotPath(), "utf8")).toBe(SNAPSHOT_LINE);
+
+    // A later snapshot of the same session (a resumed transcript that grew)
+    // replaces the file wholesale rather than appending to it.
+    socket.receive(snapshotFrame(lease.id, run.id, { seq: 2, jsonl: SNAPSHOT_LINE + SNAPSHOT_LINE }));
+    await flush();
+    expect(readFileSync(snapshotPath(), "utf8")).toBe(SNAPSHOT_LINE + SNAPSHOT_LINE);
+  });
+
+  it("holds a completion behind a usage snapshot whose write failed, so the ack always implies the archive has it", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    // A directory where the session file belongs makes the archive's rename
+    // fail, so frame 1 stays unapplied and the completion at 2 must park.
+    await mkdir(snapshotPath(), { recursive: true });
+    socket.receive(snapshotFrame(lease.id, run.id, { seq: 1 }));
+    socket.receive({
+      type: "run-complete",
+      leaseId: lease.id,
+      runId: run.id,
+      outcome: "completed",
+      finishedAt: "2026-08-11T10:30:00.000Z",
+      artifacts: [],
+      attempts: [],
+      costs: [],
+      seq: 2,
+    });
+    await flush();
+    expect(store.get(run.id)?.status).not.toBe("completed");
+    expect(socket.ofType("run-complete-ack")).toHaveLength(0);
+
+    // The worker resends the snapshot, it lands, and the completion follows.
+    await rm(snapshotPath(), { recursive: true, force: true });
+    socket.receive(snapshotFrame(lease.id, run.id, { seq: 1 }));
+    await flush();
+    expect(readFileSync(snapshotPath(), "utf8")).toBe(SNAPSHOT_LINE);
+    expect(store.get(run.id)?.status).toBe("completed");
+    expect(socket.ofType("run-complete-ack")).toHaveLength(1);
+  });
+
+  it("drops an invalid snapshot without stalling the lease: a resend could never fix it", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    // Traversal in the project key, a payload whose content hash lies, and a
+    // payload over the byte cap (multibyte characters slip past the schema's
+    // character-count bound) are each dropped, yet each still advances the
+    // watermark so the completion behind them is acknowledged.
+    socket.receive(snapshotFrame(lease.id, run.id, { seq: 1, projectKey: ".." }));
+    socket.receive(snapshotFrame(lease.id, run.id, { seq: 2, contentHash: "0".repeat(64) }));
+    socket.receive(snapshotFrame(lease.id, run.id, { seq: 3, jsonl: "é".repeat(2 * 1024 * 1024 + 10) }));
+    await flush();
+    socket.receive({
+      type: "run-complete",
+      leaseId: lease.id,
+      runId: run.id,
+      outcome: "completed",
+      finishedAt: "2026-08-11T10:30:00.000Z",
+      artifacts: [],
+      attempts: [],
+      costs: [],
+      seq: 4,
+    });
+    await flush();
+    expect(existsSync(snapshotPath())).toBe(false);
+    expect(existsSync(usageDir)).toBe(false);
+    expect(store.get(run.id)?.status).toBe("completed");
+    expect(socket.ofType("run-complete-ack")).toHaveLength(1);
+  });
+
+  it("applies a lease-less snapshot for a run it knows: the attach re-export arrives after settlement", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+
+    // A snapshot for a run this host never created is refused outright, and
+    // so is one from an enrolled worker that did not execute the run: with
+    // no lease to vouch for the binding, the run's recorded executor does.
+    socket.receive(snapshotFrame(undefined, "run-nobody-knows"));
+    const other = await enroll("bench-2");
+    other.socket.receive(snapshotFrame(undefined, run.id));
+    await flush();
+    await registry.drain();
+    expect(existsSync(usageDir)).toBe(false);
+
+    const grown = SNAPSHOT_LINE + SNAPSHOT_LINE;
+    socket.receive(snapshotFrame(undefined, run.id, { jsonl: grown }));
+    await flush();
+    await registry.drain();
+    expect(readFileSync(snapshotPath(), "utf8")).toBe(grown);
   });
 
   it("steps over frames the worker says it dropped, and releases a completion held behind them", async () => {
