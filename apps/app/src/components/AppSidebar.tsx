@@ -1,27 +1,48 @@
-import { useEffect, useState } from "react";
 import type { BreviConfig, HealthResponse, LinearStatus, Run, Ticket, WorkerView } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { Card } from "@/components/ui/card";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
 import { duration, relative } from "../lib/format";
 import { queueOnly } from "../lib/fleet";
-import { linearConnected as isLinearConnected } from "../lib/linear";
+import {
+  linearConnected as isLinearConnected,
+  linearNeedsAttention,
+} from "../lib/linear";
 import { repoDisplay } from "../lib/repo";
 import { isActive, isTerminal, STATUS_TONE } from "../lib/status";
-import { Plate, PrChip, RepoChip, StatusDot } from "./Bits";
-import { CostBadge } from "./CostBadge";
-import { Check, Close, Eye, External, Play, Retry } from "./Icons";
+import type { Page } from "../lib/useOrchestrator";
+import { Plate, StatusDot } from "./Bits";
+import { PROVIDERS } from "./config/ConnectorsSection";
+import { ChevronRight, Gear, Play, Repo } from "./Icons";
 import { ThemeToggle } from "./ThemeToggle";
+
+/** Everything one project (repo key) holds, in the order the list renders it. */
+interface ProjectGroup {
+  /** Repo key from config; "" collects tickets that resolve to no repo. */
+  key: string;
+  /** Short folder-style name shown in the header. */
+  name: string;
+  /** Full owner/name remote, for the hover title. */
+  full?: string;
+  active: Run[];
+  queued: Run[];
+  pending: Ticket[];
+  finished: Run[];
+}
 
 export function AppSidebar({
   tickets,
@@ -35,11 +56,10 @@ export function AppSidebar({
   workers,
   busy,
   unreachable,
+  page,
   onRun,
   onOpenRun,
-  onCancelRun,
-  onRetryRun,
-  onAnotherLook,
+  onOpenConfig,
   onOpenWorkers,
 }: {
   tickets: Ticket[];
@@ -54,12 +74,11 @@ export function AppSidebar({
   busy: Record<string, true | undefined>;
   /** No orchestrator has answered yet, so an empty queue means nothing. */
   unreachable: boolean;
+  page: Page;
   /** Queues a run for the ticket; resolves to the new run's id, or null. */
   onRun: (ticketId: string) => Promise<string | null>;
   onOpenRun: (runId: string) => void;
-  onCancelRun: (runId: string) => void;
-  onRetryRun: (runId: string) => void;
-  onAnotherLook: (runId: string) => void;
+  onOpenConfig: () => void;
   /** Opens the Workers config page, for the queue-only notice below. */
   onOpenWorkers: () => void;
 }) {
@@ -67,6 +86,12 @@ export function AppSidebar({
   // flash before the first config arrives.
   const linearConnected = config === null || isLinearConnected(config, linearStatus);
   const linearAuthError = linearStatus?.state === "auth-error";
+  const attention =
+    config !== null &&
+    (PROVIDERS.some((spec) => spec.id !== "linear" && !spec.connected(config)) ||
+      !isLinearConnected(config, linearStatus) ||
+      linearNeedsAttention(linearStatus));
+  const onConfig = page.startsWith("config:");
 
   const { isMobile, setOpenMobile } = useSidebar();
   const openRun = (runId: string) => {
@@ -83,24 +108,15 @@ export function AppSidebar({
       !runs.some((r) => r.ticket.id === ticket.id && r.ticket.updatedAt === ticket.updatedAt),
   );
 
-  /**
-   * In-flight runs split into "actively doing something" and "queued", the
-   * latter reordered into scheduler pickup order (ascending queuedAt) since
-   * a requeue can push an old run to the back without touching createdAt.
-   */
-  const active = runs.filter((r) => isActive(r.status) && r.status !== "queued");
-  const queued = runs
-    .filter((r) => r.status === "queued")
-    .sort((a, b) => Date.parse(a.queuedAt ?? a.createdAt) - Date.parse(b.queuedAt ?? b.createdAt));
-  const finished = runs.filter((r) => isTerminal(r.status));
-  const inFlightCount = active.length + queued.length + pending.length;
+  const projects = groupByProject(runs, pending, config);
+  const runCount = runs.length + pending.length;
 
   const hostExecution = health?.hostExecution;
   const showQueueOnly = queueOnly(health, workers);
 
   return (
     <Sidebar collapsible="offcanvas" className="border-sidebar-border">
-      <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
+      <SidebarHeader className="h-13 justify-center border-b border-sidebar-border px-4">
         <div className="flex items-center gap-2.5">
           <img src="/logo.png" alt="" className="size-[22px]" />
           <span className="text-[14px] leading-none font-semibold text-haze-50">
@@ -121,15 +137,15 @@ export function AppSidebar({
         <SidebarGroup>
           <SidebarGroupLabel className="gap-2">
             <Plate className="text-haze-400">Runs</Plate>
-            <span className="ml-auto">
-              <Plate className="text-haze-700">Linear</Plate>
-            </span>
+            {runCount > 0 && (
+              <span className="font-mono text-[10px] leading-none text-haze-700">{runCount}</span>
+            )}
           </SidebarGroupLabel>
           <SidebarGroupContent>
             {showQueueOnly && hostExecution?.kind === "none" && (
               <QueueOnlyNotice reason={hostExecution.reason} onOpenWorkers={onOpenWorkers} />
             )}
-            {pending.length === 0 && runs.length === 0 ? (
+            {runCount === 0 ? (
               unreachable ? (
                 <p className="px-2 py-2 text-[12.5px] leading-relaxed text-haze-700">
                   Runs appear once the orchestrator is running.
@@ -140,95 +156,292 @@ export function AppSidebar({
                 <SummonCard config={config} />
               )
             ) : (
-              <>
-                {inFlightCount > 0 && (
-                  <>
-                    <SectionLabel label="In flight" />
-                    <ul className="flex flex-col gap-2 px-1 pt-1">
-                      {active.map((run) => (
-                        <li key={run.id}>
-                          <RunStrip
-                            run={run}
-                            repoName={repoDisplay(config, run.ticket.repo)}
-                            now={now}
-                            selected={run.id === selectedRunId}
-                            busy={busy[run.id] === true}
-                            onOpen={() => openRun(run.id)}
-                            onCancel={() => onCancelRun(run.id)}
-                            onRetry={() => onRetryRun(run.id)}
-                            onAnotherLook={() => onAnotherLook(run.id)}
-                          />
-                        </li>
-                      ))}
-                      {queued.map((run) => (
-                        <li key={run.id}>
-                          <RunStrip
-                            run={run}
-                            repoName={repoDisplay(config, run.ticket.repo)}
-                            now={now}
-                            selected={run.id === selectedRunId}
-                            busy={busy[run.id] === true}
-                            onOpen={() => openRun(run.id)}
-                            onCancel={() => onCancelRun(run.id)}
-                            onRetry={() => onRetryRun(run.id)}
-                            onAnotherLook={() => onAnotherLook(run.id)}
-                          />
-                        </li>
-                      ))}
-                      {pending.map((ticket) => (
-                        <li key={`ticket-${ticket.id}`}>
-                          <TicketStrip
-                            ticket={ticket}
-                            repoName={repoDisplay(config, ticket.repo)}
-                            active={activeByTicket.get(ticket.id)}
-                            busy={busy[ticket.id] === true}
-                            onRun={() => {
-                              void onRun(ticket.id).then((runId) => {
-                                if (runId !== null) openRun(runId);
-                              });
-                            }}
-                            onOpenRun={openRun}
-                          />
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                )}
-                {finished.length > 0 && (
-                  <div className={inFlightCount > 0 ? "mt-3 border-t border-sidebar-border" : ""}>
-                    <SectionLabel label="Finished" />
-                    <ul className="flex flex-col gap-2 px-1 pt-1">
-                      {finished.map((run) => (
-                        <li key={run.id}>
-                          <RunStrip
-                            run={run}
-                            repoName={repoDisplay(config, run.ticket.repo)}
-                            now={now}
-                            selected={run.id === selectedRunId}
-                            busy={busy[run.id] === true}
-                            onOpen={() => openRun(run.id)}
-                            onCancel={() => onCancelRun(run.id)}
-                            onRetry={() => onRetryRun(run.id)}
-                            onAnotherLook={() => onAnotherLook(run.id)}
-                          />
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </>
+              <div className="flex flex-col gap-0.5 px-1">
+                {projects.map((project) => (
+                  <ProjectSection
+                    key={project.key || "~none"}
+                    project={project}
+                    now={now}
+                    selectedRunId={selectedRunId}
+                    activeByTicket={activeByTicket}
+                    busy={busy}
+                    onRun={onRun}
+                    onOpenRun={openRun}
+                  />
+                ))}
+              </div>
             )}
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+
+      <SidebarFooter className="border-t border-sidebar-border p-2">
+        <button
+          type="button"
+          onClick={() => onOpenConfig()}
+          aria-current={onConfig ? "page" : undefined}
+          className={`touch-target flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] font-medium transition-colors ${
+            onConfig
+              ? "bg-ink-750 text-haze-50"
+              : "text-haze-400 hover:bg-ink-800/70 hover:text-haze-100"
+          }`}
+        >
+          <Gear className="size-3.5" />
+          Configuration
+          {attention && (
+            <span
+              className="ml-auto size-[6px] rounded-full bg-iris-400"
+              role="img"
+              aria-label="A connection needs attention"
+              title="A connection needs attention"
+            />
+          )}
+        </button>
+      </SidebarFooter>
     </Sidebar>
+  );
+}
+
+/**
+ * Bucket runs and pending tickets by their repo key. Within a project the
+ * list keeps scheduler order: working runs first, then the queue in pickup
+ * order (ascending queuedAt, since a requeue can push an old run to the back
+ * without touching createdAt), then tickets not yet queued, then history.
+ * Projects sort by name; tickets that resolve to no repo land last.
+ */
+function groupByProject(
+  runs: Run[],
+  pending: Ticket[],
+  config: BreviConfig | null,
+): ProjectGroup[] {
+  const buckets = new Map<string, { runs: Run[]; tickets: Ticket[] }>();
+  const bucket = (key: string) => {
+    let entry = buckets.get(key);
+    if (!entry) {
+      entry = { runs: [], tickets: [] };
+      buckets.set(key, entry);
+    }
+    return entry;
+  };
+  for (const run of runs) bucket(run.ticket.repo ?? "").runs.push(run);
+  for (const ticket of pending) bucket(ticket.repo ?? "").tickets.push(ticket);
+
+  return [...buckets.entries()]
+    .map(([key, entry]): ProjectGroup => {
+      const full = repoDisplay(config, key || undefined);
+      const name = full ? (full.split("/").pop() ?? full) : "No project";
+      return {
+        key,
+        name,
+        full,
+        active: entry.runs.filter((r) => isActive(r.status) && r.status !== "queued"),
+        queued: entry.runs
+          .filter((r) => r.status === "queued")
+          .sort(
+            (a, b) => Date.parse(a.queuedAt ?? a.createdAt) - Date.parse(b.queuedAt ?? b.createdAt),
+          ),
+        pending: entry.tickets,
+        finished: entry.runs.filter((r) => isTerminal(r.status)),
+      };
+    })
+    .sort((a, b) => {
+      if (a.key === "") return 1;
+      if (b.key === "") return -1;
+      return a.name.localeCompare(b.name);
+    });
+}
+
+/** One project: a folder header with its runs indented beneath it. */
+function ProjectSection({
+  project,
+  now,
+  selectedRunId,
+  activeByTicket,
+  busy,
+  onRun,
+  onOpenRun,
+}: {
+  project: ProjectGroup;
+  now: number;
+  selectedRunId: string | null;
+  activeByTicket: Map<string, Run>;
+  busy: Record<string, true | undefined>;
+  onRun: (ticketId: string) => Promise<string | null>;
+  onOpenRun: (runId: string) => void;
+}) {
+  const count =
+    project.active.length + project.queued.length + project.pending.length + project.finished.length;
+
+  return (
+    <Collapsible defaultOpen>
+      <CollapsibleTrigger
+        className="group/project touch-target flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-ink-800/60"
+        title={project.full}
+      >
+        <ChevronRight className="size-3 shrink-0 text-haze-700 transition-transform group-data-[panel-open]/project:rotate-90" />
+        <Repo className="size-3.5 shrink-0 text-haze-600" />
+        <span className="min-w-0 truncate text-[12.5px] font-medium text-haze-200">
+          {project.name}
+        </span>
+        <span className="ml-auto font-mono text-[10px] leading-none text-haze-700">{count}</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <ul className="flex flex-col gap-px pb-1">
+          {project.active.map((run) => (
+            <li key={run.id}>
+              <RunRow
+                run={run}
+                now={now}
+                selected={run.id === selectedRunId}
+                onOpen={() => onOpenRun(run.id)}
+              />
+            </li>
+          ))}
+          {project.queued.map((run) => (
+            <li key={run.id}>
+              <RunRow
+                run={run}
+                now={now}
+                selected={run.id === selectedRunId}
+                onOpen={() => onOpenRun(run.id)}
+              />
+            </li>
+          ))}
+          {project.pending.map((ticket) => (
+            <li key={`ticket-${ticket.id}`}>
+              <TicketRow
+                ticket={ticket}
+                active={activeByTicket.get(ticket.id)}
+                busy={busy[ticket.id] === true}
+                onRun={() => {
+                  void onRun(ticket.id).then((runId) => {
+                    if (runId !== null) onOpenRun(runId);
+                  });
+                }}
+                onOpenRun={onOpenRun}
+              />
+            </li>
+          ))}
+          {project.finished.map((run) => (
+            <li key={run.id}>
+              <RunRow
+                run={run}
+                now={now}
+                selected={run.id === selectedRunId}
+                onOpen={() => onOpenRun(run.id)}
+              />
+            </li>
+          ))}
+        </ul>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/**
+ * One run as a compact row: status dot, title, and time. Everything else
+ * (chips, costs, actions) lives on the run's own page; the row is a plain
+ * link so copy link and middle-click behave normally.
+ */
+function RunRow({
+  run,
+  now,
+  selected,
+  onOpen,
+}: {
+  run: Run;
+  now: number;
+  selected: boolean;
+  onOpen: () => void;
+}) {
+  const live = isActive(run.status);
+  const time =
+    live && run.startedAt ? duration(run.startedAt, now) : relative(run.createdAt, now);
+
+  return (
+    <a
+      href={`/runs/${encodeURIComponent(run.id)}`}
+      onClick={(event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+        event.preventDefault();
+        onOpen();
+      }}
+      aria-current={selected ? "page" : undefined}
+      title={`${run.ticket.identifier}: ${run.ticket.title} (${STATUS_TONE[run.status].label})`}
+      className={`flex items-center gap-2 rounded-lg py-1.5 pr-2 pl-[26px] transition-colors ${
+        selected
+          ? "bg-ink-750 text-haze-50"
+          : "text-haze-300 hover:bg-ink-800/70 hover:text-haze-100"
+      }`}
+    >
+      <StatusDot status={run.status} size={6} />
+      <span className="min-w-0 flex-1 truncate text-[12.5px]">{run.ticket.title}</span>
+      <span className="shrink-0 font-mono text-[10px] tabular-nums text-haze-600">{time}</span>
+    </a>
+  );
+}
+
+/**
+ * A ticket with no run for its current revision. When an older revision's run
+ * is still in flight the row points at it; otherwise it offers to queue one.
+ */
+function TicketRow({
+  ticket,
+  active,
+  busy,
+  onRun,
+  onOpenRun,
+}: {
+  ticket: Ticket;
+  active?: Run;
+  busy: boolean;
+  onRun: () => void;
+  onOpenRun: (runId: string) => void;
+}) {
+  return (
+    <div
+      className="group/ticket flex items-center gap-2 rounded-lg py-1 pr-1 pl-[26px] text-haze-300 transition-colors hover:bg-ink-800/70"
+      title={`${ticket.identifier}: ${ticket.title}`}
+    >
+      {active ? (
+        <StatusDot status={active.status} size={6} />
+      ) : (
+        <span
+          className="inline-block size-[6px] shrink-0 rounded-full border border-haze-600"
+          aria-hidden="true"
+        />
+      )}
+      <a
+        href={ticket.url}
+        target="_blank"
+        rel="noreferrer"
+        className="min-w-0 flex-1 truncate text-[12.5px] hover:text-haze-100"
+      >
+        {ticket.title}
+      </a>
+      {active ? (
+        <Button
+          variant="ghost"
+          size="plate"
+          onClick={() => onOpenRun(active.id)}
+          className={STATUS_TONE[active.status].fg}
+        >
+          {STATUS_TONE[active.status].label}
+        </Button>
+      ) : (
+        <Button variant="outline" size="plate" onClick={onRun} disabled={busy}>
+          <Play className="size-2.5" />
+          {busy ? "Queueing" : "Run"}
+        </Button>
+      )}
+    </div>
   );
 }
 
 /**
  * This machine cannot execute runs and nothing else is connected, so the
  * queue cannot drain. Shown whenever the condition holds, since the per-run
- * queueReason strip only appears once a run exists to carry it.
+ * queueReason banner only appears once a run exists to carry it.
  */
 function QueueOnlyNotice({
   onOpenWorkers,
@@ -253,279 +466,6 @@ function QueueOnlyNotice({
         .
       </p>
     </div>
-  );
-}
-
-/** Quiet sub-header inside the Runs group, matching the group's own label style. */
-function SectionLabel({ label }: { label: string }) {
-  return (
-    <div className="flex items-center gap-2 px-2 pt-3 pb-1">
-      <Plate className="text-haze-700">{label}</Plate>
-    </div>
-  );
-}
-
-function TicketStrip({
-  ticket,
-  repoName,
-  active,
-  busy,
-  onRun,
-  onOpenRun,
-}: {
-  ticket: Ticket;
-  /** owner/name of the mapped repo, resolved from config. */
-  repoName: string | undefined;
-  active?: Run;
-  busy: boolean;
-  onRun: () => void;
-  onOpenRun: (runId: string) => void;
-}) {
-  return (
-    <Card size="sm" className="group flex-row gap-0 overflow-hidden rounded-strip py-0">
-      <div className="min-w-0 flex-1 p-3">
-        <div className="flex items-center gap-2">
-          <a
-            href={ticket.url}
-            target="_blank"
-            rel="noreferrer"
-            className="group/id touch-target inline-flex items-center gap-1 font-mono text-[11px] text-haze-400 hover:text-haze-50"
-          >
-            {ticket.identifier}
-            <External className="size-3 text-haze-700 opacity-0 transition-opacity group-hover/id:opacity-100 pointer-coarse:opacity-100" />
-          </a>
-          <span className="ml-auto truncate font-mono text-[10px] text-haze-700">
-            {ticket.state}
-          </span>
-        </div>
-
-        <h3 className="mt-2 line-clamp-2 text-[13px] leading-snug text-haze-50">{ticket.title}</h3>
-
-        <div className="mt-2.5 flex flex-wrap items-center gap-2">
-          <RepoChip repo={repoName} />
-          <span className="ml-auto">
-            {active ? (
-              <Button variant="outline" size="plate" onClick={() => onOpenRun(active.id)}>
-                <StatusDot status={active.status} size={6} />
-                <span className={STATUS_TONE[active.status].fg}>
-                  {STATUS_TONE[active.status].label}
-                </span>
-              </Button>
-            ) : (
-              <Button size="plate" onClick={onRun} disabled={busy}>
-                <Play className="size-3" />
-                {busy ? "Queueing" : "Run"}
-              </Button>
-            )}
-          </span>
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-/**
- * One run in the sidebar: status, ticket, and elapsed time, plus inline
- * actions and the PR chip. The run link is a stretched overlay anchor (so
- * copy link and middle-click behave like any link) laid under the content;
- * every interactive child opts back into pointer events so it takes its own
- * clicks, and plain text falls through to the link underneath.
- */
-function RunStrip({
-  run,
-  repoName,
-  now,
-  selected,
-  busy,
-  onOpen,
-  onCancel,
-  onRetry,
-  onAnotherLook,
-}: {
-  run: Run;
-  /** owner/name of the mapped repo, resolved from config. */
-  repoName: string | undefined;
-  now: number;
-  selected: boolean;
-  busy: boolean;
-  onOpen: () => void;
-  onCancel: () => void;
-  onRetry: () => void;
-  onAnotherLook: () => void;
-}) {
-  const tone = STATUS_TONE[run.status];
-  const live = isActive(run.status);
-  // Cancel is destructive and easy to fat-finger on touch; ask inline first.
-  const [confirmingCancel, setConfirmingCancel] = useState(false);
-  useEffect(() => setConfirmingCancel(false), [run.id, run.status]);
-  const retryable = run.status === "failed" || run.status === "cancelled";
-  // The chip tracks the run-level PR, which survives retries; the follow-up
-  // button mirrors the server's gate instead: a terminal run still carrying
-  // its PR result (completed runs, plus failed or cancelled follow-ups)
-  // whose PR hasn't merged or closed.
-  const prUrl = run.prUrl;
-  const prState = prUrl ? (run.prState ?? "open") : undefined;
-  const lookable =
-    isTerminal(run.status) &&
-    Boolean(run.result?.prUrl) &&
-    prState !== "merged" &&
-    prState !== "closed";
-  const span = live
-    ? run.startedAt
-      ? duration(run.startedAt, now)
-      : "-"
-    : run.finishedAt && run.startedAt
-      ? duration(run.startedAt, Date.parse(run.finishedAt))
-      : "-";
-
-  return (
-    <div
-      className={`relative flex overflow-hidden rounded-strip bg-card ring-1 transition-colors hover:bg-ink-800 ${
-        selected ? "bg-ink-800 ring-ink-500" : "ring-foreground/10"
-      }`}
-    >
-      {/* The whole card is one link; controls float above it. */}
-      <a
-        href={`/runs/${encodeURIComponent(run.id)}`}
-        onClick={(event) => {
-          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
-          event.preventDefault();
-          onOpen();
-        }}
-        aria-current={selected ? "page" : undefined}
-        aria-label={`Open run for ${run.ticket.identifier}: ${run.ticket.title}`}
-        className="absolute inset-0 rounded-strip"
-      />
-      <div className="pointer-events-none relative min-w-0 flex-1 p-3">
-        <div className="flex items-center gap-1.5">
-          <StatusDot status={run.status} size={6} />
-          <span className={`plate ${tone.fg}`}>{tone.label}</span>
-          <span className="ml-auto flex items-center gap-1">
-            {confirmingCancel ? (
-              <>
-                <span className="plate text-rust-400">Cancel?</span>
-                <StripAction
-                  icon={<Check className="size-3" />}
-                  label="Confirm cancel run"
-                  tooltip="Confirm cancel"
-                  disabled={busy}
-                  className="text-rust-400 hover:bg-rust-500/15 hover:text-rust-400"
-                  onClick={() => {
-                    setConfirmingCancel(false);
-                    onCancel();
-                  }}
-                />
-                <StripAction
-                  icon={<Close className="size-3" />}
-                  label="Keep running"
-                  tooltip="Keep running"
-                  disabled={busy}
-                  onClick={() => setConfirmingCancel(false)}
-                />
-              </>
-            ) : (
-              <>
-                {live && (
-                  <StripAction
-                    icon={<Close className="size-3" />}
-                    label="Cancel run"
-                    tooltip="Cancel run"
-                    disabled={busy}
-                    className="hover:text-rust-400"
-                    onClick={() => setConfirmingCancel(true)}
-                  />
-                )}
-                {retryable && (
-                  <StripAction
-                    icon={<Retry className="size-3" />}
-                    label="Retry run"
-                    tooltip="Retry run"
-                    disabled={busy}
-                    onClick={onRetry}
-                  />
-                )}
-                {lookable && (
-                  <StripAction
-                    icon={<Eye className="size-3" />}
-                    label="Take another look"
-                    tooltip="Take another look: rebase the PR and address review feedback"
-                    disabled={busy}
-                    onClick={onAnotherLook}
-                  />
-                )}
-              </>
-            )}
-            <span className="font-mono text-[10px] tabular-nums text-haze-700">{span}</span>
-          </span>
-        </div>
-        <div className="mt-1.5 flex items-baseline gap-2">
-          <span className="shrink-0 font-mono text-[11px] text-haze-400">
-            {run.ticket.identifier}
-          </span>
-          <span className="truncate text-[12.5px] leading-snug text-haze-50">
-            {run.ticket.title}
-          </span>
-        </div>
-        <div className="mt-1.5 flex items-center gap-2">
-          <RepoChip repo={repoName} />
-          {prUrl && prState && (
-            <PrChip url={prUrl} state={prState} className="pointer-events-auto" />
-          )}
-          <span className="pointer-events-auto">
-            <CostBadge costs={run.costs} totals={run.costTotals} align="end" />
-          </span>
-          <span className="ml-auto font-mono text-[10px] text-haze-700">
-            {relative(run.createdAt, now)}
-          </span>
-        </div>
-        {run.status === "queued" && run.queueReason && (
-          <p className="mt-1.5 truncate text-[11px] text-haze-700" title={run.queueReason}>
-            {run.queueReason}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/**
- * One icon-only action on a run strip: always visible (touch users must
- * reach it), pinned above the strip's stretched link, and paired with both
- * an aria-label and a tooltip.
- */
-function StripAction({
-  icon,
-  label,
-  tooltip,
-  onClick,
-  disabled,
-  className,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  tooltip: string;
-  onClick: () => void;
-  disabled?: boolean;
-  className?: string;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={label}
-            disabled={disabled}
-            onClick={onClick}
-            className={cn("pointer-events-auto text-haze-600 hover:text-haze-200", className)}
-          >
-            {icon}
-          </Button>
-        }
-      />
-      <TooltipContent side="top">{tooltip}</TooltipContent>
-    </Tooltip>
   );
 }
 

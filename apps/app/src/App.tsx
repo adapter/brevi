@@ -69,8 +69,8 @@ export default function App() {
 
   return (
     <SidebarProvider
-      className="h-svh min-h-svh overflow-hidden md:max-xl:[--sidebar-width:18rem]!"
-      style={{ "--sidebar-width": "22rem" } as React.CSSProperties}
+      className="h-svh min-h-svh overflow-hidden md:max-xl:[--sidebar-width:16rem]!"
+      style={{ "--sidebar-width": "18rem" } as React.CSSProperties}
     >
       <AppSidebar
         tickets={tickets}
@@ -84,22 +84,15 @@ export default function App() {
         workers={workers}
         busy={busy}
         unreachable={unreachable}
+        page={page}
         onRun={handleRun}
         onOpenRun={openRun}
-        onCancelRun={(id) => void cancelRun(id)}
-        onRetryRun={(id) => void retryRun(id)}
-        onAnotherLook={(id) => void followUpRun(id)}
+        onOpenConfig={() => openConfig()}
         onOpenWorkers={() => openConfig("workers")}
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
-        <SiteHeader
-          conn={conn}
-          config={config}
-          linearStatus={linearStatus}
-          page={page}
-          onOpenConfig={openConfig}
-        />
+        <SiteHeader conn={conn} />
 
         {notice && (
           <Alert
