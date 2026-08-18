@@ -632,7 +632,7 @@ function QueueOnlyNotice({
   reason,
   onOpenWorkers,
 }: {
-  reason: "bwrap-unavailable" | "seatbelt-unavailable" | "unsupported-platform";
+  reason: "bwrap-unavailable" | "seatbelt-unavailable" | "no-agent-cli" | "unsupported-platform";
   onOpenWorkers: () => void;
 }) {
   const explain =
@@ -640,7 +640,9 @@ function QueueOnlyNotice({
       ? "This Mac's Seatbelt sandbox failed its readiness check, so runs can't execute here."
       : reason === "bwrap-unavailable"
         ? "This machine is missing bubblewrap, so runs can't execute here."
-        : "This machine can't run agents itself.";
+        : reason === "no-agent-cli"
+          ? "No coding agent CLI (claude, codex, or grok) was found on this machine, so runs can't execute here. Install one and restart the orchestrator."
+          : "This machine can't run agents itself.";
   return (
     <div className="mx-1 mb-2 rounded-lg border border-ink-700 bg-ink-850 p-3">
       <p className="text-[12px] leading-relaxed text-haze-400">

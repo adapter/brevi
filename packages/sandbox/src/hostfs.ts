@@ -103,14 +103,34 @@ export async function copyDirIntoWithin(rootDir: string, srcDir: string, destDir
   await copyInto(real, parts, srcDir);
 }
 
+/**
+ * Removes a single non-directory entry. Never recursive, and the parent
+ * chain is re-verified with O_NOFOLLOW_ANY immediately before the unlink,
+ * so an ancestor swapped earlier cannot redirect the deletion; the residual
+ * window is one syscall wide and bounded to a single directory entry.
+ */
+async function unlinkVerified(rootReal: string, parts: string[]): Promise<void> {
+  const parent = join(rootReal, ...parts.slice(0, -1));
+  const check = await open(parent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY);
+  try {
+    await rm(join(rootReal, ...parts), { force: false, recursive: false });
+  } finally {
+    await check.close();
+  }
+}
+
 async function copyInto(rootReal: string, parts: string[], srcDir: string): Promise<void> {
   for (const entry of await readdir(srcDir, { withFileTypes: true })) {
     const childParts = [...parts, entry.name];
     const destPath = join(rootReal, ...childParts);
     const childSrc = join(srcDir, entry.name);
     if (entry.isDirectory()) {
-      if ((await lstatType(destPath)) === "file") await rm(destPath, { force: true });
+      const existing = await lstat(destPath).catch(() => undefined);
+      if (existing && !existing.isDirectory()) await unlinkVerified(rootReal, childParts);
       try {
+        // A swapped ancestor can misdirect this mkdir; the O_NOFOLLOW_ANY
+        // verify below then fails the copy, bounding the damage to at most
+        // an empty directory (no contents are ever written unverified).
         await mkdir(destPath);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -120,22 +140,38 @@ async function copyInto(rootReal: string, parts: string[], srcDir: string): Prom
       await copyInto(rootReal, childParts, childSrc);
     } else if (entry.isSymbolicLink()) {
       const target = await readlink(childSrc);
-      if ((await lstatType(destPath)) !== "missing") await rm(destPath, { recursive: true, force: true });
+      const existing = await lstat(destPath).catch(() => undefined);
+      if (existing?.isDirectory()) {
+        throw new Error(`refusing to replace directory ${destPath} with a symlink`);
+      }
+      if (existing) await unlinkVerified(rootReal, childParts);
       await symlink(target, destPath);
       try {
         const check = await open(destPath, O_RDONLY | O_SYMLINK | O_NOFOLLOW_ANY);
         await check.close();
       } catch (error) {
-        await rm(destPath, { force: true });
+        await rm(destPath, { force: true, recursive: false });
         throw error;
       }
     } else if (entry.isFile()) {
       const stats = await lstat(childSrc);
-      const existing = await lstatType(destPath);
-      if (existing === "other") await rm(destPath, { recursive: true, force: true });
       const src = await open(childSrc, O_RDONLY);
       try {
-        const dest = await open(destPath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, stats.mode & 0o777);
+        // O_NOFOLLOW_ANY turns an existing symlink (or a racing swap of any
+        // ancestor) into ELOOP; one unlink of that single entry and a retry
+        // covers the legitimate overwrite-a-symlink case without ever
+        // recursively deleting through a pathname.
+        let dest: FileHandle;
+        try {
+          dest = await open(destPath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, stats.mode & 0o777);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "ELOOP") throw error;
+          const existing = await lstat(destPath).catch(() => undefined);
+          if (existing?.isDirectory()) throw error;
+          await unlinkVerified(rootReal, childParts);
+          dest = await open(destPath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, stats.mode & 0o777);
+        }
         try {
           await pipeline(src.createReadStream(), dest.createWriteStream());
         } finally {

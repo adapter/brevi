@@ -25,6 +25,8 @@ const SENSITIVE_HOME_SUBPATHS = [
   ".gnupg",
   ".kube",
   ".netrc",
+  ".git-credentials",
+  ".config/git",
   ".npmrc",
   ".config/gh",
   ".config/gcloud",

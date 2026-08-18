@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
-import { collectBwrapProblems, collectSeatbeltProblems } from "@brevi/sandbox";
+import { collectBwrapProblems, collectSeatbeltProblems, resolveBinary } from "@brevi/sandbox";
 import type { HostExecution } from "@brevi/shared";
 import { runWorker } from "@brevi/worker";
 import type { OrchestratorHandle } from "@brevi/orchestrator";
@@ -56,16 +56,18 @@ function loginShellPath(): Promise<string | undefined> {
 export async function resolveHostExecution(): Promise<HostExecution> {
   await ensureUsablePath();
   if (process.platform === "linux") {
-    return (await collectBwrapProblems()).length === 0
-      ? { kind: "local-worker" }
-      : { kind: "none", reason: "bwrap-unavailable" };
+    if ((await collectBwrapProblems()).length > 0) return { kind: "none", reason: "bwrap-unavailable" };
+  } else if (process.platform === "darwin") {
+    if ((await collectSeatbeltProblems()).length > 0)
+      return { kind: "none", reason: "seatbelt-unavailable" };
+  } else {
+    return { kind: "none", reason: "unsupported-platform" };
   }
-  if (process.platform === "darwin") {
-    return (await collectSeatbeltProblems()).length === 0
-      ? { kind: "local-worker" }
-      : { kind: "none", reason: "seatbelt-unavailable" };
-  }
-  return { kind: "none", reason: "unsupported-platform" };
+  // A healthy sandbox with no agent CLI still cannot execute anything, and
+  // advertising local-worker would hide the queue-only setup notice.
+  const agents = await Promise.all(["claude", "codex", "grok"].map((cmd) => resolveBinary(cmd)));
+  if (agents.every((resolved) => resolved === undefined)) return { kind: "none", reason: "no-agent-cli" };
+  return { kind: "local-worker" };
 }
 
 export interface LocalWorkerHandle {
