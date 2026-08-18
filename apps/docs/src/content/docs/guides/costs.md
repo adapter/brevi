@@ -13,9 +13,10 @@ Claude executions run on Linux workers, and each session's transcript lives insi
 
 ```text
 ~/.brevi/ccusage/claude/projects/<project-key>/<session-id>.jsonl
+~/.brevi/ccusage/claude/projects/<project-key>/<session-id>/subagents/agent-<hash>.jsonl
 ```
 
-The snapshot keeps only what usage accounting needs: event type and timestamp, session, request, and message ids, the model, the four token counts, and any pre-calculated cost. Prompt and response text, thinking, tool calls and results, repository content, credentials, and filesystem paths never leave the worker. A re-exported session (a retry, a resumed terminal) replaces its file wholesale, so nothing is ever double-counted.
+The snapshot keeps only what usage accounting needs: event type and timestamp, session, request, and message ids, the model, the four token counts, and any pre-calculated cost. Prompt and response text, thinking, tool calls and results, repository content, credentials, and filesystem paths never leave the worker. A re-exported session (a retry, a resumed terminal) replaces its file wholesale, so nothing is ever double-counted. Sessions that used subagents export one extra small file per subagent transcript, nested under that session's `subagents/` directory, so the archive's totals cover the whole run, all models.
 
 ## Querying with ccusage
 
@@ -37,4 +38,4 @@ Any other ccusage command (`monthly`, `session`, `blocks`) works against the sam
 
 ## Retention
 
-The archive is accounting, not run state: it lives outside `~/.claude`, `~/.brevi/runs`, and `~/.brevi/workspaces`, and no run cleanup (artifact deletion, sandbox reaping, archiving a run in the dashboard) ever touches it. It grows by one small file per Claude session and is kept indefinitely. Reclaiming the space is an explicit operator action: delete `~/.brevi/ccusage`, which only forgets historical usage and affects nothing else.
+The archive is accounting, not run state: it lives outside `~/.claude`, `~/.brevi/runs`, and `~/.brevi/workspaces`, and no run cleanup (artifact deletion, sandbox reaping, archiving a run in the dashboard) ever touches it. It grows by one small file per Claude session, plus one per subagent transcript that session used, and is kept indefinitely. Reclaiming the space is an explicit operator action: delete `~/.brevi/ccusage`, which only forgets historical usage and affects nothing else.

@@ -59,4 +59,46 @@ describe("CcusageArchive", () => {
     await expect(archive.save("claude", "brevi-a-b", SESSION_ID, LINE)).rejects.toThrow();
     expect(readdirSync(sessionDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
+
+  it("stores a subagent snapshot nested under the session, alongside the main session's own file", async () => {
+    await archive.save("claude", "brevi-adapter-brevi", SESSION_ID, LINE);
+    await archive.save("claude", "brevi-adapter-brevi", SESSION_ID, LINE, "agent-abc123");
+
+    const sessionPath = join(dir, "claude", "projects", "brevi-adapter-brevi", `${SESSION_ID}.jsonl`);
+    const subagentPath = join(
+      dir,
+      "claude",
+      "projects",
+      "brevi-adapter-brevi",
+      SESSION_ID,
+      "subagents",
+      "agent-abc123.jsonl",
+    );
+    // A file named `<session-id>.jsonl` and a directory named `<session-id>`
+    // legitimately coexist under one project key: ccusage reads both.
+    expect(readFileSync(sessionPath, "utf8")).toBe(LINE);
+    expect(readFileSync(subagentPath, "utf8")).toBe(LINE);
+  });
+
+  it("replaces a subagent's file wholesale, with no leftover temp file", async () => {
+    await archive.save("claude", "brevi-a-b", SESSION_ID, LINE, "agent-1");
+    const grown = LINE + LINE;
+    await archive.save("claude", "brevi-a-b", SESSION_ID, grown, "agent-1");
+
+    const subagentDir = join(dir, "claude", "projects", "brevi-a-b", SESSION_ID, "subagents");
+    expect(readFileSync(join(subagentDir, "agent-1.jsonl"), "utf8")).toBe(grown);
+    expect(readdirSync(subagentDir)).toEqual(["agent-1.jsonl"]);
+  });
+
+  it("rejects traversal, separators, absolute paths, and hidden names in a subagent id, and refuses to create anything", async () => {
+    const hostile = ["..", ".", "a/b", "a\\b", "a\0b", "", ".hidden", "../../etc"];
+    for (const segment of hostile) {
+      expect(archive.pathFor("claude", "brevi-a-b", SESSION_ID, segment)).toBeNull();
+      // A hostile sessionId matters just as much here: it becomes a directory
+      // name in the subagent layout, not just the stem of a file name.
+      expect(archive.pathFor("claude", "brevi-a-b", segment, "agent-1")).toBeNull();
+    }
+    await expect(archive.save("claude", "brevi-a-b", SESSION_ID, LINE, "..")).rejects.toThrow("unsafe");
+    expect(existsSync(join(dir, "claude"))).toBe(false);
+  });
 });

@@ -1166,6 +1166,46 @@ describe("WorkerRegistry", () => {
     expect(socket.ofType("run-complete-ack")).toHaveLength(1);
   });
 
+  it("archives a subagent's snapshot nested under the session, and drops one with a traversal subagent id", async () => {
+    const socket = await connect();
+    const run = await queueRun();
+    dispatch(run);
+    await flush();
+    const lease = socket.last("dispatch")!.lease;
+
+    const subagentPath = () =>
+      join(usageDir, "claude", "projects", "brevi-adapter-brevi", SNAPSHOT_SESSION, "subagents", "agent-abc123.jsonl");
+
+    socket.receive(snapshotFrame(lease.id, run.id, { seq: 1, subagentId: "agent-abc123" }));
+    await flush();
+    expect(readFileSync(subagentPath(), "utf8")).toBe(SNAPSHOT_LINE);
+
+    // A later snapshot of the same subagent replaces its file wholesale.
+    const grown = SNAPSHOT_LINE + SNAPSHOT_LINE;
+    socket.receive(snapshotFrame(lease.id, run.id, { seq: 2, subagentId: "agent-abc123", jsonl: grown }));
+    await flush();
+    expect(readFileSync(subagentPath(), "utf8")).toBe(grown);
+
+    // A traversal subagent id is dropped, not fatal: the watermark still
+    // advances so the completion behind it is acknowledged.
+    socket.receive(snapshotFrame(lease.id, run.id, { seq: 3, subagentId: ".." }));
+    await flush();
+    socket.receive({
+      type: "run-complete",
+      leaseId: lease.id,
+      runId: run.id,
+      outcome: "completed",
+      finishedAt: "2026-08-11T10:30:00.000Z",
+      artifacts: [],
+      attempts: [],
+      costs: [],
+      seq: 4,
+    });
+    await flush();
+    expect(store.get(run.id)?.status).toBe("completed");
+    expect(socket.ofType("run-complete-ack")).toHaveLength(1);
+  });
+
   it("applies a lease-less snapshot for a run it knows: the attach re-export arrives after settlement", async () => {
     const socket = await connect();
     const run = await queueRun();

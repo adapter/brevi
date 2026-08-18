@@ -2079,13 +2079,19 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       );
       return;
     }
-    if (!this.#usage.pathFor(message.source, message.projectKey, message.sessionId)) {
+    if (!this.#usage.pathFor(message.source, message.projectKey, message.sessionId, message.subagentId)) {
       console.warn(
         `[brevi] worker sent an unsafe usage snapshot path for run ${runId}; dropped`,
       );
       return;
     }
-    await this.#usage.save(message.source, message.projectKey, message.sessionId, message.jsonl);
+    await this.#usage.save(
+      message.source,
+      message.projectKey,
+      message.sessionId,
+      message.jsonl,
+      message.subagentId,
+    );
   }
 
   async #recordMemories(
