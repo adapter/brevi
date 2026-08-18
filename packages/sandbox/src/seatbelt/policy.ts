@@ -142,9 +142,16 @@ export function seatbeltPolicy(options: SeatbeltPolicyOptions): string {
   (global-name "com.apple.coreservices.launchservicesd"))
 (allow ipc-posix*)
 
-; Network: outbound open (agents call their APIs); inbound binds allowed on
-; loopback only, for dev servers the run starts itself.
-(allow network-outbound)
+; Network: outbound over IP (agents call their APIs over TCP), plus the one
+; unix socket name resolution needs (mDNSResponder). Scoping unix-domain
+; outbound to just the resolver deliberately excludes every other host
+; service socket, so a run cannot connect to the operator's SSH-agent socket
+; to use loaded keys, wherever that socket lives. Inbound binds are loopback
+; only, for dev servers the run starts itself.
+(allow network-outbound
+  (remote ip "*:*")
+  (literal "/private/var/run/mDNSResponder")
+  (literal "/var/run/mDNSResponder"))
 (allow system-socket)
 (allow network-bind (local ip "localhost:*"))
 (allow network-inbound (local ip "localhost:*"))

@@ -29,6 +29,11 @@ describe("seatbeltPolicy", () => {
     // The pasteboard service is denied back out of the broad mach-lookup allow.
     expect(policy).toContain('com.apple.pboard');
     expect(policy.indexOf('(allow mach-lookup)')).toBeLessThan(policy.indexOf('(deny mach-lookup'));
+    // Outbound is IP + the resolver socket only; no blanket unix-domain
+    // outbound, so the SSH-agent socket is unreachable.
+    expect(policy).not.toContain('(allow network-outbound)\n');
+    expect(policy).toContain('(remote ip "*:*")');
+    expect(policy).toContain('/var/run/mDNSResponder');
     expect(policy).toContain('/Users/op/Library/Keychains');
     // The deny rules land after the broad read allow, so they win in SBPL.
     expect(policy.indexOf("(allow file-read*)")).toBeLessThan(policy.indexOf('(deny file-read* (subpath'));
