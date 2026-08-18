@@ -148,11 +148,18 @@ export function RunDetail({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700 bg-background px-4 py-2">
+        <span
+          className="min-w-0 max-w-full flex-1 basis-52 truncate text-[13.5px] font-semibold text-haze-50"
+          title={run.ticket.title}
+        >
+          {run.ticket.title}
+        </span>
+
         <a
           href={run.ticket.url}
           target="_blank"
           rel="noreferrer"
-          className="group touch-target inline-flex items-center gap-1.5 text-[12px] font-medium text-haze-200 hover:text-haze-50"
+          className="group touch-target inline-flex items-center gap-1.5 font-mono text-[11.5px] font-medium text-haze-400 hover:text-haze-50"
         >
           {run.ticket.identifier}
           <External className="size-3 text-haze-700 transition-colors group-hover:text-haze-300" />
@@ -221,12 +228,6 @@ export function RunDetail({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
-        <div className="shrink-0">
-          <h2 className="text-[17px] leading-snug font-medium text-haze-50">
-            {run.ticket.title}
-          </h2>
-        </div>
-
           {run.status === "waiting" && (
             <WaitingBanner
               limit={run.limit}

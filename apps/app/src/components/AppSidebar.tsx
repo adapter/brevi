@@ -188,11 +188,13 @@ export function AppSidebar({
                   />
                 }
               >
-                <Plate className="text-haze-400">{list === "runs" ? "Runs" : "Archived"}</Plate>
-                <span className="font-mono text-[10px] leading-none text-haze-700">
+                <span className="text-[14px] leading-none font-semibold text-haze-100">
+                  {list === "runs" ? "Runs" : "Archived"}
+                </span>
+                <span className="font-mono text-[10.5px] leading-none text-haze-700">
                   {list === "runs" ? runCount : archived.length}
                 </span>
-                <ChevronRight className="size-3 rotate-90 text-haze-700" />
+                <ChevronRight className="size-3.5 rotate-90 text-haze-600" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="min-w-40">
                 <DropdownMenuRadioGroup
@@ -255,8 +257,8 @@ export function AppSidebar({
             {showQueueOnly && hostExecution?.kind === "none" && (
               <QueueOnlyNotice reason={hostExecution.reason} onOpenWorkers={onOpenWorkers} />
             )}
-            {runCount === 0 ? (
-              unreachable ? (
+            {runCount === 0 &&
+              (unreachable ? (
                 <p className="px-2 py-2 text-[12.5px] leading-relaxed text-haze-700">
                   Runs appear once the orchestrator is running.
                 </p>
@@ -264,8 +266,8 @@ export function AppSidebar({
                 <ConnectLinearCard reconnect={linearAuthError} />
               ) : (
                 <SummonCard config={config} />
-              )
-            ) : (
+              ))}
+            {projects.length > 0 && (
               <div className="flex flex-col gap-0.5 px-1">
                 {projects.map((project) => (
                   <ProjectSection
@@ -350,13 +352,16 @@ function groupByProject(
     }
     return entry;
   };
+  // Every repo the config maps gets its folder, runs or not, so a freshly
+  // connected repo is visible in the sidebar before its first ticket lands.
+  for (const key of Object.keys(config?.repos ?? {})) bucket(key);
   for (const run of runs) bucket(run.ticket.repo ?? "").runs.push(run);
   for (const ticket of pending) bucket(ticket.repo ?? "").tickets.push(ticket);
 
   return [...buckets.entries()]
     .map(([key, entry]): ProjectGroup => {
       const full = repoDisplay(config, key || undefined);
-      const name = full ? (full.split("/").pop() ?? full) : "No project";
+      const name = full ?? "No project";
       return {
         key,
         name,
@@ -415,6 +420,11 @@ function ProjectSection({
         <span className="ml-auto font-mono text-[10px] leading-none text-haze-700">{count}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
+        {count === 0 && (
+          <p className="py-1.5 pr-2 pl-[26px] text-[11.5px] leading-relaxed text-haze-700">
+            No runs yet.
+          </p>
+        )}
         <ul className="flex flex-col gap-1 pt-0.5 pr-0.5 pb-1.5 pl-5">
           {project.active.map((run) => (
             <li key={run.id}>
