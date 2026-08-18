@@ -3,7 +3,7 @@ import type React from "react";
 import type { Run } from "@brevi/shared";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { SidebarInset, SidebarProvider, SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
 import { AppSidebar } from "./components/AppSidebar";
 import { ConfigurationPage } from "./components/Configuration";
 import { Overview } from "./components/Overview";
@@ -15,6 +15,24 @@ import { repoDisplay } from "./lib/repo";
 import { isActive } from "./lib/status";
 import { useNow } from "./lib/useNow";
 import { useOrchestrator, type ConfigSection } from "./lib/useOrchestrator";
+
+/**
+ * With no top bar, a collapsed sidebar leaves nothing to reopen it with;
+ * this floats a toggle in the content corner exactly while it is closed
+ * (the open sidebar carries its own trigger in its header).
+ */
+function FloatingSidebarTrigger() {
+  const { open, openMobile, isMobile } = useSidebar();
+  if (isMobile ? openMobile : open) return null;
+  return (
+    <div className="floating-sidebar-trigger absolute top-2.5 left-2.5 z-30">
+      <SidebarTrigger
+        aria-label="Open runs"
+        className="rounded-lg border border-ink-700 bg-ink-850 text-haze-400 shadow-sm"
+      />
+    </div>
+  );
+}
 
 export default function App() {
   const {
@@ -100,13 +118,7 @@ export default function App() {
       />
 
       <SidebarInset className="relative flex h-svh min-w-0 flex-col overflow-hidden">
-        {/* No top bar: below xl the offcanvas sidebar still needs its toggle. */}
-        <div className="floating-sidebar-trigger absolute top-2.5 left-2.5 z-30 xl:hidden">
-          <SidebarTrigger
-            aria-label="Toggle runs"
-            className="rounded-lg border border-ink-700 bg-ink-850 text-haze-400 shadow-sm"
-          />
-        </div>
+        <FloatingSidebarTrigger />
 
         {notice && (
           <Alert

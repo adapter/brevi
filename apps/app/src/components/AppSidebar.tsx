@@ -22,6 +22,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
+  SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
 import { duration, relative } from "../lib/format";
@@ -147,14 +148,11 @@ export function AppSidebar({
 
   return (
     <Sidebar collapsible="offcanvas" className="border-sidebar-border">
-      <SidebarHeader className="h-12 justify-center border-b border-sidebar-border px-4">
-        <div className="flex items-center gap-2.5">
-          <img src="/logo.png" alt="" className="size-[22px]" />
-          <span className="text-[14px] leading-none font-semibold text-haze-50">
-            brevi
-          </span>
+      <SidebarHeader className="h-12 justify-center px-3">
+        <div className="flex items-center gap-2">
+          <SidebarTrigger className="text-haze-500" aria-label="Collapse sidebar" />
           {health?.version && (
-            <span className="mt-px font-mono text-[10.5px] leading-none text-haze-700">
+            <span className="font-mono text-[10.5px] leading-none text-haze-700">
               v{health.version}
             </span>
           )}
