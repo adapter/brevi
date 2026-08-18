@@ -80,7 +80,8 @@ A freshly initialised config, with every default filled in:
   "trigger": { "label": "brevi" },
   "restart": { "auto": true, "maxAttempts": 5, "probeIntervalMinutes": 15 },
   "server": { "port": 4400, "host": "127.0.0.1" },
-  "pollIntervalSeconds": 60
+  "pollIntervalSeconds": 15,
+  "configVersion": 1
 }
 ```
 
@@ -286,7 +287,11 @@ What happens when the agent hits a provider usage limit mid-run. Instead of fail
 
 ## `pollIntervalSeconds`
 
-Integer, minimum `10`, default `60`. How often brevi polls Linear for eligible tickets. brevi also polls immediately at startup and whenever Linear, the trigger label, or the repo mappings change.
+Integer, minimum `10`, default `15`. How often brevi polls Linear for eligible tickets. brevi also polls immediately at startup and whenever Linear, the trigger label, or the repo mappings change.
+
+## `configVersion`
+
+Integer, default `1`. A migration stamp brevi maintains, not a setting: there is no dashboard control for it. On load, a config file stamped below the current version has its stale stored defaults rewritten (for example, a stored `60` left over from the old `pollIntervalSeconds` default becomes `15`) and is then stamped to the current version, so a value you chose on purpose, including `60`, is kept and never migrated again.
 
 ## Redaction
 

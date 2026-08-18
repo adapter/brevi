@@ -50,7 +50,7 @@ export function OrchestratorSection({
             draft={trigger}
             unit="s"
             min={10}
-            step={10}
+            step={5}
             help="How often Linear is polled for labeled tickets. Minimum 10."
           />
         </SettingsCard>

@@ -3,7 +3,7 @@ title: Tickets and runs
 description: How brevi decides which Linear issues to pick up, which repository they run against, what a run produces, and when a ticket runs again.
 ---
 
-brevi polls Linear on an interval (`pollIntervalSeconds`, 60 by default), turns eligible issues into a queue, and executes them one at a time.
+brevi polls Linear on an interval (`pollIntervalSeconds`, 15 by default), turns eligible issues into a queue, and executes them one at a time.
 
 ## Which tickets brevi picks up
 
