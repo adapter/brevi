@@ -20,6 +20,7 @@ import { queueOnly } from "../lib/fleet";
 import { isActive, isTerminal } from "../lib/status";
 import { Activity } from "./Activity";
 import { Artifacts } from "./Artifacts";
+import { AttachTerminal } from "./AttachTerminal";
 import { Plate, PrChip, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { CostBadge, CostBreakdown } from "./CostBadge";
@@ -72,6 +73,10 @@ export function RunDetail({
   // fresher 30s probe.
   const prChipUrl = run.prUrl;
   const prChipState = prChipUrl ? (run.prState ?? "open") : undefined;
+  const finished = run.status === "completed" || run.status === "failed";
+  const retainedMs = run.sandbox.retainedUntil ? Date.parse(run.sandbox.retainedUntil) : Number.NaN;
+  const sandboxRetained = retainedMs > now;
+  const resumable = finished && sandboxRetained && Boolean(run.agentSessionId);
   // A retry clears run.result, so an active run still carrying its PR result is a follow-up in flight.
   const followUpInFlight = live && Boolean(run.result?.prUrl);
   // Completed runs, plus failed or cancelled follow-ups: those keep their PR
@@ -116,12 +121,14 @@ export function RunDetail({
   // arriving, so the slow GitHub preflight still shows a spinner.
   const followUpPending = busy || followUpInFlight;
   const [tab, setTab] = useState<LeftTab>(hasOutcome ? "result" : "activity");
+  const [terminalStarted, setTerminalStarted] = useState(false);
   // Selecting a different run resets the view, and the outcome drives it while
   // a run stays open: the Result tab appears and takes focus the moment the
   // run finishes, and hands back to the activity feed when a retry clears the
   // outcome (no other tab is a sensible default then).
   useEffect(() => {
     setTab(hasOutcome ? "result" : "activity");
+    setTerminalStarted(false);
   }, [run.id, hasOutcome]);
   const artifacts = run.result?.artifacts ?? collectArtifacts(events);
   const hasResult = Boolean(run.result);
@@ -261,6 +268,25 @@ export function RunDetail({
                 >
                   Raw
                 </TabButton>
+                {finished && (
+                  <TabButton
+                    active={tab === "terminal"}
+                    disabled={!resumable}
+                    title={
+                      resumable
+                        ? "Resume the agent conversation in this run's sandbox"
+                        : !sandboxRetained
+                          ? "The run's sandbox is no longer available; it was cleaned up when the retention window ended."
+                          : "No agent session was captured for this run; resume supports Claude runs only."
+                    }
+                    onClick={() => {
+                      setTerminalStarted(true);
+                      setTab("terminal");
+                    }}
+                  >
+                    Terminal
+                  </TabButton>
+                )}
               </div>
 
               {/* Inactive panels hide instead of unmounting: the console keeps
@@ -299,6 +325,19 @@ export function RunDetail({
                 <div className={tab === "raw" ? "h-full" : "hidden"}>
                   <Console runId={run.id} events={events} live={live} fill />
                 </div>
+                {terminalStarted && resumable && (
+                  <div className={tab === "terminal" ? "h-full" : "hidden"}>
+                    <AttachTerminal
+                      runId={run.id}
+                      retainedUntil={run.sandbox.retainedUntil as string}
+                      now={now}
+                      onClose={() => {
+                        setTerminalStarted(false);
+                        setTab("activity");
+                      }}
+                    />
+                  </div>
+                )}
               </div>
 
             <aside className="flex min-h-0 min-w-0 flex-col gap-3 xl:col-start-2 xl:row-start-2">
@@ -358,7 +397,7 @@ export function RunDetail({
   );
 }
 
-type LeftTab = "result" | "activity" | "raw";
+type LeftTab = "result" | "activity" | "raw" | "terminal";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (

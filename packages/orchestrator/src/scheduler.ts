@@ -512,6 +512,16 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
             error: "worker is offline",
           });
         }
+        // An older daemon parses no usage-report message and would silently
+        // drop it; skip it immediately instead of waiting out the timeout.
+        if (!worker.capabilities?.features?.includes("usage-report")) {
+          return Promise.resolve<MachineUsage>({
+            id: worker.id,
+            name: worker.name,
+            days: [],
+            error: "the worker needs an update before it can report usage",
+          });
+        }
         return this.#workers
           .requestUsage(worker.id)
           .then((days): MachineUsage => ({ id: worker.id, name: worker.name, days }))
@@ -1618,6 +1628,20 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
             `[brevi] ticket closure lookup failed: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
+      }
+    }
+
+    // Runs merged before prMergedAt existed carry the state but not the
+    // timestamp, and the PR poll skips already-merged PRs, so the sweep
+    // backfills them itself. A few per sweep bounds the GitHub calls; the
+    // rest catch up on later sweeps.
+    if (rules.mergedAfterDays > 0 && this.config.github.token) {
+      const missing = candidates
+        .filter((run) => run.prState === "merged" && run.prMergedAt === undefined && run.prUrl)
+        .slice(0, 10);
+      for (const run of missing) {
+        if (this.#stopped) return;
+        await this.refreshPrState(run.id);
       }
     }
 

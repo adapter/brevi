@@ -319,6 +319,12 @@ export const workerCapabilitiesSchema = z.object({
   maxConcurrency: z.number().int().min(1).max(WORKER_MAX_CONCURRENCY),
   /** Dedicated brevi-worker release version. */
   version: z.string(),
+  /**
+   * Optional messages this worker answers beyond the base protocol (e.g.
+   * "usage-report"), so the host can skip requests an older daemon would
+   * silently drop instead of waiting out the response timeout.
+   */
+  features: z.array(z.string()).default([]),
 });
 export type WorkerCapabilities = z.infer<typeof workerCapabilitiesSchema>;
 

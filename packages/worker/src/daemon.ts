@@ -265,6 +265,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     agentCommands,
     maxConcurrency: concurrency,
     version: VERSION,
+    features: ["usage-report"],
   };
   console.log(`[brevi] provider ${provider.name} (${capabilities.os}/${process.arch}), concurrency ${concurrency}`);
 
