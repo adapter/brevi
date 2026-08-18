@@ -434,6 +434,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       // Required: an omitted systemPrompt sends the CLI an EMPTY system
       // prompt, unlike `claude -p`, which always uses this preset.
       systemPrompt: { type: "preset", preset: "claude_code" },
+      // Explicit rather than relying on the SDK default: the pinned SDK
+      // version loads all three sources when this is omitted, but the
+      // published SDK docs specify that an omitted settingSources loads no
+      // filesystem settings at all. Spelling out the CLI's default sources
+      // keeps CLAUDE.md ("project" is required for it) and settings.json
+      // loading stable across SDK upgrades.
+      settingSources: ["user", "project", "local"],
       agents: options?.agents,
       cwd: activeSandbox.workspacePath,
       env: { CODEX_HOME: codexHome, GROK_HOME: grokHome },
