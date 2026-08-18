@@ -110,7 +110,7 @@ export function MemorySection({
         <Card size="sm" className="gap-2">
           <CardHeader className="gap-0">
             <div className="flex items-baseline justify-between gap-3">
-              <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
+              <h3 className="text-[13px] font-semibold text-haze-50">
                 What brevi remembers
               </h3>
               <Button
@@ -149,7 +149,7 @@ export function MemorySection({
                   <div className="flex items-baseline justify-between gap-3 border-b border-ink-700 pb-1.5">
                     <h4 className="truncate font-mono text-[12px] text-haze-100">{repoKey}</h4>
                     <div className="flex shrink-0 items-center gap-1">
-                      <span className="font-plate text-[9px] tracking-[0.14em] text-haze-700 uppercase">
+                      <span className="text-[10.5px] font-medium text-haze-600">
                         {memories.length} {memories.length === 1 ? "memory" : "memories"}
                       </span>
                       <Button
@@ -177,7 +177,7 @@ export function MemorySection({
                           <p className="text-[12.5px] leading-relaxed break-words text-haze-200">
                             {entry.text}
                           </p>
-                          <p className="mt-0.5 font-plate text-[9px] tracking-[0.14em] text-haze-700 uppercase">
+                          <p className="mt-0.5 text-[10.5px] font-medium text-haze-600">
                             {[
                               entry.ident,
                               entry.hits > 1 ? `seen ${entry.hits}x` : null,

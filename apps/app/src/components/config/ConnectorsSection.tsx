@@ -101,14 +101,14 @@ export const PROVIDERS: ProviderSpec[] = [
 
 const TONE_DOT: Record<ConnectorTone, string> = {
   ok: "bg-mint-500",
-  warn: "bg-ember-400",
+  warn: "bg-iris-400",
   error: "bg-rust-400",
   idle: "bg-haze-700",
 };
 
 const TONE_LABEL: Record<ConnectorTone, string> = {
   ok: "text-mint-400",
-  warn: "text-ember-300",
+  warn: "text-iris-400",
   error: "text-rust-400",
   idle: "text-haze-700",
 };
@@ -141,7 +141,7 @@ function ConnectorItem({
       onOpenChange={onOpenChange}
       className="border-t border-ink-700 first:border-t-0"
     >
-      <div className="flex items-center gap-2 px-3 py-2.5">
+      <div className="flex items-center gap-2 px-3 py-2">
         <CollapsibleTrigger className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left">
           <span
             className={`inline-block size-[7px] shrink-0 rounded-full ${TONE_DOT[tone]}`}
@@ -149,7 +149,7 @@ function ConnectorItem({
             aria-label={statusLabel}
             title={statusLabel}
           />
-          <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
+          <h3 className="text-[13px] font-semibold text-haze-50">
             {name}
           </h3>
           <span className={`min-w-0 truncate text-[11px] ${TONE_LABEL[tone]}`}>{statusLabel}</span>
@@ -168,10 +168,15 @@ function ConnectorItem({
 }
 
 /**
- * Provider connections: Linear, GitHub, and the agent credentials (Claude,
- * Codex, Grok), plus the Cloudflare R2 evidence connector. Rendered at
- * /config/connectors as a single-column accordion.
+ * The three connector groups: where work comes from and goes (Linear,
+ * GitHub), the agent credentials (Claude, Codex, Grok), and the evidence
+ * store (Cloudflare R2). Each renders as its own labeled accordion card.
  */
+const GROUPS: { label: string; ids: CredentialProvider[] }[] = [
+  { label: "Workflow", ids: ["linear", "github"] },
+  { label: "Agents", ids: ["anthropic", "codex", "grok"] },
+];
+
 export function ConnectorsSection({
   config,
   linearStatus,
@@ -181,9 +186,8 @@ export function ConnectorsSection({
   linearStatus: LinearStatus | null;
   onConfig: (config: BreviConfig) => void;
 }) {
-  const connectedCount = PROVIDERS.filter((spec) =>
-    spec.id === "linear" ? linearConnected(config, linearStatus) : spec.connected(config),
-  ).length;
+  const isConnected = (spec: ProviderSpec) =>
+    spec.id === "linear" ? linearConnected(config, linearStatus) : spec.connected(config);
   // Normalized to end with a period: the row renders a follow-up sentence
   // right after it, and error details arrive with and without one.
   const period = (text: string) => (text.endsWith(".") ? text : `${text}.`);
@@ -210,40 +214,56 @@ export function ConnectorsSection({
   };
 
   return (
-    <section className="mt-6">
-      <div className="flex items-center gap-2">
-        <Plate className="text-haze-400">Connections</Plate>
-        <span className="font-mono text-[11px] leading-none text-haze-700">
-          {connectedCount}/{PROVIDERS.length}
-        </span>
-      </div>
-      <Card size="sm" className="mt-3 gap-0 py-0">
-        {PROVIDERS.map((spec) => (
-          <ProviderRow
-            key={spec.id}
-            spec={spec}
+    <section className="mt-5 flex flex-col gap-5">
+      {GROUPS.map((group) => {
+        const specs = group.ids
+          .map((id) => PROVIDERS.find((spec) => spec.id === id))
+          .filter((spec): spec is ProviderSpec => spec !== undefined);
+        const connected = specs.filter(isConnected).length;
+        return (
+          <div key={group.label}>
+            <div className="flex items-center gap-2">
+              <Plate className="text-haze-400">{group.label}</Plate>
+              <span className="font-mono text-[11px] leading-none text-haze-700">
+                {connected}/{specs.length}
+              </span>
+            </div>
+            <Card size="sm" className="mt-3 gap-0 py-0">
+              {specs.map((spec) => (
+                <ProviderRow
+                  key={spec.id}
+                  spec={spec}
+                  config={config}
+                  onConfig={onConfig}
+                  open={openId === spec.id}
+                  onOpenChange={setOpen(spec.id)}
+                  authError={spec.id === "linear" ? linearAuthError : undefined}
+                  refreshWarning={spec.id === "linear" ? linearRefreshWarning : undefined}
+                  extra={
+                    spec.id === "linear" ? (
+                      <LinearPollingFields config={config} onConfig={onConfig} />
+                    ) : undefined
+                  }
+                />
+              ))}
+            </Card>
+          </div>
+        );
+      })}
+
+      <div>
+        <Plate className="text-haze-400">Evidence</Plate>
+        <Card size="sm" className="mt-3 gap-0 py-0">
+          <R2Row
             config={config}
             onConfig={onConfig}
-            open={openId === spec.id}
-            onOpenChange={setOpen(spec.id)}
-            authError={spec.id === "linear" ? linearAuthError : undefined}
-            refreshWarning={spec.id === "linear" ? linearRefreshWarning : undefined}
-            extra={
-              spec.id === "linear" ? (
-                <LinearPollingFields config={config} onConfig={onConfig} />
-              ) : undefined
-            }
+            open={openId === "r2"}
+            onOpenChange={setOpen("r2")}
           />
-        ))}
-        <R2Row
-          config={config}
-          onConfig={onConfig}
-          open={openId === "r2"}
-          onOpenChange={setOpen("r2")}
-        />
-      </Card>
+        </Card>
+      </div>
 
-      <p className="mt-6 border-t border-ink-700 pt-3.5 text-[11.5px] leading-relaxed text-haze-700">
+      <p className="border-t border-ink-700 pt-3.5 text-[11.5px] leading-relaxed text-haze-700">
         Credentials are validated with the provider, then stored in{" "}
         <code className="font-mono text-[10.5px] text-haze-400">~/.brevi/config.json</code>.
         They never leave this machine. Keys are never shown back to this page, so they are not
@@ -270,7 +290,7 @@ function LinearPollingFields({
         if (draft.dirty && !draft.invalid && !draft.saving) draft.save();
       }}
     >
-      <p className="font-plate text-[10px] font-medium tracking-[0.12em] text-haze-700 uppercase">
+      <p className="text-[11px] font-medium text-haze-600">
         Polling
       </p>
       <TagField
@@ -534,14 +554,14 @@ function ProviderRow({
         )}
 
         {refreshWarning && (
-          <p className="mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed text-ember-300">
+          <p className="mt-2 flex items-start gap-1.5 text-[12px] leading-relaxed text-iris-400">
             <Warn className="mt-px size-3 shrink-0" />
             {refreshWarning} brevi retries automatically; polling resumes once a refresh succeeds.
           </p>
         )}
 
         {device && (
-          <div className="mt-2.5 rounded-[5px] border border-ink-600 bg-ink-950/70 p-3">
+          <div className="mt-2.5 rounded-lg border border-ink-600 bg-ink-950/70 p-3">
             <Plate className="text-haze-700">Enter this code on GitHub</Plate>
             <p className="mt-2 select-all font-mono text-[20px] font-semibold tracking-[0.2em] text-haze-50">
               {device.userCode}
@@ -601,7 +621,7 @@ function ProviderRow({
               placeholder={spec.inputLabel}
               autoComplete="off"
               spellCheck={false}
-              className="flex-1 rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+              className="flex-1 rounded-md bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
             />
             <Button type="submit" size="plate" disabled={pending || value.trim() === ""}>
               {pending ? "Checking" : "Save"}

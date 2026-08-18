@@ -25,7 +25,7 @@ export function Artifacts({ runId, artifacts }: { runId: string; artifacts: Arti
                 <button
                   type="button"
                   onClick={() => setOpen(i)}
-                  className="group block w-full overflow-hidden rounded-[5px] border border-ink-700 bg-ink-850 text-left transition-colors hover:border-ink-500"
+                  className="group block w-full overflow-hidden rounded-lg border border-ink-700 bg-ink-850 text-left transition-colors hover:border-ink-500"
                 >
                   <img
                     src={artifactUrl(runId, shot.name)}
@@ -49,7 +49,7 @@ export function Artifacts({ runId, artifacts }: { runId: string; artifacts: Arti
         )}
 
         {films.map((film) => (
-          <figure key={film.name} className="overflow-hidden rounded-[5px] border border-ink-700">
+          <figure key={film.name} className="overflow-hidden rounded-lg border border-ink-700">
             <video
               src={artifactUrl(runId, film.name)}
               controls
@@ -200,7 +200,7 @@ function Lightbox({
           <img
             src={artifactUrl(runId, shot.name)}
             alt={shot.name}
-            className="max-h-full max-w-full rounded-[5px] border border-ink-700 object-contain shadow-2xl shadow-black/60"
+            className="max-h-full max-w-full rounded-lg border border-ink-700 object-contain shadow-2xl shadow-black/60"
           />
         </div>
       </DialogContent>

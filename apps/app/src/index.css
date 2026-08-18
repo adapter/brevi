@@ -9,100 +9,122 @@
 }
 
 /*
-  Light theme: the same room with the lights on. The ink ramp inverts into
-  paper, the haze ramp inverts into readable slate text, and the signal
-  colours deepen a step so they keep their contrast on white. Every component
-  reads the palette through these variables, so nothing else has to change.
+  Light theme: porcelain. White work surfaces on a faintly grey room, the grey
+  ramp flips into near-black text, and the accent/outcome hues deepen a step so
+  they hold contrast on white. Components read the palette only through these
+  variables, so nothing else changes between themes.
 */
 .light {
   color-scheme: light;
 
-  /* room */
-  --color-ink-950: #f4f5fa;
-  --color-ink-900: #eef0f7;
+  /* surfaces */
+  --color-ink-950: #f7f7f7;
+  --color-ink-900: #f0f0ef;
   --color-ink-850: #ffffff;
-  --color-ink-800: #f1f3f9;
-  --color-ink-750: #e9ecf5;
-  --color-ink-700: #dde1ee;
-  --color-ink-600: #c8cede;
-  --color-ink-500: #aab2c9;
+  --color-ink-800: #f4f4f4;
+  --color-ink-750: #ececec;
+  --color-ink-700: #e4e4e4;
+  --color-ink-600: #d4d4d4;
+  --color-ink-500: #b8b8b8;
 
   /* text */
-  --color-haze-700: #8b93b0;
-  --color-haze-600: #767f9e;
-  --color-haze-400: #5a6384;
-  --color-haze-300: #47506f;
-  --color-haze-200: #333c5c;
-  --color-haze-50: #10162b;
+  --color-haze-700: #9b9b9b;
+  --color-haze-600: #8a8a8a;
+  --color-haze-500: #7a7a7a;
+  --color-haze-400: #6b6b6b;
+  --color-haze-300: #555555;
+  --color-haze-200: #3a3a3a;
+  --color-haze-100: #2a2a2a;
+  --color-haze-50: #171717;
 
   /* signal */
-  --color-ember-700: #8f3d0d;
-  --color-ember-600: #b45113;
-  --color-ember-500: #d9631f;
-  --color-ember-300: #b95d10;
-  --color-mint-600: #157a5b;
-  --color-mint-500: #1c8c69;
-  --color-mint-400: #157a5b;
-  --color-rust-600: #a32e26;
-  --color-rust-500: #c53a30;
-  --color-rust-400: #b8382f;
-  --color-peri-500: #3f4dc4;
-  --color-peri-400: #4c5ad4;
-  --color-iris-400: #7444c4;
+  --color-ember-700: #1a4fae;
+  --color-ember-600: #2160c9;
+  --color-ember-500: #2e6fd8;
+  --color-ember-300: #4c82df;
+  --color-mint-600: #0b7a5f;
+  --color-mint-500: #0e8e6e;
+  --color-mint-400: #0b7a5f;
+  --color-rust-600: #b03136;
+  --color-rust-500: #d13438;
+  --color-rust-400: #c23a37;
+  --color-peri-500: #3b5bd2;
+  --color-peri-400: #4a6ada;
+  --color-iris-400: #9a6a10;
 
   /* GitHub PR states (Primer light). */
   --color-pr-open: #1a7f37;
   --color-pr-draft: #59636e;
   --color-pr-merged: #8250df;
   --color-pr-closed: #cf222e;
+
+  /* Usage-chart series (see the dark block for the assignment rules). */
+  --color-series-1: #2e6fd8;
+  --color-series-2: #9a6a10;
+  --color-series-3: #0e8e6e;
+  --color-series-4: #4a6ada;
+  --color-series-5: #d13438;
+
+  --color-btn: #171717;
+  --color-btn-foreground: #ffffff;
 }
 
 /*
-  brevi dashboard: "cold room, warm signal"
+  brevi in the Codex idiom: "a quiet desk"
 
-  The chrome is a cold indigo-ink. The ONLY warm colour on the screen is work that
-  is happening right now, so the eye lands on the live run before anything else.
-  Finished work cools off to mint, failures burn out to rust, waiting work stays
-  the same temperature as the room.
+  Graphite room, porcelain light theme, and almost no colour. Surfaces are
+  flat neutrals separated by hairline borders; type is the platform's own
+  face at text sizes, never tracked out. The one accent is a restrained blue
+  reserved for work that is happening right now; outcomes settle into muted
+  green and red. Everything else stays grey so the work itself is the
+  loudest thing on screen.
+
+  Ramp semantics (names kept from the previous system, values re-meant):
+  ink = neutral surfaces, haze = neutral text, ember = the working accent,
+  mint = success, rust = failure, peri = setup/info, iris = attention amber.
 */
 
 @theme {
-  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-plate: "Martian Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial,
+    system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --font-plate: var(--font-sans);
 
-  /* room */
-  --color-ink-950: #07090f;
-  --color-ink-900: #0a0d16;
-  --color-ink-850: #0e1220;
-  --color-ink-800: #131829;
-  --color-ink-750: #181e33;
-  --color-ink-700: #1f273f;
-  --color-ink-600: #2b3450;
-  --color-ink-500: #3b4668;
+  /* surfaces */
+  --color-ink-950: #0d0d0d;
+  --color-ink-900: #111111;
+  --color-ink-850: #171717;
+  --color-ink-800: #1d1d1d;
+  --color-ink-750: #232323;
+  --color-ink-700: #2b2b2b;
+  --color-ink-600: #393939;
+  --color-ink-500: #4b4b4b;
 
   /* text */
-  --color-haze-700: #4b5578;
-  --color-haze-600: #626d93;
-  --color-haze-400: #838daf;
-  --color-haze-300: #9aa4c4;
-  --color-haze-200: #bec5dd;
-  --color-haze-50: #e9ebf7;
+  --color-haze-700: #6f6f6f;
+  --color-haze-600: #808080;
+  --color-haze-500: #8e8e8e;
+  --color-haze-400: #9b9b9b;
+  --color-haze-300: #b4b4b4;
+  --color-haze-200: #d6d6d6;
+  --color-haze-100: #e6e6e6;
+  --color-haze-50: #f5f5f5;
 
   /* signal */
-  --color-ember-700: #a8480f;
-  --color-ember-600: #d9631f;
-  --color-ember-500: #ff8a3d;
-  --color-ember-300: #ffc490;
-  --color-mint-600: #1c8c69;
-  --color-mint-500: #2fbf8f;
-  --color-mint-400: #4fd9a8;
-  --color-rust-600: #b8382f;
-  --color-rust-500: #e4574c;
-  --color-rust-400: #f4796f;
-  --color-peri-500: #5c6ee8;
-  --color-peri-400: #7c8cf8;
-  --color-iris-400: #a97bf0;
+  --color-ember-700: #2e64c8;
+  --color-ember-600: #3d78e0;
+  --color-ember-500: #5b96f7;
+  --color-ember-300: #a3c4fb;
+  --color-mint-600: #0d8a6c;
+  --color-mint-500: #10a37f;
+  --color-mint-400: #31b892;
+  --color-rust-600: #c23d3d;
+  --color-rust-500: #e5484d;
+  --color-rust-400: #ef8a85;
+  --color-peri-500: #7c96f0;
+  --color-peri-400: #93a9f4;
+  --color-iris-400: #d9a03f;
 
   /* GitHub PR states (Primer dark), used only by the PR chip. */
   --color-pr-open: #3fb950;
@@ -110,37 +132,40 @@
   --color-pr-merged: #a371f7;
   --color-pr-closed: #f85149;
 
-  --radius-strip: 5px;
+  /*
+    Usage-chart categorical series, in fixed assignment order. Validated for
+    lightness band, CVD separation, and contrast against the card surface in
+    both themes; series i keeps the same hue family across themes.
+  */
+  --color-series-1: #4a86e8;
+  --color-series-2: #b8862f;
+  --color-series-3: #12967a;
+  --color-series-4: #7d8bea;
+  --color-series-5: #d95751;
 
-  --animate-beacon: beacon 2.4s ease-in-out infinite;
-  --animate-sweep: sweep 1.8s linear infinite;
-  --animate-rise: rise 0.28s cubic-bezier(0.2, 0.8, 0.3, 1) both;
+  /* Inverted-monochrome action colour: white on graphite, black on porcelain. */
+  --color-btn: #f5f5f5;
+  --color-btn-foreground: #0d0d0d;
+
+  --radius-strip: 10px;
+
+  --animate-beacon: beacon 2s ease-in-out infinite;
+  --animate-rise: rise 0.24s cubic-bezier(0.2, 0.8, 0.3, 1) both;
 
   @keyframes beacon {
     0%,
     100% {
       opacity: 1;
-      box-shadow: 0 0 0 0 currentColor;
     }
     50% {
-      opacity: 0.62;
-      box-shadow: 0 0 0 4px color-mix(in oklab, currentColor 0%, transparent);
-    }
-  }
-
-  @keyframes sweep {
-    from {
-      background-position: 0 0;
-    }
-    to {
-      background-position: 14px 0;
+      opacity: 0.45;
     }
   }
 
   @keyframes rise {
     from {
       opacity: 0;
-      transform: translateY(4px);
+      transform: translateY(3px);
     }
     to {
       opacity: 1;
@@ -158,25 +183,22 @@
 
   body {
     background-color: var(--color-ink-950);
-    background-image: linear-gradient(180deg, var(--color-ink-900) 0%, var(--color-ink-950) 62%);
-    background-attachment: fixed;
     color: var(--color-haze-200);
     font-family: var(--font-sans);
-    font-feature-settings: "cv05", "ss01";
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     @apply bg-background text-foreground;
   }
 
   ::selection {
-    background: color-mix(in oklab, var(--color-ember-500) 34%, transparent);
+    background: color-mix(in oklab, var(--color-ember-500) 28%, transparent);
     color: var(--color-haze-50);
   }
 
   :focus-visible {
-    outline: 2px solid var(--color-peri-400);
+    outline: 2px solid var(--color-ember-500);
     outline-offset: 2px;
-    border-radius: 3px;
+    border-radius: 6px;
   }
 
   * {
@@ -206,56 +228,58 @@
   }
 }
 
-/* A panel is a machined surface: cold face, hairline edge, one lit top pixel. */
+/* A panel is a flat sheet: neutral fill, hairline edge, soft corners. */
 @utility panel {
   background-color: var(--color-ink-850);
   border: 1px solid var(--color-ink-700);
-  border-radius: 8px;
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.035),
-    0 1px 2px rgb(0 0 0 / 0.4);
+  border-radius: 12px;
 }
 
-/* A strip is one unit of work slotted into the board. */
+/* A strip is one unit of work in a list: the same sheet, one size down. */
 @utility strip {
   position: relative;
   background-color: var(--color-ink-850);
   border: 1px solid var(--color-ink-700);
-  border-left-width: 0;
   border-radius: var(--radius-strip);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.03);
   transition:
     background-color 120ms ease,
     border-color 120ms ease;
 }
 
-/* Tracked-out micro label. Used for every field name in the interface. */
+/* Quiet field label. Sentence case, text size, no tracking. */
 @utility plate {
-  font-family: var(--font-plate);
-  font-size: 9px;
+  font-family: var(--font-sans);
+  font-size: 11px;
   line-height: 1;
   font-weight: 500;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
 }
 
-/* The dashed track of a phase that has not happened yet. */
+/* The rail of a phase that has not happened yet. */
 @utility track-pending {
-  background-image: linear-gradient(
-    90deg,
-    var(--color-ink-600) 0 6px,
-    transparent 6px 14px
-  );
-  background-size: 14px 100%;
+  background-color: var(--color-ink-700);
 }
 
 @utility track-active {
-  background-image: linear-gradient(
-    90deg,
-    var(--color-ember-500) 0 6px,
-    color-mix(in oklab, var(--color-ember-700) 55%, transparent) 6px 14px
-  );
-  background-size: 14px 100%;
+  background-color: var(--color-ember-500);
+}
+
+/*
+  Frameless window ergonomics (macOS): the sidebar header doubles as the
+  window's drag strip and clears the inset traffic lights; every control
+  inside it opts back out so it still takes clicks. The floating sidebar
+  trigger shifts right for the same reason.
+*/
+[data-platform="mac"] [data-slot="sidebar-header"] {
+  padding-left: 4.75rem;
+  -webkit-app-region: drag;
+}
+[data-platform="mac"] [data-slot="sidebar-header"] button,
+[data-platform="mac"] [data-slot="sidebar-header"] a {
+  -webkit-app-region: no-drag;
+}
+[data-platform="mac"] .floating-sidebar-trigger {
+  left: 5rem;
 }
 
 /* Scrollable strips (tab bars, the sidebar body) that hide their scrollbar. */
@@ -333,7 +357,7 @@
   box looking like the rest of the room.
 */
 @theme inline {
-  --font-heading: var(--font-plate);
+  --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -373,17 +397,18 @@
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
 }
-/* The dashboard is permanently dark: one theme, straight off the palette. */
+/* Both themes resolve through the ramps above; only the ramps change. */
 :root,
-.dark {
+.dark,
+.light {
   --background: var(--color-ink-950);
   --foreground: var(--color-haze-200);
   --card: var(--color-ink-850);
   --card-foreground: var(--color-haze-200);
   --popover: var(--color-ink-850);
   --popover-foreground: var(--color-haze-200);
-  --primary: var(--color-ember-500);
-  --primary-foreground: var(--color-ink-950);
+  --primary: var(--color-btn);
+  --primary-foreground: var(--color-btn-foreground);
   --secondary: var(--color-ink-750);
   --secondary-foreground: var(--color-haze-200);
   --muted: var(--color-ink-750);
@@ -393,19 +418,19 @@
   --destructive: var(--color-rust-500);
   --border: var(--color-ink-700);
   --input: var(--color-ink-600);
-  --ring: var(--color-peri-400);
+  --ring: var(--color-ember-500);
   --chart-1: var(--color-ember-500);
   --chart-2: var(--color-mint-500);
   --chart-3: var(--color-peri-400);
   --chart-4: var(--color-iris-400);
   --chart-5: var(--color-rust-500);
-  --radius: 0.5rem;
+  --radius: 0.625rem;
   --sidebar: var(--color-ink-900);
   --sidebar-foreground: var(--color-haze-200);
-  --sidebar-primary: var(--color-ember-500);
-  --sidebar-primary-foreground: var(--color-ink-950);
+  --sidebar-primary: var(--color-btn);
+  --sidebar-primary-foreground: var(--color-btn-foreground);
   --sidebar-accent: var(--color-ink-750);
   --sidebar-accent-foreground: var(--color-haze-50);
   --sidebar-border: var(--color-ink-700);
-  --sidebar-ring: var(--color-peri-400);
+  --sidebar-ring: var(--color-ember-500);
 }

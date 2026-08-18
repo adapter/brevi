@@ -18,12 +18,13 @@ import { api } from "../lib/api";
 import { clock, duration, elapsed } from "../lib/format";
 import { queueOnly } from "../lib/fleet";
 import { isActive, isTerminal } from "../lib/status";
+import { Activity } from "./Activity";
 import { Artifacts } from "./Artifacts";
 import { AttachTerminal } from "./AttachTerminal";
 import { Plate, PrChip, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { CostBadge, CostBreakdown } from "./CostBadge";
-import { External, Play, Refresh, Stop } from "./Icons";
+import { Archive, External, Play, Refresh, Stop, Unarchive } from "./Icons";
 import { ResultCard } from "./ResultCard";
 
 export function RunDetail({
@@ -36,6 +37,7 @@ export function RunDetail({
   busy,
   onCancel,
   onRetry,
+  onArchive,
   onFollowUp,
   onOpenWorkers,
 }: {
@@ -51,6 +53,8 @@ export function RunDetail({
   busy: boolean;
   onCancel: () => void;
   onRetry: () => void;
+  /** Archives the run, or restores it when the run is already archived. */
+  onArchive: () => void;
   onFollowUp: () => void | Promise<void>;
   /** Opens the Workers config page, for the queued banner's fix. */
   onOpenWorkers: () => void;
@@ -116,14 +120,14 @@ export function RunDetail({
   // Covers the gap between the click's POST and the active run snapshot
   // arriving, so the slow GitHub preflight still shows a spinner.
   const followUpPending = busy || followUpInFlight;
-  const [tab, setTab] = useState<LeftTab>(hasOutcome ? "result" : "console");
+  const [tab, setTab] = useState<LeftTab>(hasOutcome ? "result" : "activity");
   const [terminalStarted, setTerminalStarted] = useState(false);
   // Selecting a different run resets the view, and the outcome drives it while
   // a run stays open: the Result tab appears and takes focus the moment the
-  // run finishes, and hands back to the console when a retry clears the
-  // outcome (the strip is Console-only again then, so no other tab is valid).
+  // run finishes, and hands back to the activity feed when a retry clears the
+  // outcome (no other tab is a sensible default then).
   useEffect(() => {
-    setTab(hasOutcome ? "result" : "console");
+    setTab(hasOutcome ? "result" : "activity");
     setTerminalStarted(false);
   }, [run.id, hasOutcome]);
   const artifacts = run.result?.artifacts ?? collectArtifacts(events);
@@ -144,12 +148,19 @@ export function RunDetail({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/70 bg-ink-900/90 px-4 py-2">
+      <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700 bg-background px-4 py-2">
+        <span
+          className="min-w-0 max-w-full flex-1 basis-52 truncate text-[13.5px] font-semibold text-haze-50"
+          title={run.ticket.title}
+        >
+          {run.ticket.title}
+        </span>
+
         <a
           href={run.ticket.url}
           target="_blank"
           rel="noreferrer"
-          className="group touch-target inline-flex items-center gap-1.5 font-plate text-[11px] tracking-[0.06em] text-haze-200 hover:text-haze-50"
+          className="group touch-target inline-flex items-center gap-1.5 font-mono text-[11.5px] font-medium text-haze-400 hover:text-haze-50"
         >
           {run.ticket.identifier}
           <External className="size-3 text-haze-700 transition-colors group-hover:text-haze-300" />
@@ -167,7 +178,7 @@ export function RunDetail({
             </span>
           </Badge>
           {prChipUrl && prChipState && <PrChip url={prChipUrl} state={prChipState} />}
-          {(live || retryable || showFollowUp) && (
+          {(live || retryable || showFollowUp || isTerminal(run.status)) && (
             <span aria-hidden className="h-4 w-px shrink-0 bg-ink-700" />
           )}
           {/* Coexists with Cancel while a follow-up is running (live): the user
@@ -198,16 +209,26 @@ export function RunDetail({
               {busy ? "Retrying" : "Retry run"}
             </Button>
           )}
+          {isTerminal(run.status) && (
+            <Button
+              variant="outline"
+              size="plate"
+              onClick={onArchive}
+              disabled={busy}
+              title={
+                run.archivedAt
+                  ? "Bring the run back into the sidebar list"
+                  : "Hide the run from the sidebar list; it stays under Archived"
+              }
+            >
+              {run.archivedAt ? <Unarchive className="size-3" /> : <Archive className="size-3" />}
+              {run.archivedAt ? "Unarchive" : "Archive"}
+            </Button>
+          )}
         </span>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
-        <div className="shrink-0">
-          <h2 className="text-[17px] leading-snug font-medium text-haze-50">
-            {run.ticket.title}
-          </h2>
-        </div>
-
           {run.status === "waiting" && (
             <WaitingBanner
               limit={run.limit}
@@ -237,8 +258,15 @@ export function RunDetail({
                     Result
                   </TabButton>
                 )}
-                <TabButton active={tab === "console"} onClick={() => setTab("console")}>
-                  Console
+                <TabButton active={tab === "activity"} onClick={() => setTab("activity")}>
+                  Activity
+                </TabButton>
+                <TabButton
+                  active={tab === "raw"}
+                  title="The unfiltered event stream, timestamps and stderr included"
+                  onClick={() => setTab("raw")}
+                >
+                  Raw
                 </TabButton>
                 {finished && (
                   <TabButton
@@ -274,7 +302,7 @@ export function RunDetail({
                       {run.error && (
                         <Alert
                           variant="destructive"
-                          className="mb-4 rounded-[5px] border-rust-500/35 bg-rust-500/8 p-3"
+                          className="mb-4 rounded-lg border-rust-500/35 bg-rust-500/8 p-3"
                         >
                           <AlertTitle className="plate text-rust-400">Error</AlertTitle>
                           <AlertDescription className="mt-1 min-w-0 font-mono text-[11.5px] leading-relaxed text-wrap break-words whitespace-pre-wrap text-rust-400/90 md:text-wrap">
@@ -291,7 +319,10 @@ export function RunDetail({
                     </div>
                   </Card>
                 </div>
-                <div className={tab === "console" ? "h-full" : "hidden"}>
+                <div className={tab === "activity" ? "h-full" : "hidden"}>
+                  <Activity runId={run.id} events={events} live={live} />
+                </div>
+                <div className={tab === "raw" ? "h-full" : "hidden"}>
                   <Console runId={run.id} events={events} live={live} fill />
                 </div>
                 {terminalStarted && resumable && (
@@ -302,7 +333,7 @@ export function RunDetail({
                       now={now}
                       onClose={() => {
                         setTerminalStarted(false);
-                        setTab("console");
+                        setTab("activity");
                       }}
                     />
                   </div>
@@ -366,7 +397,7 @@ export function RunDetail({
   );
 }
 
-type LeftTab = "result" | "console" | "terminal";
+type LeftTab = "result" | "activity" | "raw" | "terminal";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -400,11 +431,11 @@ function TabButton({
       disabled={disabled}
       title={title}
       onClick={onClick}
-      className={`-mb-px shrink-0 touch-target border-b-2 px-3 py-2 font-plate text-[11px] tracking-[0.06em] whitespace-nowrap transition-colors ${
+      className={`-mb-px shrink-0 touch-target border-b-2 px-3 py-2 text-[12px] font-medium whitespace-nowrap transition-colors ${
         active
-          ? "border-ember-500 text-haze-50"
+          ? "border-haze-50 text-haze-50"
           : disabled
-            ? "cursor-not-allowed border-transparent text-haze-800"
+            ? "cursor-not-allowed border-transparent text-haze-700"
             : "cursor-pointer border-transparent text-haze-600 hover:text-haze-200"
       }`}
     >
@@ -436,7 +467,7 @@ function WaitingBanner({
       ? `at ${clock(resumeAt as string)} (in ${elapsed(resumeMs - now)})`
       : "any moment now";
   return (
-    <div className="rounded-[5px] border border-iris-400/35 bg-iris-400/8 p-3">
+    <div className="rounded-lg border border-iris-400/35 bg-iris-400/8 p-3">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
         <span className="plate text-iris-400">{limit ? limitLabel(limit) : "Usage limit reached"}</span>
         <span className="font-mono text-[11px] text-haze-400">
@@ -478,7 +509,7 @@ function QueuedBanner({
   onOpenWorkers: () => void;
 }) {
   return (
-    <div className="rounded-[5px] border border-haze-700/50 bg-haze-600/10 p-3">
+    <div className="rounded-lg border border-ink-700 bg-ink-850 p-3">
       <p className="text-[12.5px] leading-relaxed text-haze-400">{reason}</p>
       {hostExecution && (
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
@@ -490,7 +521,7 @@ function QueuedBanner({
             className="h-auto p-0 align-baseline text-[12.5px] text-haze-200 hover:text-haze-50"
             onClick={onOpenWorkers}
           >
-            Workers page
+            Fleet page
           </Button>
           .
         </p>

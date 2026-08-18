@@ -18,7 +18,7 @@ export function Markdown({ children }: { children: string }) {
         "[&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5",
         "[&_li]:my-0.5 [&_li]:marker:text-haze-600",
         "[&_code]:rounded-[3px] [&_code]:bg-ink-950/70 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[12px] [&_code]:text-haze-200",
-        "[&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-[5px] [&_pre]:border [&_pre]:border-ink-700 [&_pre]:bg-ink-950/70 [&_pre]:p-2.5",
+        "[&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-ink-700 [&_pre]:bg-ink-950/70 [&_pre]:p-2.5",
         "[&_pre_code]:bg-transparent [&_pre_code]:p-0",
         "[&_a]:text-haze-50 [&_a]:underline [&_a]:decoration-ink-500 hover:[&_a]:decoration-haze-400",
         "[&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-ink-600 [&_blockquote]:pl-3 [&_blockquote]:text-haze-400",

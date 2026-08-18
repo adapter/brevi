@@ -93,22 +93,25 @@ export type ConfigSection =
   | "connectors"
   | "repositories"
   | "agent"
-  | "workers"
+  | "fleet"
   | "memory"
   | "orchestrator"
   | "server";
 
-export type Page = "home" | "setup" | `config:${ConfigSection}`;
+export type Page = "home" | "setup" | "usage" | `config:${ConfigSection}`;
 
 /** Non-run pages live at fixed paths; anything else is the home/run view. */
 function pageFromPath(pathname: string): Page {
   if (/^\/setup\/?$/.test(pathname)) return "setup";
+  if (/^\/usage\/?$/.test(pathname)) return "usage";
   const match =
-    /^\/config(?:\/(connectors|repositories|agent|workers|memory|orchestrator|server))?\/?$/.exec(
+    /^\/config(?:\/(connectors|repositories|agent|fleet|workers|memory|orchestrator|server))?\/?$/.exec(
       pathname,
     );
   if (!match) return "home";
-  const section = (match[1] ?? "connectors") as ConfigSection;
+  // "workers" is the section's pre-rename URL; old bookmarks land on Fleet.
+  const segment = match[1] === "workers" ? "fleet" : match[1];
+  const section = (segment ?? "connectors") as ConfigSection;
   return `config:${section}`;
 }
 
@@ -378,6 +381,15 @@ export function useOrchestrator() {
     [selectRun],
   );
 
+  /** Open the Usage page at its own URL. */
+  const openUsage = useCallback(() => {
+    if (window.location.pathname !== "/usage") {
+      window.history.pushState(null, "", desktopPath("/usage"));
+    }
+    dispatch({ t: "page", page: "usage" });
+    selectRun(null);
+  }, [selectRun]);
+
   // A bare /config URL is valid (defaults to Connectors) but should not stay
   // in the address bar as-is: normalize it to the real section URL on load
   // without adding a history entry, so refresh reflects the actual page.
@@ -451,6 +463,30 @@ export function useOrchestrator() {
     }
   }, []);
 
+  const archiveRun = useCallback(async (runId: string) => {
+    dispatch({ t: "busy", key: runId, on: true });
+    dispatch({ t: "notice", notice: null });
+    try {
+      dispatch({ t: "run", run: await api.archiveRun(runId) });
+    } catch (err) {
+      dispatch({ t: "notice", notice: `Could not archive the run. ${errorText(err)}` });
+    } finally {
+      dispatch({ t: "busy", key: runId, on: false });
+    }
+  }, []);
+
+  const unarchiveRun = useCallback(async (runId: string) => {
+    dispatch({ t: "busy", key: runId, on: true });
+    dispatch({ t: "notice", notice: null });
+    try {
+      dispatch({ t: "run", run: await api.unarchiveRun(runId) });
+    } catch (err) {
+      dispatch({ t: "notice", notice: `Could not unarchive the run. ${errorText(err)}` });
+    } finally {
+      dispatch({ t: "busy", key: runId, on: false });
+    }
+  }, []);
+
   const followUpRun = useCallback(async (runId: string) => {
     dispatch({ t: "busy", key: runId, on: true });
     dispatch({ t: "notice", notice: null });
@@ -488,9 +524,12 @@ export function useOrchestrator() {
     events: state.events,
     openRun,
     openConfig,
+    openUsage,
     runTicket,
     cancelRun,
     retryRun,
+    archiveRun,
+    unarchiveRun,
     followUpRun,
     dismissNotice,
     applyConfig,

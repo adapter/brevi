@@ -17,6 +17,7 @@ export function OrchestratorSection({
 }) {
   const trigger = useSettingsDraft(config, onConfig);
   const restart = useSettingsDraft(config, onConfig);
+  const archive = useSettingsDraft(config, onConfig);
 
   const label = trigger.value("trigger.label");
   const auto = restart.value("restart.auto") === true;
@@ -81,6 +82,37 @@ export function OrchestratorSection({
             min={1}
             disabled={!auto}
             help="Minutes between liveness probes while waiting on a limit whose reset time the agent didn't report."
+          />
+        </SettingsCard>
+
+        <SettingsCard
+          title="Auto-archive"
+          draft={archive}
+          description="Finished runs leave the sidebar's default list on their own once a rule's day count passes. Archived runs stay on disk under Archived and can be brought back any time; 0 disables a rule."
+        >
+          <NumberField
+            label="After merge"
+            path="archive.mergedAfterDays"
+            draft={archive}
+            unit="d"
+            min={0}
+            help="Days after a run's pull request merges."
+          />
+          <NumberField
+            label="After ticket close"
+            path="archive.closedTicketAfterDays"
+            draft={archive}
+            unit="d"
+            min={0}
+            help="Days after a run's Linear ticket is completed or canceled."
+          />
+          <NumberField
+            label="After finish"
+            path="archive.afterDays"
+            draft={archive}
+            unit="d"
+            min={0}
+            help="Days after a run finishes, whatever became of its PR or ticket."
           />
         </SettingsCard>
       </div>

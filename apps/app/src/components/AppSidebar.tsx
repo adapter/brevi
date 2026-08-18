@@ -1,29 +1,67 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { BreviConfig, HealthResponse, LinearStatus, Run, Ticket, WorkerView } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
+  SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { Card } from "@/components/ui/card";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
 import { duration, relative } from "../lib/format";
 import { queueOnly } from "../lib/fleet";
-import { linearConnected as isLinearConnected } from "../lib/linear";
+import {
+  linearConnected as isLinearConnected,
+  linearNeedsAttention,
+} from "../lib/linear";
 import { repoDisplay } from "../lib/repo";
 import { isActive, isTerminal, STATUS_TONE } from "../lib/status";
-import { Plate, PrChip, RepoChip, StatusDot } from "./Bits";
-import { CostBadge } from "./CostBadge";
-import { Check, Close, Eye, External, Play, Retry } from "./Icons";
-import { ThemeToggle } from "./ThemeToggle";
+import type { Connection, Page } from "../lib/useOrchestrator";
+import { Plate, StatusDot } from "./Bits";
+import { PROVIDERS } from "./config/ConnectorsSection";
+import { Archive, ChevronRight, Gear, Graph, Play, Plus, Repo, Unarchive } from "./Icons";
+
+/** Orchestrator connection states, compact enough for the sidebar header. */
+const CONNECTION = {
+  connecting: { label: "Connecting", dot: "bg-haze-600", text: "text-haze-500", pulse: false },
+  live: { label: "Live", dot: "bg-mint-500", text: "text-haze-500", pulse: true },
+  reconnecting: { label: "Reconnecting", dot: "bg-iris-400", text: "text-haze-500", pulse: true },
+  offline: { label: "Offline", dot: "bg-rust-500", text: "text-rust-400", pulse: false },
+} as const;
+
+/** Everything one project (repo key) holds, in the order the list renders it. */
+interface ProjectGroup {
+  /** Repo key from config; "" collects tickets that resolve to no repo. */
+  key: string;
+  /** Short folder-style name shown in the header. */
+  name: string;
+  /** Full owner/name remote, for the hover title. */
+  full?: string;
+  active: Run[];
+  queued: Run[];
+  pending: Ticket[];
+  finished: Run[];
+}
 
 export function AppSidebar({
+  conn,
   tickets,
   runs,
   now,
@@ -35,13 +73,17 @@ export function AppSidebar({
   workers,
   busy,
   unreachable,
+  page,
   onRun,
   onOpenRun,
-  onCancelRun,
-  onRetryRun,
-  onAnotherLook,
+  onArchiveRun,
+  onUnarchiveRun,
+  onOpenConfig,
+  onOpenUsage,
+  onAddRepo,
   onOpenWorkers,
 }: {
+  conn: Connection;
   tickets: Ticket[];
   runs: Run[];
   now: number;
@@ -54,12 +96,16 @@ export function AppSidebar({
   busy: Record<string, true | undefined>;
   /** No orchestrator has answered yet, so an empty queue means nothing. */
   unreachable: boolean;
+  page: Page;
   /** Queues a run for the ticket; resolves to the new run's id, or null. */
   onRun: (ticketId: string) => Promise<string | null>;
   onOpenRun: (runId: string) => void;
-  onCancelRun: (runId: string) => void;
-  onRetryRun: (runId: string) => void;
-  onAnotherLook: (runId: string) => void;
+  onArchiveRun: (runId: string) => void;
+  onUnarchiveRun: (runId: string) => void;
+  onOpenConfig: () => void;
+  onOpenUsage: () => void;
+  /** Opens the Repositories config page, where a repo is added and mapped to Linear. */
+  onAddRepo: () => void;
   /** Opens the Workers config page, for the queue-only notice below. */
   onOpenWorkers: () => void;
 }) {
@@ -67,8 +113,16 @@ export function AppSidebar({
   // flash before the first config arrives.
   const linearConnected = config === null || isLinearConnected(config, linearStatus);
   const linearAuthError = linearStatus?.state === "auth-error";
+  const attention =
+    config !== null &&
+    (PROVIDERS.some((spec) => spec.id !== "linear" && !spec.connected(config)) ||
+      !isLinearConnected(config, linearStatus) ||
+      linearNeedsAttention(linearStatus));
+  const onConfig = page.startsWith("config:");
 
   const { isMobile, setOpenMobile } = useSidebar();
+  /** Which list the one sidebar group shows: live work or the archive. */
+  const [list, setList] = useState<"runs" | "archived">("runs");
   const openRun = (runId: string) => {
     if (isMobile) setOpenMobile(false);
     onOpenRun(runId);
@@ -83,152 +137,496 @@ export function AppSidebar({
       !runs.some((r) => r.ticket.id === ticket.id && r.ticket.updatedAt === ticket.updatedAt),
   );
 
-  /**
-   * In-flight runs split into "actively doing something" and "queued", the
-   * latter reordered into scheduler pickup order (ascending queuedAt) since
-   * a requeue can push an old run to the back without touching createdAt.
-   */
-  const active = runs.filter((r) => isActive(r.status) && r.status !== "queued");
-  const queued = runs
-    .filter((r) => r.status === "queued")
-    .sort((a, b) => Date.parse(a.queuedAt ?? a.createdAt) - Date.parse(b.queuedAt ?? b.createdAt));
-  const finished = runs.filter((r) => isTerminal(r.status));
-  const inFlightCount = active.length + queued.length + pending.length;
+  const visible = runs.filter((run) => run.archivedAt === undefined);
+  const archived = runs.filter((run) => run.archivedAt !== undefined);
+  const projects = groupByProject(visible, pending, config);
+  const runCount = visible.length + pending.length;
 
   const hostExecution = health?.hostExecution;
   const showQueueOnly = queueOnly(health, workers);
 
   return (
     <Sidebar collapsible="offcanvas" className="border-sidebar-border">
-      <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-4">
-        <div className="flex items-center gap-2.5">
-          <img src="/logo.png" alt="" className="size-[22px]" />
-          <span className="font-plate text-[15px] leading-none font-semibold tracking-[0.02em] text-haze-50">
-            brevi
-          </span>
-          {health?.version && (
-            <span className="mt-px font-mono text-[10.5px] leading-none text-haze-700">
-              v{health.version}
+      <SidebarHeader className="h-12 justify-center px-3">
+        <div className="flex items-center justify-end gap-2">
+          <span
+            className={`flex items-center gap-1.5 ${CONNECTION[conn].text}`}
+            title={conn === "offline" ? "Orchestrator offline" : CONNECTION[conn].label}
+          >
+            <span
+              className={`inline-block size-[6px] rounded-full ${CONNECTION[conn].dot} ${
+                CONNECTION[conn].pulse ? "animate-beacon" : ""
+              }`}
+            />
+            <span className="text-[10.5px] leading-none font-medium">
+              {CONNECTION[conn].label}
             </span>
-          )}
-          <span className="ml-auto">
-            <ThemeToggle />
           </span>
+          <SidebarTrigger className="text-haze-500" aria-label="Collapse sidebar" />
         </div>
       </SidebarHeader>
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel className="gap-2">
-            <Plate className="text-haze-400">Runs</Plate>
+          <SidebarGroupLabel className="gap-2 pr-1">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Choose list"
+                    className="touch-target flex cursor-pointer items-center gap-1.5 rounded-md text-left"
+                  />
+                }
+              >
+                <span className="text-[14px] leading-none font-semibold text-haze-100">
+                  {list === "runs" ? "Runs" : "Archived"}
+                </span>
+                <ChevronRight className="size-3.5 rotate-90 text-haze-600" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="min-w-40">
+                <DropdownMenuRadioGroup
+                  value={list}
+                  onValueChange={(value) => setList(value as "runs" | "archived")}
+                >
+                  <DropdownMenuRadioItem value="runs">
+                    Runs
+                    <span className="ml-auto pl-3 font-mono text-[10.5px] text-haze-600">
+                      {runCount}
+                    </span>
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="archived">
+                    Archived
+                    <span className="ml-auto pl-3 font-mono text-[10.5px] text-haze-600">
+                      {archived.length}
+                    </span>
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <span className="ml-auto">
-              <Plate className="text-haze-700">Linear</Plate>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Add a repository"
+                title="Add a repository and connect it to Linear"
+                onClick={onAddRepo}
+                className="text-haze-600 hover:text-haze-200"
+              >
+                <Plus className="size-3" />
+              </Button>
             </span>
           </SidebarGroupLabel>
           <SidebarGroupContent>
+            {list === "archived" ? (
+              archived.length === 0 ? (
+                <p className="px-2 py-2 text-[12.5px] leading-relaxed text-haze-700">
+                  Nothing archived yet. Finished runs land here once archived, by hand or on
+                  their own.
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-1 px-1">
+                  {archived.map((run) => (
+                    <li key={run.id}>
+                      <RunRow
+                        run={run}
+                        now={now}
+                        selected={run.id === selectedRunId}
+                        busy={busy[run.id] === true}
+                        onOpen={() => openRun(run.id)}
+                        onArchive={() => onUnarchiveRun(run.id)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )
+            ) : (
+              <>
             {showQueueOnly && hostExecution?.kind === "none" && (
               <QueueOnlyNotice reason={hostExecution.reason} onOpenWorkers={onOpenWorkers} />
             )}
-            {pending.length === 0 && runs.length === 0 ? (
-              unreachable ? (
+            {runCount === 0 &&
+              (unreachable ? (
                 <p className="px-2 py-2 text-[12.5px] leading-relaxed text-haze-700">
                   Runs appear once the orchestrator is running.
                 </p>
               ) : !linearConnected ? (
                 <ConnectLinearCard reconnect={linearAuthError} />
-              ) : (
-                <SummonCard config={config} />
-              )
-            ) : (
-              <>
-                {inFlightCount > 0 && (
-                  <>
-                    <SectionLabel label="In flight" />
-                    <ul className="flex flex-col gap-2 px-1 pt-1">
-                      {active.map((run) => (
-                        <li key={run.id}>
-                          <RunStrip
-                            run={run}
-                            repoName={repoDisplay(config, run.ticket.repo)}
-                            now={now}
-                            selected={run.id === selectedRunId}
-                            busy={busy[run.id] === true}
-                            onOpen={() => openRun(run.id)}
-                            onCancel={() => onCancelRun(run.id)}
-                            onRetry={() => onRetryRun(run.id)}
-                            onAnotherLook={() => onAnotherLook(run.id)}
-                          />
-                        </li>
-                      ))}
-                      {queued.map((run) => (
-                        <li key={run.id}>
-                          <RunStrip
-                            run={run}
-                            repoName={repoDisplay(config, run.ticket.repo)}
-                            now={now}
-                            selected={run.id === selectedRunId}
-                            busy={busy[run.id] === true}
-                            onOpen={() => openRun(run.id)}
-                            onCancel={() => onCancelRun(run.id)}
-                            onRetry={() => onRetryRun(run.id)}
-                            onAnotherLook={() => onAnotherLook(run.id)}
-                          />
-                        </li>
-                      ))}
-                      {pending.map((ticket) => (
-                        <li key={`ticket-${ticket.id}`}>
-                          <TicketStrip
-                            ticket={ticket}
-                            repoName={repoDisplay(config, ticket.repo)}
-                            active={activeByTicket.get(ticket.id)}
-                            busy={busy[ticket.id] === true}
-                            onRun={() => {
-                              void onRun(ticket.id).then((runId) => {
-                                if (runId !== null) openRun(runId);
-                              });
-                            }}
-                            onOpenRun={openRun}
-                          />
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                )}
-                {finished.length > 0 && (
-                  <div className={inFlightCount > 0 ? "mt-3 border-t border-sidebar-border" : ""}>
-                    <SectionLabel label="Finished" />
-                    <ul className="flex flex-col gap-2 px-1 pt-1">
-                      {finished.map((run) => (
-                        <li key={run.id}>
-                          <RunStrip
-                            run={run}
-                            repoName={repoDisplay(config, run.ticket.repo)}
-                            now={now}
-                            selected={run.id === selectedRunId}
-                            busy={busy[run.id] === true}
-                            onOpen={() => openRun(run.id)}
-                            onCancel={() => onCancelRun(run.id)}
-                            onRetry={() => onRetryRun(run.id)}
-                            onAnotherLook={() => onAnotherLook(run.id)}
-                          />
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+              ) : null)}
+            {projects.length > 0 && (
+              <div className="flex flex-col gap-0.5 px-1">
+                {projects.map((project) => (
+                  <ProjectSection
+                    key={project.key || "~none"}
+                    project={project}
+                    now={now}
+                    selectedRunId={selectedRunId}
+                    activeByTicket={activeByTicket}
+                    busy={busy}
+                    onRun={onRun}
+                    onOpenRun={openRun}
+                    onArchiveRun={onArchiveRun}
+                  />
+                ))}
+              </div>
+            )}
               </>
             )}
           </SidebarGroupContent>
         </SidebarGroup>
+
       </SidebarContent>
+
+      <SidebarFooter className="gap-0.5 border-t border-sidebar-border p-2">
+        <button
+          type="button"
+          onClick={onOpenUsage}
+          aria-current={page === "usage" ? "page" : undefined}
+          className={`touch-target flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] font-medium transition-colors ${
+            page === "usage"
+              ? "bg-ink-750 text-haze-50"
+              : "text-haze-400 hover:bg-ink-800/70 hover:text-haze-100"
+          }`}
+        >
+          <Graph className="size-3.5" />
+          Usage
+        </button>
+        <button
+          type="button"
+          onClick={() => onOpenConfig()}
+          aria-current={onConfig ? "page" : undefined}
+          className={`touch-target flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] font-medium transition-colors ${
+            onConfig
+              ? "bg-ink-750 text-haze-50"
+              : "text-haze-400 hover:bg-ink-800/70 hover:text-haze-100"
+          }`}
+        >
+          <Gear className="size-3.5" />
+          Configuration
+          {attention && (
+            <span
+              className="ml-auto size-[6px] rounded-full bg-iris-400"
+              role="img"
+              aria-label="A connection needs attention"
+              title="A connection needs attention"
+            />
+          )}
+        </button>
+      </SidebarFooter>
     </Sidebar>
+  );
+}
+
+/**
+ * Bucket runs and pending tickets by their repo key. Within a project the
+ * list keeps scheduler order: working runs first, then the queue in pickup
+ * order (ascending queuedAt, since a requeue can push an old run to the back
+ * without touching createdAt), then tickets not yet queued, then history.
+ * Projects sort by name; tickets that resolve to no repo land last.
+ */
+function groupByProject(
+  runs: Run[],
+  pending: Ticket[],
+  config: BreviConfig | null,
+): ProjectGroup[] {
+  const buckets = new Map<string, { runs: Run[]; tickets: Ticket[] }>();
+  const bucket = (key: string) => {
+    let entry = buckets.get(key);
+    if (!entry) {
+      entry = { runs: [], tickets: [] };
+      buckets.set(key, entry);
+    }
+    return entry;
+  };
+  // Every repo the config maps gets its folder, runs or not, so a freshly
+  // connected repo is visible in the sidebar before its first ticket lands.
+  for (const key of Object.keys(config?.repos ?? {})) bucket(key);
+  for (const run of runs) bucket(run.ticket.repo ?? "").runs.push(run);
+  for (const ticket of pending) bucket(ticket.repo ?? "").tickets.push(ticket);
+
+  return [...buckets.entries()]
+    .map(([key, entry]): ProjectGroup => {
+      const full = repoDisplay(config, key || undefined);
+      const name = full ?? "No project";
+      return {
+        key,
+        name,
+        full,
+        active: entry.runs.filter((r) => isActive(r.status) && r.status !== "queued"),
+        queued: entry.runs
+          .filter((r) => r.status === "queued")
+          .sort(
+            (a, b) => Date.parse(a.queuedAt ?? a.createdAt) - Date.parse(b.queuedAt ?? b.createdAt),
+          ),
+        pending: entry.tickets,
+        finished: entry.runs.filter((r) => isTerminal(r.status)),
+      };
+    })
+    .sort((a, b) => {
+      if (a.key === "") return 1;
+      if (b.key === "") return -1;
+      return a.name.localeCompare(b.name);
+    });
+}
+
+/** One project: a folder header with its runs indented beneath it. */
+function ProjectSection({
+  project,
+  now,
+  selectedRunId,
+  activeByTicket,
+  busy,
+  onRun,
+  onOpenRun,
+  onArchiveRun,
+}: {
+  project: ProjectGroup;
+  now: number;
+  selectedRunId: string | null;
+  activeByTicket: Map<string, Run>;
+  busy: Record<string, true | undefined>;
+  onRun: (ticketId: string) => Promise<string | null>;
+  onOpenRun: (runId: string) => void;
+  onArchiveRun: (runId: string) => void;
+}) {
+  const count =
+    project.active.length + project.queued.length + project.pending.length + project.finished.length;
+
+  return (
+    <Collapsible defaultOpen>
+      <CollapsibleTrigger
+        className="group/project touch-target flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-ink-800/60"
+        title={project.full}
+      >
+        <ChevronRight className="size-3 shrink-0 text-haze-700 transition-transform group-data-[panel-open]/project:rotate-90" />
+        <Repo className="size-3.5 shrink-0 text-haze-600" />
+        <span className="min-w-0 truncate text-[12.5px] font-medium text-haze-200">
+          {project.name}
+        </span>
+        <span className="ml-auto font-mono text-[10px] leading-none text-haze-700">{count}</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        {count === 0 && (
+          <p className="py-1.5 pr-2 pl-[26px] text-[11.5px] leading-relaxed text-haze-700">
+            No runs yet.
+          </p>
+        )}
+        <ul className="flex flex-col gap-1 pt-0.5 pr-0.5 pb-1.5 pl-5">
+          {project.active.map((run) => (
+            <li key={run.id}>
+              <RunRow
+                run={run}
+                now={now}
+                selected={run.id === selectedRunId}
+                busy={busy[run.id] === true}
+                onOpen={() => onOpenRun(run.id)}
+                onArchive={() => onArchiveRun(run.id)}
+              />
+            </li>
+          ))}
+          {project.queued.map((run) => (
+            <li key={run.id}>
+              <RunRow
+                run={run}
+                now={now}
+                selected={run.id === selectedRunId}
+                busy={busy[run.id] === true}
+                onOpen={() => onOpenRun(run.id)}
+                onArchive={() => onArchiveRun(run.id)}
+              />
+            </li>
+          ))}
+          {project.pending.map((ticket) => (
+            <li key={`ticket-${ticket.id}`}>
+              <TicketRow
+                ticket={ticket}
+                active={activeByTicket.get(ticket.id)}
+                busy={busy[ticket.id] === true}
+                onRun={() => {
+                  void onRun(ticket.id).then((runId) => {
+                    if (runId !== null) onOpenRun(runId);
+                  });
+                }}
+                onOpenRun={onOpenRun}
+              />
+            </li>
+          ))}
+          {project.finished.map((run) => (
+            <li key={run.id}>
+              <RunRow
+                run={run}
+                now={now}
+                selected={run.id === selectedRunId}
+                busy={busy[run.id] === true}
+                onOpen={() => onOpenRun(run.id)}
+                onArchive={() => onArchiveRun(run.id)}
+              />
+            </li>
+          ))}
+        </ul>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/**
+ * One run as a compact card: the ticket id line, then the title clamped to
+ * two lines. The whole card is a stretched link (so copy link and
+ * middle-click behave normally) with the archive control floated above it; a
+ * finished run archives, an archived one unarchives, and a live run has no
+ * archive control at all.
+ */
+function RunRow({
+  run,
+  now,
+  selected,
+  busy,
+  onOpen,
+  onArchive,
+}: {
+  run: Run;
+  now: number;
+  selected: boolean;
+  busy: boolean;
+  onOpen: () => void;
+  /** Archives the run, or restores it when the run is already archived. */
+  onArchive: () => void;
+}) {
+  const live = isActive(run.status);
+  const time =
+    live && run.startedAt ? duration(run.startedAt, now) : relative(run.createdAt, now);
+  const archived = run.archivedAt !== undefined;
+  const archiveLabel = archived ? "Unarchive run" : "Archive run";
+
+  return (
+    <div
+      className={`group/run relative rounded-lg px-2.5 py-1.5 ring-1 transition-colors ${
+        selected
+          ? "bg-ink-750 ring-ink-500"
+          : "bg-card ring-foreground/10 hover:bg-ink-800"
+      }`}
+    >
+      <a
+        href={`/runs/${encodeURIComponent(run.id)}`}
+        onClick={(event) => {
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+          event.preventDefault();
+          onOpen();
+        }}
+        aria-current={selected ? "page" : undefined}
+        aria-label={`Open run for ${run.ticket.identifier}: ${run.ticket.title}`}
+        title={`${run.ticket.identifier}: ${run.ticket.title} (${STATUS_TONE[run.status].label})`}
+        className="absolute inset-0 rounded-lg"
+      />
+      <span className="pointer-events-none relative flex h-5 items-center gap-1.5">
+        <StatusDot status={run.status} size={6} />
+        <span className="font-mono text-[10.5px] leading-none text-haze-400">
+          {run.ticket.identifier}
+        </span>
+        <span className="ml-auto flex items-center gap-1">
+          {isTerminal(run.status) && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={archiveLabel}
+              title={archiveLabel}
+              disabled={busy}
+              onClick={onArchive}
+              className="pointer-events-auto text-haze-600 opacity-0 transition-opacity group-hover/run:opacity-100 hover:text-haze-200 focus-visible:opacity-100 pointer-coarse:opacity-100"
+            >
+              {archived ? <Unarchive className="size-3" /> : <Archive className="size-3" />}
+            </Button>
+          )}
+          <span className="font-mono text-[10px] leading-none tabular-nums text-haze-600">
+            {time}
+          </span>
+        </span>
+      </span>
+      <span
+        className={`pointer-events-none relative mt-0.5 line-clamp-2 text-[12px] leading-[16px] ${
+          selected ? "text-haze-50" : "text-haze-200"
+        }`}
+      >
+        {run.ticket.title}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * A ticket with no run for its current revision. When an older revision's run
+ * is still in flight the row points at it; otherwise it offers to queue one.
+ */
+function TicketRow({
+  ticket,
+  active,
+  busy,
+  onRun,
+  onOpenRun,
+}: {
+  ticket: Ticket;
+  active?: Run;
+  busy: boolean;
+  onRun: () => void;
+  onOpenRun: (runId: string) => void;
+}) {
+  return (
+    <div
+      className="group/ticket block rounded-lg bg-card px-2.5 py-1.5 ring-1 ring-foreground/10 transition-colors hover:bg-ink-800"
+      title={`${ticket.identifier}: ${ticket.title}`}
+    >
+      <span className="flex h-5 items-center gap-1.5">
+        {active ? (
+          <StatusDot status={active.status} size={6} />
+        ) : (
+          <span
+            className="inline-block size-[6px] shrink-0 rounded-full border border-haze-600"
+            aria-hidden="true"
+          />
+        )}
+        <span className="font-mono text-[10.5px] leading-none text-haze-400">
+          {ticket.identifier}
+        </span>
+        <span className="ml-auto">
+          {active ? (
+            <Button
+              variant="ghost"
+              size="plate"
+              onClick={() => onOpenRun(active.id)}
+              className={`h-6 py-0 ${STATUS_TONE[active.status].fg}`}
+            >
+              {STATUS_TONE[active.status].label}
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="plate"
+              onClick={onRun}
+              disabled={busy}
+              className="h-6 py-0"
+            >
+              <Play className="size-2.5" />
+              {busy ? "Queueing" : "Run"}
+            </Button>
+          )}
+        </span>
+      </span>
+      <a
+        href={ticket.url}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-0.5 line-clamp-2 text-[12px] leading-[16px] text-haze-200 hover:text-haze-50"
+      >
+        {ticket.title}
+      </a>
+    </div>
   );
 }
 
 /**
  * This machine cannot execute runs and nothing else is connected, so the
  * queue cannot drain. Shown whenever the condition holds, since the per-run
- * queueReason strip only appears once a run exists to carry it.
+ * queueReason banner only appears once a run exists to carry it.
  */
 function QueueOnlyNotice({
   onOpenWorkers,
@@ -237,7 +635,7 @@ function QueueOnlyNotice({
   onOpenWorkers: () => void;
 }) {
   return (
-    <div className="mx-1 mb-2 rounded-[5px] border border-haze-700/50 bg-haze-600/10 p-3">
+    <div className="mx-1 mb-2 rounded-lg border border-ink-700 bg-ink-850 p-3">
       <p className="text-[12px] leading-relaxed text-haze-400">
         This machine can&apos;t run agents itself. Queued runs will wait for a Linux worker with
         bubblewrap.{" "}
@@ -248,288 +646,11 @@ function QueueOnlyNotice({
           className="h-auto p-0 align-baseline text-[12px] text-haze-200 hover:text-haze-50"
           onClick={onOpenWorkers}
         >
-          Workers page
+          Fleet page
         </Button>
         .
       </p>
     </div>
-  );
-}
-
-/** Quiet sub-header inside the Runs group, matching the group's own label style. */
-function SectionLabel({ label }: { label: string }) {
-  return (
-    <div className="flex items-center gap-2 px-2 pt-3 pb-1">
-      <Plate className="text-haze-700">{label}</Plate>
-    </div>
-  );
-}
-
-function TicketStrip({
-  ticket,
-  repoName,
-  active,
-  busy,
-  onRun,
-  onOpenRun,
-}: {
-  ticket: Ticket;
-  /** owner/name of the mapped repo, resolved from config. */
-  repoName: string | undefined;
-  active?: Run;
-  busy: boolean;
-  onRun: () => void;
-  onOpenRun: (runId: string) => void;
-}) {
-  const band = active ? STATUS_TONE[active.status].fill : "bg-peri-400/60";
-
-  return (
-    <Card size="sm" className="group flex-row gap-0 overflow-hidden rounded-strip py-0">
-      <span className={`w-[3px] shrink-0 ${band}`} aria-hidden="true" />
-      <div className="min-w-0 flex-1 p-2.5">
-        <div className="flex items-center gap-2">
-          <a
-            href={ticket.url}
-            target="_blank"
-            rel="noreferrer"
-            className="group/id touch-target inline-flex items-center gap-1 font-plate text-[10px] tracking-[0.08em] text-haze-300 hover:text-haze-50"
-          >
-            {ticket.identifier}
-            <External className="size-3 text-haze-700 opacity-0 transition-opacity group-hover/id:opacity-100 pointer-coarse:opacity-100" />
-          </a>
-          <span className="ml-auto truncate font-mono text-[10px] text-haze-700">
-            {ticket.state}
-          </span>
-        </div>
-
-        <h3 className="mt-2 line-clamp-2 text-[13px] leading-snug text-haze-50">{ticket.title}</h3>
-
-        <div className="mt-2.5 flex flex-wrap items-center gap-2">
-          <RepoChip repo={repoName} />
-          <span className="ml-auto">
-            {active ? (
-              <Button variant="outline" size="plate" onClick={() => onOpenRun(active.id)}>
-                <StatusDot status={active.status} size={6} />
-                <span className={STATUS_TONE[active.status].fg}>
-                  {STATUS_TONE[active.status].label}
-                </span>
-              </Button>
-            ) : (
-              <Button size="plate" onClick={onRun} disabled={busy}>
-                <Play className="size-3" />
-                {busy ? "Queueing" : "Run"}
-              </Button>
-            )}
-          </span>
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-/**
- * One run in the sidebar: status, ticket, and elapsed time, plus inline
- * actions and the PR chip. The run link is a stretched overlay anchor (so
- * copy link and middle-click behave like any link) laid under the content;
- * every interactive child opts back into pointer events so it takes its own
- * clicks, and plain text falls through to the link underneath.
- */
-function RunStrip({
-  run,
-  repoName,
-  now,
-  selected,
-  busy,
-  onOpen,
-  onCancel,
-  onRetry,
-  onAnotherLook,
-}: {
-  run: Run;
-  /** owner/name of the mapped repo, resolved from config. */
-  repoName: string | undefined;
-  now: number;
-  selected: boolean;
-  busy: boolean;
-  onOpen: () => void;
-  onCancel: () => void;
-  onRetry: () => void;
-  onAnotherLook: () => void;
-}) {
-  const tone = STATUS_TONE[run.status];
-  const live = isActive(run.status);
-  // Cancel is destructive and easy to fat-finger on touch; ask inline first.
-  const [confirmingCancel, setConfirmingCancel] = useState(false);
-  useEffect(() => setConfirmingCancel(false), [run.id, run.status]);
-  const retryable = run.status === "failed" || run.status === "cancelled";
-  // The chip tracks the run-level PR, which survives retries; the follow-up
-  // button mirrors the server's gate instead: a terminal run still carrying
-  // its PR result (completed runs, plus failed or cancelled follow-ups)
-  // whose PR hasn't merged or closed.
-  const prUrl = run.prUrl;
-  const prState = prUrl ? (run.prState ?? "open") : undefined;
-  const lookable =
-    isTerminal(run.status) &&
-    Boolean(run.result?.prUrl) &&
-    prState !== "merged" &&
-    prState !== "closed";
-  const span = live
-    ? run.startedAt
-      ? duration(run.startedAt, now)
-      : "-"
-    : run.finishedAt && run.startedAt
-      ? duration(run.startedAt, Date.parse(run.finishedAt))
-      : "-";
-
-  return (
-    <div
-      className={`relative flex overflow-hidden rounded-strip bg-card ring-1 transition-colors hover:bg-ink-800 ${
-        selected ? "bg-ink-800 ring-haze-600/50" : "ring-foreground/10"
-      }`}
-    >
-      {/* The whole card is one link; controls float above it. */}
-      <a
-        href={`/runs/${encodeURIComponent(run.id)}`}
-        onClick={(event) => {
-          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
-          event.preventDefault();
-          onOpen();
-        }}
-        aria-current={selected ? "page" : undefined}
-        aria-label={`Open run for ${run.ticket.identifier}: ${run.ticket.title}`}
-        className="absolute inset-0 rounded-strip"
-      />
-      <span className={`w-[3px] shrink-0 ${tone.fill}`} aria-hidden="true" />
-      <div className="pointer-events-none relative min-w-0 flex-1 p-2.5">
-        <div className="flex items-center gap-1.5">
-          <StatusDot status={run.status} size={6} />
-          <span className={`plate ${tone.fg}`}>{tone.label}</span>
-          <span className="ml-auto flex items-center gap-1">
-            {confirmingCancel ? (
-              <>
-                <span className="plate text-rust-400">Cancel?</span>
-                <StripAction
-                  icon={<Check className="size-3" />}
-                  label="Confirm cancel run"
-                  tooltip="Confirm cancel"
-                  disabled={busy}
-                  className="text-rust-400 hover:bg-rust-500/15 hover:text-rust-400"
-                  onClick={() => {
-                    setConfirmingCancel(false);
-                    onCancel();
-                  }}
-                />
-                <StripAction
-                  icon={<Close className="size-3" />}
-                  label="Keep running"
-                  tooltip="Keep running"
-                  disabled={busy}
-                  onClick={() => setConfirmingCancel(false)}
-                />
-              </>
-            ) : (
-              <>
-                {live && (
-                  <StripAction
-                    icon={<Close className="size-3" />}
-                    label="Cancel run"
-                    tooltip="Cancel run"
-                    disabled={busy}
-                    className="hover:text-rust-400"
-                    onClick={() => setConfirmingCancel(true)}
-                  />
-                )}
-                {retryable && (
-                  <StripAction
-                    icon={<Retry className="size-3" />}
-                    label="Retry run"
-                    tooltip="Retry run"
-                    disabled={busy}
-                    onClick={onRetry}
-                  />
-                )}
-                {lookable && (
-                  <StripAction
-                    icon={<Eye className="size-3" />}
-                    label="Take another look"
-                    tooltip="Take another look: rebase the PR and address review feedback"
-                    disabled={busy}
-                    onClick={onAnotherLook}
-                  />
-                )}
-              </>
-            )}
-            <span className="font-mono text-[10px] tabular-nums text-haze-700">{span}</span>
-          </span>
-        </div>
-        <div className="mt-1.5 flex items-baseline gap-2">
-          <span className="shrink-0 font-plate text-[10px] tracking-[0.08em] text-haze-300">
-            {run.ticket.identifier}
-          </span>
-          <span className="truncate text-[12.5px] leading-snug text-haze-50">
-            {run.ticket.title}
-          </span>
-        </div>
-        <div className="mt-1.5 flex items-center gap-2">
-          <RepoChip repo={repoName} />
-          {prUrl && prState && (
-            <PrChip url={prUrl} state={prState} className="pointer-events-auto" />
-          )}
-          <span className="pointer-events-auto">
-            <CostBadge costs={run.costs} totals={run.costTotals} align="end" />
-          </span>
-          <span className="ml-auto font-mono text-[10px] text-haze-700">
-            {relative(run.createdAt, now)}
-          </span>
-        </div>
-        {run.status === "queued" && run.queueReason && (
-          <p className="mt-1.5 truncate text-[11px] text-haze-700" title={run.queueReason}>
-            {run.queueReason}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/**
- * One icon-only action on a run strip: always visible (touch users must
- * reach it), pinned above the strip's stretched link, and paired with both
- * an aria-label and a tooltip.
- */
-function StripAction({
-  icon,
-  label,
-  tooltip,
-  onClick,
-  disabled,
-  className,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  tooltip: string;
-  onClick: () => void;
-  disabled?: boolean;
-  className?: string;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={label}
-            disabled={disabled}
-            onClick={onClick}
-            className={cn("pointer-events-auto text-haze-600 hover:text-haze-200", className)}
-          >
-            {icon}
-          </Button>
-        }
-      />
-      <TooltipContent side="top">{tooltip}</TooltipContent>
-    </Tooltip>
   );
 }
 
@@ -563,21 +684,3 @@ function ConnectLinearCard({ reconnect }: { reconnect?: boolean }) {
   );
 }
 
-/** First-run UX: the queue is empty because brevi has not been summoned yet. */
-function SummonCard({ config }: { config: BreviConfig | null }) {
-  const label = config?.trigger.label ?? "brevi";
-  const poll = config?.pollIntervalSeconds ?? 60;
-
-  return (
-    <Card size="sm" className="mx-1 block p-4">
-      <Plate className="text-haze-700">Nothing queued</Plate>
-      <p className="mt-2 text-[12.5px] leading-relaxed text-haze-400">
-        Assign yourself a Linear issue and add the {label} label; brevi picks it up and opens a
-        pull request.
-      </p>
-      <p className="mt-3 border-t border-ink-700 pt-3 font-mono text-[11px] text-haze-700">
-        Checking Linear every {poll}s
-      </p>
-    </Card>
-  );
-}

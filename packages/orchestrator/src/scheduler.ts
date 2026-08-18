@@ -44,8 +44,11 @@ import {
   type WorkerState,
   type WorkerView,
   urlHost,
+  type MachineUsage,
+  type UsageResponse,
 } from "@brevi/shared";
 import { saveConfig, serializeConfig } from "./config.js";
+import { readMachineUsage } from "./machineUsage.js";
 import {
   discoverAnthropicCredential,
   discoverCodexCredential,
@@ -75,7 +78,7 @@ import {
   validateXaiApiKey,
 } from "./credentials.js";
 import { FleetStore, sanitizeWorkerName } from "./fleet.js";
-import { branchNameFor, fetchPrStatus, fetchPullRequestState, findPullRequestForBranch, listRepos } from "./github.js";
+import { branchNameFor, fetchPrStatus, findPullRequestForBranch, listRepos } from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
 import { isLinearAuthError, LinearService, type LinearAuthHooks } from "./linear.js";
 import { memoryKeyFor, MemoryStore, selectMemories } from "./memory.js";
@@ -213,6 +216,9 @@ const LINEAR_REFRESH_BACKOFF_MAX_MS = 15 * 60_000;
 
 /** How often the orchestrator re-checks the PR state of recent runs with a live PR. */
 const PR_POLL_INTERVAL_MS = 120_000;
+
+/** How often the auto-archive sweep re-evaluates finished runs. */
+const ARCHIVE_SWEEP_INTERVAL_MS = 10 * 60_000;
 /** Only this many of the newest eligible runs are checked per cycle. */
 const PR_POLL_RECENT_RUNS = 20;
 /** Delay before retrying a failed retained-sandbox reap (the disk holds credential material). */
@@ -351,6 +357,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #pollTimer?: NodeJS.Timeout;
   /** Lazy GitHub PR-state poll for recent runs with a live PR. */
   #prTimer?: NodeJS.Timeout;
+  /** Periodic auto-archive sweep over finished runs (see config.archive). */
+  #archiveTimer?: NodeJS.Timeout;
   /** In-flight PR-state refresh per run, so bursts share one GitHub request. */
   #prRefreshes = new Map<string, Promise<PrState | null>>();
   /** One pending resume timer per run waiting on a usage-limit reset. */
@@ -459,6 +467,73 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   /** Every enrolled worker, merged with its live connection state, for the Workers page. */
   listWorkers(): WorkerView[] {
     return this.#workers?.list() ?? [];
+  }
+
+  /** Cached usage collection; ccusage reads across machines are not free. */
+  #usageCache?: { at: number; promise: Promise<UsageResponse> };
+
+  /**
+   * Usage over time for every machine: the host itself plus each enrolled
+   * worker, each read with ccusage's daily report. Collects at most once a
+   * minute; concurrent callers share the in-flight collection. Workers
+   * flagged local run on the host's own machine and would double-count it,
+   * so the host read covers them.
+   */
+  usage(): Promise<UsageResponse> {
+    const cached = this.#usageCache;
+    if (cached && Date.now() - cached.at < 60_000) return cached.promise;
+    const promise = this.#collectUsage();
+    this.#usageCache = { at: Date.now(), promise };
+    promise.catch(() => {
+      if (this.#usageCache?.promise === promise) this.#usageCache = undefined;
+    });
+    return promise;
+  }
+
+  async #collectUsage(): Promise<UsageResponse> {
+    const errorText = (error: unknown) =>
+      error instanceof Error ? error.message : String(error);
+    const host = readMachineUsage()
+      .then((days): MachineUsage => ({ id: "host", name: "This machine", days }))
+      .catch((error): MachineUsage => ({
+        id: "host",
+        name: "This machine",
+        days: [],
+        error: errorText(error),
+      }));
+    const remote = (this.#workers?.list() ?? [])
+      .filter((worker) => !worker.local)
+      .map((worker) => {
+        if (worker.connection !== "online" || !this.#workers) {
+          return Promise.resolve<MachineUsage>({
+            id: worker.id,
+            name: worker.name,
+            days: [],
+            error: "worker is offline",
+          });
+        }
+        // An older daemon parses no usage-report message and would silently
+        // drop it; skip it immediately instead of waiting out the timeout.
+        if (!worker.capabilities?.features?.includes("usage-report")) {
+          return Promise.resolve<MachineUsage>({
+            id: worker.id,
+            name: worker.name,
+            days: [],
+            error: "the worker needs an update before it can report usage",
+          });
+        }
+        return this.#workers
+          .requestUsage(worker.id)
+          .then((days): MachineUsage => ({ id: worker.id, name: worker.name, days }))
+          .catch((error): MachineUsage => ({
+            id: worker.id,
+            name: worker.name,
+            days: [],
+            error: errorText(error),
+          }));
+      });
+    const machines = [await host, ...(await Promise.all(remote))];
+    return { machines, collectedAt: new Date().toISOString() };
   }
 
   /**
@@ -701,6 +776,9 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     this.#watchConfigFile();
     this.#prTimer = setInterval(() => void this.#pollPrStates(), PR_POLL_INTERVAL_MS);
     this.#prTimer.unref();
+    void this.#autoArchive();
+    this.#archiveTimer = setInterval(() => void this.#autoArchive(), ARCHIVE_SWEEP_INTERVAL_MS);
+    this.#archiveTimer.unref();
   }
 
   /**
@@ -869,11 +947,15 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       const prUrl = run?.prUrl;
       const token = this.config.github.token;
       if (!prUrl || !token) return null;
-      const state = await fetchPullRequestState(prUrl, token);
-      if (state !== null && state !== this.store.get(runId)?.prState) {
-        await this.store.update(runId, { prState: state });
+      const status = await fetchPrStatus(prUrl, token);
+      const current = this.store.get(runId);
+      const patch: Partial<Omit<Run, "id">> = {};
+      if (status.state !== current?.prState) patch.prState = status.state;
+      if (status.mergedAt && status.mergedAt !== current?.prMergedAt) {
+        patch.prMergedAt = status.mergedAt;
       }
-      return state;
+      if (Object.keys(patch).length > 0) await this.store.update(runId, patch);
+      return status.state;
     })()
       .catch((error: unknown): null => {
         console.error(`[brevi] PR state refresh for ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -1489,6 +1571,111 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     });
   }
 
+  /** Hide a finished run from the dashboard's default list. The run stays on disk. */
+  archiveRun(runId: string): Promise<Run> {
+    return this.#withRunLock(runId, async () => {
+      const run = this.store.get(runId);
+      if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
+      if (!isTerminal(run.status)) {
+        throw new OrchestratorError(
+          "conflict",
+          `run ${runId} is ${run.status}; only finished runs can be archived`,
+        );
+      }
+      if (run.archivedAt) return run;
+      return this.store.update(runId, { archivedAt: new Date().toISOString() });
+    });
+  }
+
+  /** Bring an archived run back into the dashboard's default list. */
+  unarchiveRun(runId: string): Promise<Run> {
+    return this.#withRunLock(runId, async () => {
+      const run = this.store.get(runId);
+      if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
+      if (!run.archivedAt) return run;
+      return this.store.update(runId, { archivedAt: undefined });
+    });
+  }
+
+  /**
+   * One auto-archive sweep (see config.archive): learn closure times for
+   * tickets not yet known to be closed, then archive every finished,
+   * unarchived run that any enabled rule has aged past. Each rule is a day
+   * count and 0 disables it, so a sweep with everything disabled is a no-op.
+   */
+  async #autoArchive(): Promise<void> {
+    if (this.#stopped) return;
+    const rules = this.config.archive;
+    const candidates = this.store.list().filter((run) => isTerminal(run.status) && !run.archivedAt);
+    if (candidates.length === 0) return;
+
+    // A ticket absent from the closures result is still open; it is simply
+    // asked about again next sweep. Lookup failures skip this rule for the
+    // sweep rather than blocking the age and merge rules below.
+    if (rules.closedTicketAfterDays > 0 && this.#linear) {
+      const unknown = candidates.filter((run) => run.ticketClosedAt === undefined);
+      const ids = [...new Set(unknown.map((run) => run.ticket.id))];
+      if (ids.length > 0) {
+        try {
+          const closures = await this.#linear.ticketClosures(ids);
+          for (const run of unknown) {
+            if (this.#stopped) return;
+            const closedAt = closures.get(run.ticket.id);
+            if (closedAt) await this.store.update(run.id, { ticketClosedAt: closedAt });
+          }
+        } catch (error) {
+          console.error(
+            `[brevi] ticket closure lookup failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+    }
+
+    // Runs merged before prMergedAt existed carry the state but not the
+    // timestamp, and the PR poll skips already-merged PRs, so the sweep
+    // backfills them itself. A few per sweep bounds the GitHub calls; the
+    // rest catch up on later sweeps.
+    if (rules.mergedAfterDays > 0 && this.config.github.token) {
+      const missing = candidates
+        .filter((run) => run.prState === "merged" && run.prMergedAt === undefined && run.prUrl)
+        .slice(0, 10);
+      for (const run of missing) {
+        if (this.#stopped) return;
+        await this.refreshPrState(run.id);
+      }
+    }
+
+    const now = Date.now();
+    const agedPast = (ts: string | undefined, ruleDays: number): boolean => {
+      if (ruleDays <= 0 || !ts) return false;
+      const parsed = Date.parse(ts);
+      return Number.isFinite(parsed) && now - parsed >= ruleDays * 86_400_000;
+    };
+    const days = (n: number) => (n === 1 ? "1 day" : `${n} days`);
+    for (const candidate of candidates) {
+      if (this.#stopped) return;
+      const run = this.store.get(candidate.id);
+      if (!run || run.archivedAt || !isTerminal(run.status)) continue;
+      const mergedAt = run.prState === "merged" ? run.prMergedAt : undefined;
+      const reason = agedPast(mergedAt, rules.mergedAfterDays)
+        ? `${days(rules.mergedAfterDays)} after its pull request merged`
+        : agedPast(run.ticketClosedAt, rules.closedTicketAfterDays)
+          ? `${days(rules.closedTicketAfterDays)} after its ticket closed`
+          : agedPast(run.finishedAt, rules.afterDays)
+            ? `${days(rules.afterDays)} after it finished`
+            : undefined;
+      if (!reason) continue;
+      await this.store.update(run.id, { archivedAt: new Date().toISOString() });
+      this.store.appendEvent({
+        runId: run.id,
+        ts: new Date().toISOString(),
+        type: "log",
+        stream: "system",
+        text: `auto-archived ${reason}`,
+      });
+    }
+  }
+
   /**
    * Manually start a new attempt of a failed, cancelled, or waiting run. For
    * a waiting run this skips the rest of the wait and re-queues immediately.
@@ -1625,6 +1812,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         error: undefined,
         limit: undefined,
         resumeAt: undefined,
+        // Archive is a terminal-only state; a reactivated run must reappear.
+        archivedAt: undefined,
       });
       if (!this.#queue.includes(runId)) this.#queue.push(runId);
       this.#dispatchQueued();
@@ -1722,6 +1911,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     this.#stopped = true;
     if (this.#pollTimer) clearInterval(this.#pollTimer);
     if (this.#prTimer) clearInterval(this.#prTimer);
+    if (this.#archiveTimer) clearInterval(this.#archiveTimer);
     if (this.#configReloadTimer) clearTimeout(this.#configReloadTimer);
     this.#configWatcher?.close();
     // Waiting runs stay "waiting" on disk; the next boot reschedules them.
@@ -2020,6 +2210,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     // for as long as the run waits for a free worker. Run-level PR metadata
     // (prUrl, prState) survives: the PR still exists while the retry runs,
     // and finalization replaces it.
+    // archivedAt clears too: only terminal runs can be archived, so a run
+    // coming back to life must reappear in the default list.
     const run = await this.store.setStatus(runId, "queued", {
       resumeAt: undefined,
       queuedAt: new Date().toISOString(),
@@ -2028,6 +2220,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       limit: undefined,
       result: undefined,
       queueReason,
+      archivedAt: undefined,
     });
     if (!this.#queue.includes(runId)) this.#queue.push(runId);
     this.#dispatchQueued();

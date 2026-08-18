@@ -18,6 +18,7 @@ import type {
   RunEvent,
   SettingsUpdateResponse,
   Ticket,
+  UsageResponse,
   WorkerRenameRequest,
   WorkerProvisionRequest,
   WorkerProvisionResponse,
@@ -77,6 +78,10 @@ export const api = {
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
   retryRun: (runId: string) =>
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/retry`, { method: "POST" }),
+  archiveRun: (runId: string) =>
+    json<Run>(`/api/runs/${encodeURIComponent(runId)}/archive`, { method: "POST" }),
+  unarchiveRun: (runId: string) =>
+    json<Run>(`/api/runs/${encodeURIComponent(runId)}/unarchive`, { method: "POST" }),
   followUpRun: (runId: string) =>
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/followup`, { method: "POST" }),
   prStatus: (runId: string) => json<PrStatusResponse>(`/api/runs/${encodeURIComponent(runId)}/pr`),
@@ -111,6 +116,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ patch }),
     }),
+  usage: () => json<UsageResponse>("/api/usage"),
   workers: () => json<FleetResponse>("/api/workers"),
   renameWorker: (id: string, name: string) =>
     json<FleetResponse>(`/api/workers/${encodeURIComponent(id)}/rename`, {

@@ -6,4 +6,5 @@ export * from "./settings.js";
 export * from "./net.js";
 export * from "./duration.js";
 export * from "./fleet.js";
+export * from "./usage.js";
 export * from "./worker.js";

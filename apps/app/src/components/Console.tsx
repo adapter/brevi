@@ -165,7 +165,7 @@ export function Console({
           {live && (
             <>
               <span className="inline-flex items-center gap-1.5 text-ember-500">
-                <span className="inline-block size-[6px] animate-beacon rounded-[1.5px] bg-ember-500 text-ember-500" />
+                <span className="inline-block size-[6px] animate-beacon rounded-full bg-ember-500 text-ember-500" />
                 <span className="plate">Streaming</span>
               </span>
               <Button
@@ -421,7 +421,7 @@ function Block({ block }: { block: AgentBlock }) {
     case "result":
       return (
         <div
-          className={`my-1.5 rounded-[5px] border px-3 py-2 ${
+          className={`my-1.5 rounded-lg border px-3 py-2 ${
             block.ok
               ? "border-mint-500/30 bg-mint-500/8"
               : "border-rust-500/35 bg-rust-500/8"

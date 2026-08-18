@@ -25,6 +25,7 @@ import {
   type RunMemoriesMessage,
   type RunPatch,
   type SandboxProviderName,
+  type UsageDay,
   type WorkerDenyReason,
   type WorkerMessage,
   type WorkerState,
@@ -349,6 +350,16 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   #grace = new Map<string, GraceEntry>();
   #heartbeatTimers = new Map<string, NodeJS.Timeout>();
   #attachSessions = new Map<string, AttachSessionEntry>();
+  /** In-flight usage-report requests awaiting a worker's answer, by requestId. */
+  #usageRequests = new Map<
+    string,
+    {
+      workerId: string;
+      timer: NodeJS.Timeout;
+      resolve: (days: UsageDay[]) => void;
+      reject: (error: Error) => void;
+    }
+  >();
   /** Leases with a cancel requested against them, so a disconnected worker's owning lease is re-cancelled the moment it reconnects. */
   #cancelIntents = new Set<string>();
   /** Artifact names actually saved to disk per lease, so run-complete's manifest check has something to compare against. */
@@ -889,6 +900,27 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
         this.#attachSessions.delete(attachId);
       },
     };
+  }
+
+  /**
+   * Ask a connected worker for its machine's daily usage (ccusage's daily
+   * report, read by the daemon on its own machine). Rejects when the worker
+   * isn't connected, answers with an error, or doesn't answer in time; the
+   * generous timeout covers a first-ever read that has to install ccusage.
+   */
+  requestUsage(workerId: string, timeoutMs = 150_000): Promise<UsageDay[]> {
+    const live = this.#workers.get(workerId);
+    if (!live) return Promise.reject(new Error("worker is not connected"));
+    const requestId = randomUUID();
+    return new Promise<UsageDay[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#usageRequests.delete(requestId);
+        reject(new Error("the worker did not answer in time"));
+      }, timeoutMs);
+      timer.unref();
+      this.#usageRequests.set(requestId, { workerId, timer, resolve, reject });
+      this.#send(live.socket, { type: "usage-report", requestId });
+    });
   }
 
   /**
@@ -1608,6 +1640,15 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     const timer = this.#heartbeatTimers.get(entry.id);
     if (timer) clearTimeout(timer);
     this.#heartbeatTimers.delete(entry.id);
+    // Settle this worker's in-flight usage requests now: the answer can no
+    // longer arrive on this socket, and waiting out the timeout would hold
+    // /api/usage open for a disconnect that is already known.
+    for (const [requestId, request] of this.#usageRequests) {
+      if (request.workerId !== entry.id) continue;
+      clearTimeout(request.timer);
+      this.#usageRequests.delete(requestId);
+      request.reject(new Error("the worker disconnected before answering"));
+    }
     this.#emitWorkers();
 
     const leases = this.#leasesForWorker(entry.id);
@@ -1884,6 +1925,15 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       case "attach-error":
         this.#handleAttachFrame(workerId, message);
         return;
+      case "usage-report-result": {
+        const pending = this.#usageRequests.get(message.requestId);
+        if (!pending || pending.workerId !== workerId) return;
+        this.#usageRequests.delete(message.requestId);
+        clearTimeout(pending.timer);
+        if (message.error) pending.reject(new Error(message.error));
+        else pending.resolve(message.days);
+        return;
+      }
     }
   }
 

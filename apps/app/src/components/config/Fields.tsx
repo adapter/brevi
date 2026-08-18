@@ -30,7 +30,7 @@ import { Check, Close, Minus, Plus, Refresh, Warn } from "../Icons";
  */
 
 const INPUT_CLASS =
-  "h-7 rounded-[4px] border-ink-600 bg-ink-950/70 px-2 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]";
+  "h-7 rounded-md border-ink-600 bg-ink-950/70 px-2 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]";
 
 /** One config subsection, saved as a unit. Enter anywhere inside submits it. */
 export function SettingsCard({
@@ -39,7 +39,7 @@ export function SettingsCard({
   draft,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   description?: ReactNode;
   draft: SettingsDraft;
   children: ReactNode;
@@ -53,17 +53,17 @@ export function SettingsCard({
         }}
       >
         <CardHeader className="gap-0">
-          <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
+          <h3 className="text-[13px] font-semibold text-haze-50">
             {title}
           </h3>
           {description && (
             <p className="mt-1.5 text-[12px] leading-relaxed text-haze-400">{description}</p>
           )}
         </CardHeader>
-        <CardContent className="mt-2.5 flex flex-col">{children}</CardContent>
+        <CardContent className="mt-1.5 flex flex-col">{children}</CardContent>
 
         {(draft.dirty || draft.error || draft.applied) && (
-          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink-700 px-(--card-spacing) pt-3">
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-ink-700 px-(--card-spacing) pt-2.5">
             {draft.dirty && (
               <>
                 <Button type="submit" size="plate" disabled={draft.saving || draft.invalid}>
@@ -94,7 +94,7 @@ export function SettingsCard({
               </p>
             )}
             {!draft.dirty && draft.applied === "restart" && (
-              <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-ember-300">
+              <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-iris-400">
                 <Warn className="mt-px size-3 shrink-0" />
                 Saved to config.json. Restart brevi for it to take effect.
               </p>
@@ -132,7 +132,7 @@ export function FieldRow({
   const error = path && draft ? draft.issue(path) : undefined;
   const resettable = path && draft && !draft.isDefault(path);
   return (
-    <div className="flex flex-col gap-1.5 border-t border-ink-700 py-3 first:border-t-0 first:pt-0 last:pb-0 md:flex-row md:items-start md:gap-4">
+    <div className="flex flex-col gap-1.5 border-t border-ink-700 py-2 first:border-t-0 first:pt-0 last:pb-0 md:flex-row md:items-start md:gap-4">
       <div className="flex min-w-0 items-center gap-1.5 md:flex-1 md:pt-1">
         {/* Controls that aren't a single focusable input (segments, radios,
             switches) label themselves with aria-label instead; a <label> with
@@ -140,12 +140,12 @@ export function FieldRow({
         {htmlFor ? (
           <label
             htmlFor={htmlFor}
-            className="font-plate text-[11px] font-medium tracking-[0.06em] text-haze-200"
+            className="text-[12px] font-medium text-haze-200"
           >
             {label}
           </label>
         ) : (
-          <span className="font-plate text-[11px] font-medium tracking-[0.06em] text-haze-200">
+          <span className="text-[12px] font-medium text-haze-200">
             {label}
           </span>
         )}
@@ -733,9 +733,9 @@ export function SecretField({
 /** The page heading every /config subpage opens with. */
 export function SectionIntro({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="mt-6">
+    <div className="mt-5">
       <h3 className="plate text-haze-400">{title}</h3>
-      <p className="mt-1.5 text-[12px] leading-relaxed text-haze-400">{children}</p>
+      <p className="mt-1 text-[12px] leading-relaxed text-haze-400">{children}</p>
     </div>
   );
 }
@@ -744,7 +744,7 @@ export function SectionIntro({ title, children }: { title: string; children: Rea
 export function Advanced({ label = "Advanced", children }: { label?: string; children: ReactNode }) {
   return (
     <Collapsible className="border-t border-ink-700 pt-2.5">
-      <CollapsibleTrigger className="group/adv flex cursor-pointer items-center gap-1.5 py-1 font-plate text-[10px] font-medium tracking-[0.12em] text-haze-700 uppercase hover:text-haze-300">
+      <CollapsibleTrigger className="group/adv flex cursor-pointer items-center gap-1.5 py-1 text-[11px] font-medium text-haze-600 hover:text-haze-300">
         <span className="w-2.5 text-center font-mono text-[9px] transition-transform group-data-[panel-open]/adv:rotate-90">
           &#9656;
         </span>

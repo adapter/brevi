@@ -17,12 +17,11 @@ import { joinConfigPath } from "@brevi/shared/settings";
 import { useSettingsDraft } from "../../lib/settings";
 import { api } from "../../lib/api";
 import { linearConnected as isLinearConnected } from "../../lib/linear";
-import { Plate, RepoChip } from "../Bits";
-import { ChevronRight, Close, Plus, Warn } from "../Icons";
+import { Plate } from "../Bits";
+import { Branch, ChevronRight, Close, Plus, Warn } from "../Icons";
 import {
   FieldRow,
   OptionalTextField,
-  RadioField,
   SectionIntro,
   SettingsCard,
   TextField,
@@ -169,7 +168,7 @@ export function RepositoriesSection({
         nothing do not run.
       </SectionIntro>
 
-      <div className="mt-3 flex flex-col gap-2.5">
+      <div className="mt-3 flex flex-col gap-2">
         {mapped.map(([key]) => (
           <RepoCard
             key={key}
@@ -216,7 +215,7 @@ export function RepositoriesSection({
                     disabled={!available}
                     spellCheck={false}
                     autoFocus
-                    className="rounded-[4px] bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+                    className="rounded-md bg-ink-950/70 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
                   />
                   <Button
                     variant="ghost"
@@ -237,7 +236,7 @@ export function RepositoriesSection({
                   </p>
                 )}
                 {available && candidates.length > 0 && (
-                  <ul className="mt-2 overflow-hidden rounded-[5px] border border-ink-600">
+                  <ul className="mt-2 overflow-hidden rounded-lg border border-ink-600">
                     {candidates.map((repo) => (
                       <li key={repo.fullName} className="border-b border-ink-700 last:border-b-0">
                         <button
@@ -312,13 +311,20 @@ function RepoCard({
 
   return (
     <SettingsCard
-      title={repoKey}
-      draft={draft}
-      description={
-        <span className="flex flex-wrap items-center gap-2">
-          <RepoChip repo={repoKey} />
-          <span className="font-mono text-[11px] text-haze-400">{repo.remote}</span>
-          <span className="ml-auto flex items-center gap-1.5">
+      title={
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+          <span className="min-w-0 truncate">{repo.remote}</span>
+          <span
+            className="font-mono text-[10.5px] font-normal text-haze-600"
+            title={`Tickets labeled repo:${repoKey} route here`}
+          >
+            repo:{repoKey}
+          </span>
+          <span className="flex items-center gap-1 font-mono text-[10.5px] font-normal text-haze-600">
+            <Branch className="size-3" />
+            {repo.defaultBranch}
+          </span>
+          <span className="ml-auto flex items-center gap-1.5 font-normal">
             {confirming ? (
               <>
                 <span className="text-[11.5px] text-haze-400">
@@ -354,6 +360,7 @@ function RepoCard({
           </span>
         </span>
       }
+      draft={draft}
     >
       <ProjectsRow
         repoKey={repoKey}
@@ -362,7 +369,7 @@ function RepoCard({
         onChange={(projects) => draft.set(at("projects"), projects)}
       />
       <Collapsible>
-        <CollapsibleTrigger className="group/details flex cursor-pointer items-center gap-1.5 border-t border-ink-700 py-2.5 font-plate text-[10px] font-medium tracking-[0.12em] text-haze-700 uppercase hover:text-haze-300">
+        <CollapsibleTrigger className="group/details flex cursor-pointer items-center gap-1.5 border-t border-ink-700 py-2 text-[11px] font-medium text-haze-600 hover:text-haze-300">
           <ChevronRight className="size-3 transition-transform group-data-[panel-open]/details:rotate-90" />
           Details
         </CollapsibleTrigger>
@@ -388,40 +395,6 @@ function RepoCard({
             wide
             placeholder="/Users/you/code/web"
             help="Optional local checkout to clone from instead of the network."
-          />
-          <OptionalTextField
-            label="Dev command"
-            path={at("devCommand")}
-            draft={draft}
-            wide
-            placeholder="bun run dev"
-            help="Command that produces a runnable dev server, used for demo capture."
-          />
-          <OptionalTextField
-            label="Dev URL"
-            path={at("devUrl")}
-            draft={draft}
-            placeholder="http://localhost:3000"
-            help="URL the dev server listens on once up, used for demo capture."
-          />
-          <RadioField
-            label="Demo evidence"
-            path={at("demo")}
-            draft={draft}
-            options={[
-              {
-                value: "always",
-                label: "Always",
-                detail: "The full dev-server and screenshot flow on every run.",
-              },
-              {
-                value: "auto",
-                label: "Auto",
-                detail:
-                  "The agent may downgrade to cheap evidence (test output, a CLI transcript) for docs-only or test-only changes.",
-              },
-              { value: "never", label: "Never", detail: "Skip the demo requirement entirely." },
-            ]}
           />
         </CollapsibleContent>
       </Collapsible>

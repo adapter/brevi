@@ -226,6 +226,8 @@ export interface PrStatus {
   url: string;
   number: number;
   state: PrState;
+  /** When the PR merged, from GitHub's merged_at; absent unless state is "merged". */
+  mergedAt?: string;
 }
 
 export interface PrThreadComment {
@@ -295,7 +297,12 @@ export async function fetchPrStatus(prUrl: string, token: string): Promise<PrSta
   if (!parsed) throw new Error(`not a github pull request url: "${prUrl}"`);
   const octokit = new Octokit({ auth: token });
   const pr = await octokit.rest.pulls.get({ owner: parsed.owner, repo: parsed.name, pull_number: parsed.number });
-  return { url: prUrl, number: parsed.number, state: prStateOf(pr.data) };
+  return {
+    url: prUrl,
+    number: parsed.number,
+    state: prStateOf(pr.data),
+    ...(pr.data.merged_at ? { mergedAt: pr.data.merged_at } : {}),
+  };
 }
 
 /** One pull request found for a branch, enough for the host to decide whether to adopt it. */

@@ -167,7 +167,7 @@ export function WorkersSection({
 
   return (
     <>
-      <SectionIntro title="Workers">
+      <SectionIntro title="Fleet">
         Every run executes on an enrolled Linux worker; Mission Control connects over SSH,
         installs the worker service, and keeps the pairing credential out of the renderer.
       </SectionIntro>
@@ -176,7 +176,7 @@ export function WorkersSection({
         <Card size="sm" className="gap-2">
           <CardHeader className="gap-0">
             <div className="flex items-baseline justify-between gap-3">
-              <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
+              <h3 className="text-[13px] font-semibold text-haze-50">
                 Set up a worker over SSH
               </h3>
               <Button
@@ -286,10 +286,10 @@ export function WorkersSection({
         <Card size="sm" className="gap-2">
           <CardHeader className="gap-0">
             <div className="flex items-baseline justify-between gap-3">
-              <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
+              <h3 className="text-[13px] font-semibold text-haze-50">
                 Fleet
               </h3>
-              <span className="font-plate text-[9px] tracking-[0.14em] text-haze-700 uppercase">
+              <span className="text-[10.5px] font-medium text-haze-600">
                 {workers.length} {workers.length === 1 ? "worker" : "workers"}
               </span>
             </div>
@@ -344,7 +344,7 @@ export function WorkersSection({
                               }}
                               onBlur={() => setRenamingId(null)}
                               aria-label={`Rename ${worker.name}`}
-                              className="h-7 max-w-56 rounded-[4px] border-ink-600 bg-ink-950/70 px-2 font-mono text-[12.5px] text-haze-100"
+                              className="h-7 max-w-56 rounded-md border-ink-600 bg-ink-950/70 px-2 font-mono text-[12.5px] text-haze-100"
                             />
                           ) : (
                             <button
@@ -529,7 +529,7 @@ function FleetBindAddressField({ draft }: { draft: SettingsDraft }) {
           spellCheck={false}
           autoComplete="off"
           aria-label="Custom bind address"
-          className="mt-2 h-7 rounded-[4px] border-ink-600 bg-ink-950/70 px-2 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
+          className="mt-2 h-7 rounded-md border-ink-600 bg-ink-950/70 px-2 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
         />
       )}
     </FieldRow>

@@ -3,18 +3,36 @@ import type React from "react";
 import type { Run } from "@brevi/shared";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { SidebarInset, SidebarProvider, SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
 import { AppSidebar } from "./components/AppSidebar";
 import { ConfigurationPage } from "./components/Configuration";
 import { Overview } from "./components/Overview";
 import { RunDetail } from "./components/RunDetail";
 import { Setup } from "./components/Setup";
-import { SiteHeader } from "./components/SiteHeader";
+import { UsagePage } from "./components/Usage";
 import { Close, Warn } from "./components/Icons";
 import { repoDisplay } from "./lib/repo";
 import { isActive } from "./lib/status";
 import { useNow } from "./lib/useNow";
 import { useOrchestrator, type ConfigSection } from "./lib/useOrchestrator";
+
+/**
+ * With no top bar, a collapsed sidebar leaves nothing to reopen it with;
+ * this floats a toggle in the content corner exactly while it is closed
+ * (the open sidebar carries its own trigger in its header).
+ */
+function FloatingSidebarTrigger() {
+  const { open, openMobile, isMobile } = useSidebar();
+  if (isMobile ? openMobile : open) return null;
+  return (
+    <div className="floating-sidebar-trigger absolute top-2.5 left-2.5 z-30">
+      <SidebarTrigger
+        aria-label="Open runs"
+        className="rounded-lg border border-ink-700 bg-ink-850 text-haze-400 shadow-sm"
+      />
+    </div>
+  );
+}
 
 export default function App() {
   const {
@@ -34,9 +52,12 @@ export default function App() {
     page,
     openRun,
     openConfig,
+    openUsage,
     runTicket,
     cancelRun,
     retryRun,
+    archiveRun,
+    unarchiveRun,
     followUpRun,
     dismissNotice,
     applyConfig,
@@ -69,10 +90,11 @@ export default function App() {
 
   return (
     <SidebarProvider
-      className="h-svh min-h-svh overflow-hidden md:max-xl:[--sidebar-width:18rem]!"
-      style={{ "--sidebar-width": "22rem" } as React.CSSProperties}
+      className="h-svh min-h-svh overflow-hidden md:max-xl:[--sidebar-width:16rem]!"
+      style={{ "--sidebar-width": "18rem" } as React.CSSProperties}
     >
       <AppSidebar
+        conn={conn}
         tickets={tickets}
         runs={runs}
         now={now}
@@ -84,22 +106,19 @@ export default function App() {
         workers={workers}
         busy={busy}
         unreachable={unreachable}
+        page={page}
         onRun={handleRun}
         onOpenRun={openRun}
-        onCancelRun={(id) => void cancelRun(id)}
-        onRetryRun={(id) => void retryRun(id)}
-        onAnotherLook={(id) => void followUpRun(id)}
-        onOpenWorkers={() => openConfig("workers")}
+        onArchiveRun={(id) => void archiveRun(id)}
+        onUnarchiveRun={(id) => void unarchiveRun(id)}
+        onOpenConfig={() => openConfig()}
+        onOpenUsage={openUsage}
+        onAddRepo={() => openConfig("repositories")}
+        onOpenWorkers={() => openConfig("fleet")}
       />
 
-      <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
-        <SiteHeader
-          conn={conn}
-          config={config}
-          linearStatus={linearStatus}
-          page={page}
-          onOpenConfig={openConfig}
-        />
+      <SidebarInset className="relative flex h-svh min-w-0 flex-col overflow-hidden">
+        <FloatingSidebarTrigger />
 
         {notice && (
           <Alert
@@ -135,8 +154,11 @@ export default function App() {
                 busy={busy[selectedRun.id] === true}
                 onCancel={() => void cancelRun(selectedRun.id)}
                 onRetry={() => void retryRun(selectedRun.id)}
+                onArchive={() =>
+                  void (selectedRun.archivedAt ? unarchiveRun : archiveRun)(selectedRun.id)
+                }
                 onFollowUp={() => followUpRun(selectedRun.id)}
-                onOpenWorkers={() => openConfig("workers")}
+                onOpenWorkers={() => openConfig("fleet")}
               />
             ) : (
               <Overview
@@ -145,6 +167,8 @@ export default function App() {
                 missingRun={selectedRunId !== null && loaded}
               />
             )
+          ) : page === "usage" ? (
+            <UsagePage />
           ) : page === "setup" ? (
             <Setup
               config={config}

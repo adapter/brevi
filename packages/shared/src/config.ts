@@ -266,6 +266,22 @@ export const configSchema = z.object({
       label: z.string().default("brevi"),
     })
     .prefault({}),
+  /**
+   * When finished runs leave the dashboard's default list on their own.
+   * Archived runs are hidden, not deleted: every run keeps its directory
+   * under ~/.brevi/runs and can be unarchived from the dashboard. Each rule
+   * is a day count; 0 disables that rule.
+   */
+  archive: z
+    .object({
+      /** Days after a run finishes before it auto-archives, whatever became of its PR or ticket. */
+      afterDays: z.number().min(0).default(30),
+      /** Days after a run's pull request merges before it auto-archives. */
+      mergedAfterDays: z.number().min(0).default(7),
+      /** Days after a run's Linear ticket completes or cancels before it auto-archives. */
+      closedTicketAfterDays: z.number().min(0).default(7),
+    })
+    .prefault({}),
   restart: z
     .object({
       /** Automatically wait out agent usage limits and start a new attempt. */

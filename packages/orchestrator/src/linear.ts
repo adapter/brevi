@@ -140,6 +140,34 @@ export class LinearService {
     return tickets;
   }
 
+  /**
+   * When each of the given issues completed or canceled, for issues that
+   * have; issues still open are simply absent from the result. Feeds the
+   * auto-archive sweep, which only asks about tickets it has not yet seen
+   * close, so the same id is not re-queried sweep after sweep.
+   */
+  ticketClosures(ids: string[]): Promise<Map<string, string>> {
+    return this.#withAuthRecovery(() => this.#ticketClosures(ids));
+  }
+
+  async #ticketClosures(ids: string[]): Promise<Map<string, string>> {
+    const closures = new Map<string, string>();
+    for (let offset = 0; offset < ids.length; offset += 50) {
+      const connection = await this.#client.issues({
+        filter: {
+          id: { in: ids.slice(offset, offset + 50) },
+          state: { type: { in: ["completed", "canceled"] } },
+        },
+        first: 50,
+      });
+      for (const issue of connection.nodes) {
+        const closedAt = issue.completedAt ?? issue.canceledAt;
+        if (closedAt) closures.set(issue.id, closedAt.toISOString());
+      }
+    }
+    return closures;
+  }
+
   /** Projects visible to the credential, for the dashboard's repo-mapping picker. */
   listProjects(): Promise<LinearProject[]> {
     return this.#withAuthRecovery(async () => {

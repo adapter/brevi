@@ -7,12 +7,13 @@ import { OrchestratorSection } from "./config/OrchestratorSection";
 import { RepositoriesSection } from "./config/RepositoriesSection";
 import { ServerSection } from "./config/ServerSection";
 import { WorkersSection } from "./config/WorkersSection";
+import { ThemeToggle } from "./ThemeToggle";
 
 const SECTIONS: { id: ConfigSection; label: string }[] = [
   { id: "connectors", label: "Connectors" },
   { id: "repositories", label: "Repositories" },
   { id: "agent", label: "Agent" },
-  { id: "workers", label: "Workers" },
+  { id: "fleet", label: "Fleet" },
   { id: "memory", label: "Memory" },
   { id: "orchestrator", label: "Orchestrator" },
   { id: "server", label: "Server" },
@@ -49,10 +50,21 @@ export function ConfigurationPage({
 }) {
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-5 sm:py-7 md:px-8">
-      <header className="flex items-baseline gap-2.5">
-        <h2 className="font-plate text-[13px] font-semibold tracking-[0.08em] text-haze-50 uppercase">
+      <header className="flex items-center gap-2.5">
+        <h2 className="text-[16px] font-semibold text-haze-50">
           Configuration
         </h2>
+        <span className="ml-auto flex items-center gap-2">
+          {health?.version && (
+            <span
+              className="font-mono text-[10.5px] leading-none text-haze-700"
+              title="Mission Control version"
+            >
+              v{health.version}
+            </span>
+          )}
+          <ThemeToggle />
+        </span>
       </header>
       <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
         Everything in <code className="font-mono text-[11px]">~/.brevi/config.json</code>. Changes
@@ -62,7 +74,7 @@ export function ConfigurationPage({
 
       <nav
         aria-label="Configuration sections"
-        className="no-scrollbar mt-5 flex items-center gap-4 overflow-x-auto border-b border-ink-700"
+        className="no-scrollbar mt-4 flex items-center gap-4 overflow-x-auto border-b border-ink-700"
       >
         {SECTIONS.map(({ id, label }) => {
           const active = section === id;
@@ -75,8 +87,8 @@ export function ConfigurationPage({
                 e.preventDefault();
                 onSection(id);
               }}
-              className={`touch-target -mb-px shrink-0 border-b pb-2 font-plate text-[11.5px] font-semibold tracking-[0.08em] whitespace-nowrap uppercase ${
-                active ? "border-haze-300 text-haze-50" : "border-transparent text-haze-600 hover:text-haze-300"
+              className={`touch-target -mb-px shrink-0 border-b pb-2 text-[12px] font-medium whitespace-nowrap ${
+                active ? "border-haze-50 text-haze-50" : "border-transparent text-haze-600 hover:text-haze-300"
               }`}
             >
               {label}
@@ -106,7 +118,7 @@ export function ConfigurationPage({
           <div hidden={section !== "agent"}>
             <AgentSection config={config} onConfig={onConfig} />
           </div>
-          <div hidden={section !== "workers"}>
+          <div hidden={section !== "fleet"}>
             <WorkersSection
               config={config}
               workers={workers}

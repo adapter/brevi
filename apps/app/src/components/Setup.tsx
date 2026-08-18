@@ -24,7 +24,7 @@ export function Setup({
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-5 sm:py-7 md:px-8">
       <header className="flex items-baseline gap-2.5">
-        <h2 className="font-plate text-[13px] font-semibold tracking-[0.08em] text-haze-50 uppercase">
+        <h2 className="text-[16px] font-semibold text-haze-50">
           Set up brevi
         </h2>
       </header>
