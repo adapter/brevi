@@ -264,9 +264,7 @@ export function AppSidebar({
                 </p>
               ) : !linearConnected ? (
                 <ConnectLinearCard reconnect={linearAuthError} />
-              ) : (
-                <SummonCard config={config} />
-              ))}
+              ) : null)}
             {projects.length > 0 && (
               <div className="flex flex-col gap-0.5 px-1">
                 {projects.map((project) => (
@@ -698,21 +696,3 @@ function ConnectLinearCard({ reconnect }: { reconnect?: boolean }) {
   );
 }
 
-/** First-run UX: the queue is empty because brevi has not been summoned yet. */
-function SummonCard({ config }: { config: BreviConfig | null }) {
-  const label = config?.trigger.label ?? "brevi";
-  const poll = config?.pollIntervalSeconds ?? 60;
-
-  return (
-    <Card size="sm" className="mx-1 block p-4">
-      <Plate className="text-haze-700">Nothing queued</Plate>
-      <p className="mt-2 text-[12.5px] leading-relaxed text-haze-400">
-        Assign yourself a Linear issue and add the {label} label; brevi picks it up and opens a
-        pull request.
-      </p>
-      <p className="mt-3 border-t border-ink-700 pt-3 font-mono text-[11px] text-haze-700">
-        Checking Linear every {poll}s
-      </p>
-    </Card>
-  );
-}
