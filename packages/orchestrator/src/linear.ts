@@ -290,10 +290,14 @@ export class LinearService {
   /**
    * Repo resolution order: a `repo:<key>` label, a label exactly matching a
    * repo key, the issue's project among a repo's configured `projects`, then
-   * the project name matching a key.
+   * the project name matching a key. The trigger label never counts as a
+   * bare repo-key match: it sits on every ticket brevi picks up, so a repo
+   * key that happens to equal it (e.g. a repo keyed "brevi") would swallow
+   * every ticket before the issue's project was ever consulted.
    */
   async #resolveRepo(issue: Issue, labels: string[]): Promise<string | undefined> {
     const repoKeys = Object.keys(this.#config.repos);
+    const triggerLabel = this.#config.trigger.label.toLowerCase();
     const byKey = (candidate: string): string | undefined =>
       repoKeys.find((key) => key.toLowerCase() === candidate.toLowerCase());
 
@@ -304,6 +308,7 @@ export class LinearService {
       if (key) return key;
     }
     for (const label of labels) {
+      if (label.toLowerCase() === triggerLabel) continue;
       const key = byKey(label);
       if (key) return key;
     }
