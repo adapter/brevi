@@ -7,6 +7,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger, useSidebar } from "@/com
 import { AppSidebar } from "./components/AppSidebar";
 import { ConfigurationPage } from "./components/Configuration";
 import { Overview } from "./components/Overview";
+import { RepoSettingsPage } from "./components/RepoSettings";
 import { RunDetail } from "./components/RunDetail";
 import { Setup } from "./components/Setup";
 import { UsagePage } from "./components/Usage";
@@ -52,6 +53,7 @@ export default function App() {
     page,
     openRun,
     openConfig,
+    openRepoSettings,
     openUsage,
     runTicket,
     cancelRun,
@@ -115,6 +117,7 @@ export default function App() {
         onOpenUsage={openUsage}
         onAddRepo={() => openConfig("repositories")}
         onOpenWorkers={() => openConfig("fleet")}
+        onOpenRepoSettings={openRepoSettings}
       />
 
       <SidebarInset className="relative flex h-svh min-w-0 flex-col overflow-hidden">
@@ -175,6 +178,13 @@ export default function App() {
               linearStatus={linearStatus}
               onConfig={applyConfig}
               onDone={() => openRun(null)}
+            />
+          ) : page.startsWith("repo:") ? (
+            <RepoSettingsPage
+              config={config}
+              linearStatus={linearStatus}
+              repoKey={page.slice("repo:".length)}
+              onConfig={applyConfig}
             />
           ) : (
             <ConfigurationPage

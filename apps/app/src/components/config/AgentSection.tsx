@@ -2,6 +2,7 @@ import type { BreviConfig } from "@brevi/shared";
 import { useSettingsDraft } from "../../lib/settings";
 import {
   Advanced,
+  NumberField,
   OptionalTextField,
   SectionIntro,
   SegmentedField,
@@ -33,6 +34,8 @@ export function AgentSection({
 }) {
   const models = useSettingsDraft(config, onConfig);
   const review = useSettingsDraft(config, onConfig);
+  const memory = useSettingsDraft(config, onConfig);
+  const memoryEnabled = memory.value("memory.enabled") === true;
 
   // The single-model override runs everything on one model with no subagent
   // delegation, so the split below it stops meaning anything.
@@ -126,6 +129,39 @@ export function AgentSection({
             disabled={!codexReview}
             options={[{ value: "minimal", label: "Minimal" }, ...EFFORTS]}
             help="Reasoning effort for Codex review executions."
+          />
+        </SettingsCard>
+
+        <SettingsCard
+          title="Repository memories"
+          draft={memory}
+          description="Durable facts a run records on the way out, stored under ~/.brevi/memories and handed to the next run in that repo. Each repository's stored memories are listed on its settings page."
+        >
+          <SwitchField
+            label="Remember"
+            path="memory.enabled"
+            draft={memory}
+            help="Inject stored memories into run prompts and harvest new ones afterwards."
+          />
+          <NumberField
+            label="Max entries"
+            path="memory.maxEntries"
+            draft={memory}
+            min={1}
+            max={500}
+            disabled={!memoryEnabled}
+            help="How many memories are kept per repo. Once full, the least recently recorded ones are dropped."
+          />
+          <NumberField
+            label="Prompt budget"
+            path="memory.maxChars"
+            draft={memory}
+            unit="chars"
+            min={200}
+            max={50000}
+            step={500}
+            disabled={!memoryEnabled}
+            help="Character budget for the memories block injected into a prompt. It only pays for itself while it stays cheaper than the exploration it replaces."
           />
         </SettingsCard>
       </div>

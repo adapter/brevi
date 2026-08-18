@@ -405,18 +405,22 @@ function RepoCard({
 /**
  * Multi-select of Linear projects that route tickets to a repo. Options come
  * from the orchestrator's project list; names already configured but no longer
- * returned by Linear stay selectable so they can be unmapped.
+ * returned by Linear stay selectable so they can be unmapped. Shared with the
+ * per-repo settings page.
  */
-function ProjectsRow({
+export function ProjectsRow({
   repoKey,
   projects: raw,
   options,
   onChange,
+  wide = true,
 }: {
   repoKey: string;
   projects: unknown;
   options: LinearProject[] | null;
   onChange: (projects: string[]) => void;
+  /** Full-row control (the Repositories card); off, it sits in the standard 280px column. */
+  wide?: boolean;
 }) {
   // A running orchestrator from before this field may serve configs without
   // it; never let that take the app down.
@@ -432,7 +436,7 @@ function ProjectsRow({
     <FieldRow
       label="Linear projects"
       help="Tickets in these projects run against this repo, matched case-insensitively."
-      wide
+      wide={wide}
     >
       <DropdownMenu>
         <DropdownMenuTrigger

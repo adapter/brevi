@@ -94,23 +94,26 @@ export type ConfigSection =
   | "repositories"
   | "agent"
   | "fleet"
-  | "memory"
   | "orchestrator"
   | "server";
 
-export type Page = "home" | "setup" | "usage" | `config:${ConfigSection}`;
+export type Page = "home" | "setup" | "usage" | `config:${ConfigSection}` | `repo:${string}`;
 
 /** Non-run pages live at fixed paths; anything else is the home/run view. */
 function pageFromPath(pathname: string): Page {
   if (/^\/setup\/?$/.test(pathname)) return "setup";
   if (/^\/usage\/?$/.test(pathname)) return "usage";
+  const repo = /^\/repos\/([^/]+)\/?$/.exec(pathname);
+  if (repo?.[1]) return `repo:${decodeURIComponent(repo[1])}`;
   const match =
     /^\/config(?:\/(connectors|repositories|agent|fleet|workers|memory|orchestrator|server))?\/?$/.exec(
       pathname,
     );
   if (!match) return "home";
-  // "workers" is the section's pre-rename URL; old bookmarks land on Fleet.
-  const segment = match[1] === "workers" ? "fleet" : match[1];
+  // Legacy URLs: "workers" is Fleet's pre-rename path, and "memory" was its
+  // own section before its controls moved to Agent; old bookmarks still land.
+  const segment =
+    match[1] === "workers" ? "fleet" : match[1] === "memory" ? "agent" : match[1];
   const section = (segment ?? "connectors") as ConfigSection;
   return `config:${section}`;
 }
@@ -381,6 +384,17 @@ export function useOrchestrator() {
     [selectRun],
   );
 
+  /** Open one repository's settings page at its own URL. */
+  const openRepoSettings = useCallback(
+    (repoKey: string) => {
+      const path = `/repos/${encodeURIComponent(repoKey)}`;
+      if (window.location.pathname !== path) window.history.pushState(null, "", desktopPath(path));
+      dispatch({ t: "page", page: `repo:${repoKey}` });
+      selectRun(null);
+    },
+    [selectRun],
+  );
+
   /** Open the Usage page at its own URL. */
   const openUsage = useCallback(() => {
     if (window.location.pathname !== "/usage") {
@@ -524,6 +538,7 @@ export function useOrchestrator() {
     events: state.events,
     openRun,
     openConfig,
+    openRepoSettings,
     openUsage,
     runTicket,
     cancelRun,
