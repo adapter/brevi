@@ -168,10 +168,15 @@ function ConnectorItem({
 }
 
 /**
- * Provider connections: Linear, GitHub, and the agent credentials (Claude,
- * Codex, Grok), plus the Cloudflare R2 evidence connector. Rendered at
- * /config/connectors as a single-column accordion.
+ * The three connector groups: where work comes from and goes (Linear,
+ * GitHub), the agent credentials (Claude, Codex, Grok), and the evidence
+ * store (Cloudflare R2). Each renders as its own labeled accordion card.
  */
+const GROUPS: { label: string; ids: CredentialProvider[] }[] = [
+  { label: "Workflow", ids: ["linear", "github"] },
+  { label: "Agents", ids: ["anthropic", "codex", "grok"] },
+];
+
 export function ConnectorsSection({
   config,
   linearStatus,
@@ -181,9 +186,8 @@ export function ConnectorsSection({
   linearStatus: LinearStatus | null;
   onConfig: (config: BreviConfig) => void;
 }) {
-  const connectedCount = PROVIDERS.filter((spec) =>
-    spec.id === "linear" ? linearConnected(config, linearStatus) : spec.connected(config),
-  ).length;
+  const isConnected = (spec: ProviderSpec) =>
+    spec.id === "linear" ? linearConnected(config, linearStatus) : spec.connected(config);
   // Normalized to end with a period: the row renders a follow-up sentence
   // right after it, and error details arrive with and without one.
   const period = (text: string) => (text.endsWith(".") ? text : `${text}.`);
@@ -210,40 +214,56 @@ export function ConnectorsSection({
   };
 
   return (
-    <section className="mt-6">
-      <div className="flex items-center gap-2">
-        <Plate className="text-haze-400">Connections</Plate>
-        <span className="font-mono text-[11px] leading-none text-haze-700">
-          {connectedCount}/{PROVIDERS.length}
-        </span>
-      </div>
-      <Card size="sm" className="mt-3 gap-0 py-0">
-        {PROVIDERS.map((spec) => (
-          <ProviderRow
-            key={spec.id}
-            spec={spec}
+    <section className="mt-6 flex flex-col gap-6">
+      {GROUPS.map((group) => {
+        const specs = group.ids
+          .map((id) => PROVIDERS.find((spec) => spec.id === id))
+          .filter((spec): spec is ProviderSpec => spec !== undefined);
+        const connected = specs.filter(isConnected).length;
+        return (
+          <div key={group.label}>
+            <div className="flex items-center gap-2">
+              <Plate className="text-haze-400">{group.label}</Plate>
+              <span className="font-mono text-[11px] leading-none text-haze-700">
+                {connected}/{specs.length}
+              </span>
+            </div>
+            <Card size="sm" className="mt-3 gap-0 py-0">
+              {specs.map((spec) => (
+                <ProviderRow
+                  key={spec.id}
+                  spec={spec}
+                  config={config}
+                  onConfig={onConfig}
+                  open={openId === spec.id}
+                  onOpenChange={setOpen(spec.id)}
+                  authError={spec.id === "linear" ? linearAuthError : undefined}
+                  refreshWarning={spec.id === "linear" ? linearRefreshWarning : undefined}
+                  extra={
+                    spec.id === "linear" ? (
+                      <LinearPollingFields config={config} onConfig={onConfig} />
+                    ) : undefined
+                  }
+                />
+              ))}
+            </Card>
+          </div>
+        );
+      })}
+
+      <div>
+        <Plate className="text-haze-400">Evidence</Plate>
+        <Card size="sm" className="mt-3 gap-0 py-0">
+          <R2Row
             config={config}
             onConfig={onConfig}
-            open={openId === spec.id}
-            onOpenChange={setOpen(spec.id)}
-            authError={spec.id === "linear" ? linearAuthError : undefined}
-            refreshWarning={spec.id === "linear" ? linearRefreshWarning : undefined}
-            extra={
-              spec.id === "linear" ? (
-                <LinearPollingFields config={config} onConfig={onConfig} />
-              ) : undefined
-            }
+            open={openId === "r2"}
+            onOpenChange={setOpen("r2")}
           />
-        ))}
-        <R2Row
-          config={config}
-          onConfig={onConfig}
-          open={openId === "r2"}
-          onOpenChange={setOpen("r2")}
-        />
-      </Card>
+        </Card>
+      </div>
 
-      <p className="mt-6 border-t border-ink-700 pt-3.5 text-[11.5px] leading-relaxed text-haze-700">
+      <p className="border-t border-ink-700 pt-3.5 text-[11.5px] leading-relaxed text-haze-700">
         Credentials are validated with the provider, then stored in{" "}
         <code className="font-mono text-[10.5px] text-haze-400">~/.brevi/config.json</code>.
         They never leave this machine. Keys are never shown back to this page, so they are not
