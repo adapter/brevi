@@ -17,12 +17,11 @@ import { joinConfigPath } from "@brevi/shared/settings";
 import { useSettingsDraft } from "../../lib/settings";
 import { api } from "../../lib/api";
 import { linearConnected as isLinearConnected } from "../../lib/linear";
-import { Plate, RepoChip } from "../Bits";
-import { ChevronRight, Close, Plus, Warn } from "../Icons";
+import { Plate } from "../Bits";
+import { Branch, ChevronRight, Close, Plus, Warn } from "../Icons";
 import {
   FieldRow,
   OptionalTextField,
-  RadioField,
   SectionIntro,
   SettingsCard,
   TextField,
@@ -312,12 +311,20 @@ function RepoCard({
 
   return (
     <SettingsCard
-      title={repoKey}
+      title={repo.remote}
       draft={draft}
       description={
         <span className="flex flex-wrap items-center gap-2">
-          <RepoChip repo={repoKey} />
-          <span className="font-mono text-[11px] text-haze-400">{repo.remote}</span>
+          <span
+            className="font-mono text-[10.5px] text-haze-600"
+            title={`Tickets labeled repo:${repoKey} route here`}
+          >
+            repo:{repoKey}
+          </span>
+          <span className="flex items-center gap-1 font-mono text-[10.5px] text-haze-600">
+            <Branch className="size-3" />
+            {repo.defaultBranch}
+          </span>
           <span className="ml-auto flex items-center gap-1.5">
             {confirming ? (
               <>
@@ -388,40 +395,6 @@ function RepoCard({
             wide
             placeholder="/Users/you/code/web"
             help="Optional local checkout to clone from instead of the network."
-          />
-          <OptionalTextField
-            label="Dev command"
-            path={at("devCommand")}
-            draft={draft}
-            wide
-            placeholder="bun run dev"
-            help="Command that produces a runnable dev server, used for demo capture."
-          />
-          <OptionalTextField
-            label="Dev URL"
-            path={at("devUrl")}
-            draft={draft}
-            placeholder="http://localhost:3000"
-            help="URL the dev server listens on once up, used for demo capture."
-          />
-          <RadioField
-            label="Demo evidence"
-            path={at("demo")}
-            draft={draft}
-            options={[
-              {
-                value: "always",
-                label: "Always",
-                detail: "The full dev-server and screenshot flow on every run.",
-              },
-              {
-                value: "auto",
-                label: "Auto",
-                detail:
-                  "The agent may downgrade to cheap evidence (test output, a CLI transcript) for docs-only or test-only changes.",
-              },
-              { value: "never", label: "Never", detail: "Skip the demo requirement entirely." },
-            ]}
           />
         </CollapsibleContent>
       </Collapsible>
