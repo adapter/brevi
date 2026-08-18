@@ -85,6 +85,14 @@ function explainSshFailure(raw: string, request: ValidatedRequest): string {
       `path in the Identity file field. (${raw.split("\n").pop()})`
     );
   }
+  if (/interactive authentication required/i.test(raw)) {
+    return (
+      `${dest} connected, but elevating to root wanted an interactive prompt (polkit), which ` +
+      `brevi cannot answer. Install as root directly (set User to root), or give ${request.user} ` +
+      `real passwordless sudo: "echo '${request.user} ALL=(ALL) NOPASSWD:ALL' | sudo tee ` +
+      `/etc/sudoers.d/${request.user}" on that machine, then install again.`
+    );
+  }
   if (/sudo: (a password is required|no tty present)/i.test(raw)) {
     return (
       `${dest} connected, but sudo on that machine asks for a password, which brevi cannot type. ` +
