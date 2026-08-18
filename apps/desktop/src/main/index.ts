@@ -150,9 +150,10 @@ async function main(): Promise<void> {
       // Probed at every (re)start rather than once: installing bubblewrap or
       // fixing a Seatbelt problem then restarting the orchestrator is enough
       // to turn local execution on.
-      const hostExecution = await resolveHostExecution();
+      const config = await loadConfig();
+      const hostExecution = await resolveHostExecution(config.agent.command);
       const handle = await startOrchestrator({
-        config: await loadConfig(),
+        config,
         managementToken,
         provisionWorker: provisionWorkerOverSsh,
         hostExecution,

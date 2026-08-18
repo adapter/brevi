@@ -63,8 +63,13 @@ function loginShellPath(): Promise<string | undefined> {
   });
 }
 
-/** What this machine can execute runs through, reported on /api/health. */
-export async function resolveHostExecution(): Promise<HostExecution> {
+/**
+ * What this machine can execute runs through, reported on /api/health. The
+ * configured agent command is probed alongside the three defaults so a custom
+ * wrapper or an absolute CLI path (exactly what the worker's own
+ * availableAgentCommands accepts) does not read as "no agent CLI".
+ */
+export async function resolveHostExecution(configuredCommand?: string): Promise<HostExecution> {
   await ensureUsablePath();
   if (process.platform === "linux") {
     if ((await collectBwrapProblems()).length > 0) return { kind: "none", reason: "bwrap-unavailable" };
@@ -76,8 +81,10 @@ export async function resolveHostExecution(): Promise<HostExecution> {
   }
   // A healthy sandbox with no agent CLI still cannot execute anything, and
   // advertising local-worker would hide the queue-only setup notice.
-  const agents = await Promise.all(["claude", "codex", "grok"].map((cmd) => resolveBinary(cmd)));
-  if (agents.every((resolved) => resolved === undefined)) return { kind: "none", reason: "no-agent-cli" };
+  const candidates = new Set(["claude", "codex", "grok"]);
+  if (configuredCommand) candidates.add(configuredCommand);
+  const resolved = await Promise.all([...candidates].map((cmd) => resolveBinary(cmd)));
+  if (resolved.every((r) => r === undefined)) return { kind: "none", reason: "no-agent-cli" };
   return { kind: "local-worker" };
 }
 

@@ -85,4 +85,33 @@ describe.if(darwin)("SeatbeltProvider on macOS", () => {
       await provider.discard(id);
     }
   }, 60_000);
+
+  test("reaps a daemonized descendant when the command returns", async () => {
+    const provider = new SeatbeltProvider();
+    const id = `seatbelt-reap-${Date.now()}`;
+    const sandbox = await provider.create({ id });
+    const alive = (p) => {
+      try {
+        process.kill(p, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      // A background sleep that outlives the foreground command. exec must
+      // still return promptly (not hang on the inherited pipe), and the
+      // daemonized child must be gone once it does.
+      const started = Date.now();
+      await sandbox.exec("/bin/sh", ["-c", "(sleep 30 & echo $! > bg.pid); sleep 0.2"]);
+      expect(Date.now() - started).toBeLessThan(10_000);
+      const pid = Number((await sandbox.readFile("bg.pid")).trim());
+      expect(Number.isInteger(pid)).toBe(true);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(alive(pid)).toBe(false);
+    } finally {
+      await sandbox.destroy();
+      await provider.discard(id);
+    }
+  }, 60_000);
 });

@@ -119,6 +119,11 @@ class SeatbeltSandbox implements Sandbox {
   readonly #rootDir: string;
   readonly #profilePath: string;
   readonly #env: Record<string, string>;
+  // Process-group leaders (one per exec). Unlike bwrap's PID namespace,
+  // Seatbelt does not contain a run's processes, so a daemonized child would
+  // survive the command that spawned it. Each exec leads its own group and
+  // release()/destroy() kill every group to reap those descendants.
+  readonly #groups = new Set<number>();
 
   constructor(
     id: string,
@@ -136,6 +141,18 @@ class SeatbeltSandbox implements Sandbox {
     this.#env = env;
   }
 
+  /** SIGKILL every recorded process group, reaping daemonized descendants. */
+  #reapGroups(): void {
+    for (const pid of this.#groups) {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // Group already gone; nothing to reap.
+      }
+    }
+    this.#groups.clear();
+  }
+
   wrap(command: string, args: string[], cwd?: string): SandboxLaunch {
     const env = sandboxEnv(this.homePath, this.#env);
     return wrapInSeatbelt(this.#profilePath, command, args, resolveHostPath(this.workspacePath, cwd), env);
@@ -150,12 +167,18 @@ class SeatbeltSandbox implements Sandbox {
       resolveHostPath(this.workspacePath, options.cwd),
       env,
     );
+    // Each exec leads its own process group; a background process the agent
+    // leaves running (a dev server for demo capture, say) stays up across
+    // execs, exactly as under bwrap, and is reaped when the sandbox is
+    // released or destroyed. The group is tracked, never killed per-exec.
     return runCommand(launch.file, launch.args, {
       env: launch.env,
       timeoutMs: options.timeoutMs,
       signal: options.signal,
       onStdout: options.onStdout,
       onStderr: options.onStderr,
+      detached: true,
+      onSpawn: (pid) => this.#groups.add(pid),
     });
   }
 
@@ -185,10 +208,13 @@ class SeatbeltSandbox implements Sandbox {
   }
 
   async release(): Promise<void> {
-    // No-op: the workspace directory on the host IS the retained state.
+    // The workspace directory on the host IS the retained state, but Seatbelt
+    // leaves no PID namespace to stop compute, so reap any lingering groups.
+    this.#reapGroups();
   }
 
   async destroy(): Promise<void> {
+    this.#reapGroups();
     await rm(this.#rootDir, { recursive: true, force: true });
     await rm(this.#profilePath, { force: true });
   }

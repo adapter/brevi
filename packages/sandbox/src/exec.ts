@@ -23,6 +23,14 @@ export interface RunCommandOptions {
   input?: string;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
+  /**
+   * Run the child as its own process-group leader (setpgid). Lets a caller
+   * kill the whole group later, which the Seatbelt provider uses to reap
+   * daemonized descendants it has no PID namespace to contain.
+   */
+  detached?: boolean;
+  /** The child's pid, as soon as it is spawned. Paired with `detached` for group teardown. */
+  onSpawn?: (pid: number) => void;
 }
 
 /**
@@ -46,13 +54,50 @@ export async function runCommand(
     forceKillAfterDelay: FORCE_KILL_DELAY_MS,
     buffer: false,
     reject: false,
+    ...(options.detached ? { detached: true } : {}),
     ...(options.input === undefined ? { stdin: "ignore" } : { input: options.input }),
   };
 
   const subprocess = execa(file, args, execaOptions);
+  const pid = subprocess.pid;
+  if (typeof pid === "number") options.onSpawn?.(pid);
+  // The detached child leads its own process group. When the foreground
+  // process exits, sweep the group: a daemonized descendant is reaped
+  // (Seatbelt has no PID namespace to do this) and its inherited stdout/
+  // stderr pipes close, so `await subprocess` resolves instead of hanging on
+  // a background process that outlived the command. execa's subprocess has no
+  // exit event, so the leader's death is detected by polling.
+  let groupSweep: ReturnType<typeof setInterval> | undefined;
+  if (options.detached && typeof pid === "number") {
+    groupSweep = setInterval(() => {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        // Leader gone: reap the rest of its group.
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          // Group already gone.
+        }
+      }
+    }, 50);
+    groupSweep.unref?.();
+  }
   subprocess.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
   subprocess.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
-  const result = await subprocess;
+  let result;
+  try {
+    result = await subprocess;
+  } finally {
+    if (groupSweep) clearInterval(groupSweep);
+    if (options.detached && typeof pid === "number") {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // Group already gone.
+      }
+    }
+  }
 
   const note = failureNote(result, options.timeoutMs);
   if (note !== undefined) stderr.push(note);
