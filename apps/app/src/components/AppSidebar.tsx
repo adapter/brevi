@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { BreviConfig, HealthResponse, LinearStatus, Run, Ticket, WorkerView } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -38,49 +39,35 @@ import { isActive, isTerminal, STATUS_TONE } from "../lib/status";
 import type { Connection, Page } from "../lib/useOrchestrator";
 import { Plate, StatusDot } from "./Bits";
 import { PROVIDERS } from "./config/ConnectorsSection";
-import { Archive, ChevronRight, Gear, Graph, Play, Plus, Repo, Unarchive } from "./Icons";
+import { Archive, ChevronRight, Gear, Graph, Play, Plus, Pull, Repo, Unarchive } from "./Icons";
 
 /**
  * Today's agent spend across every machine, for the footer's Usage row.
- * Null until the first read lands; a failed read stays null and the row
- * simply shows no figure. The orchestrator caches collections for a minute,
- * so the poll here costs one ccusage read at most.
+ * Null until the first read lands; a failed read keeps the last figure (the
+ * query retains its data) and the row simply shows nothing before then. The
+ * orchestrator caches collections for a minute, so the poll here costs one
+ * ccusage read at most.
  */
 function useTodayCost(): number | null {
-  const [cost, setCost] = useState<number | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      api
-        .usage()
-        .then((response) => {
-          if (cancelled) return;
-          const today = dayKey(new Date());
-          // ccusage keys days in each machine's local time, so a worker past
-          // midnight ahead of the browser reports its running day under
-          // tomorrow's key: take each machine's newest bucket at or after the
-          // browser's today rather than an exact match. A machine whose date
-          // is behind the browser's cannot be told apart from an idle one and
-          // counts zero until its date catches up.
-          setCost(
-            response.machines.reduce((total, machine) => {
-              const current = machine.days.filter((day) => day.date >= today).at(-1);
-              return total + (current?.costUsd ?? 0);
-            }, 0),
-          );
-        })
-        .catch(() => {
-          // The figure is decoration; the Usage page still opens without it.
-        });
-    };
-    load();
-    const id = setInterval(load, 5 * 60_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
-  return cost;
+  const { data } = useQuery({
+    queryKey: ["usage"],
+    queryFn: api.usage,
+    refetchInterval: 5 * 60_000,
+    // The figure is decoration; the Usage page still opens without it.
+    retry: false,
+  });
+  if (!data) return null;
+  const today = dayKey(new Date());
+  // ccusage keys days in each machine's local time, so a worker past
+  // midnight ahead of the browser reports its running day under tomorrow's
+  // key: take each machine's newest bucket at or after the browser's today
+  // rather than an exact match. A machine whose date is behind the browser's
+  // cannot be told apart from an idle one and counts zero until its date
+  // catches up.
+  return data.machines.reduce((total, machine) => {
+    const current = machine.days.filter((day) => day.date >= today).at(-1);
+    return total + (current?.costUsd ?? 0);
+  }, 0);
 }
 
 /** Orchestrator connection states, compact enough for the sidebar header. */
@@ -125,6 +112,7 @@ export function AppSidebar({
   onUnarchiveRun,
   onOpenConfig,
   onOpenUsage,
+  onOpenPulls,
   onAddRepo,
   onOpenWorkers,
   onOpenRepoSettings,
@@ -150,6 +138,8 @@ export function AppSidebar({
   onUnarchiveRun: (runId: string) => void;
   onOpenConfig: () => void;
   onOpenUsage: () => void;
+  /** Opens the Pull Requests page. */
+  onOpenPulls: () => void;
   /** Opens the Repositories config page, where a repo is added and mapped to Linear. */
   onAddRepo: () => void;
   /** Opens the Workers config page, for the queue-only notice below. */
@@ -220,6 +210,27 @@ export function AppSidebar({
       </SidebarHeader>
 
       <SidebarContent>
+        {/* The Pull Requests entry sits above the runs: runs produce PRs, and
+            this is where they get reviewed and merged without GitHub. */}
+        <div className="px-2 pt-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              if (isMobile) setOpenMobile(false);
+              onOpenPulls();
+            }}
+            aria-current={page === "pulls" || page.startsWith("pull:") ? "page" : undefined}
+            className={`touch-target flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] font-medium transition-colors ${
+              page === "pulls" || page.startsWith("pull:")
+                ? "bg-ink-750 text-haze-50"
+                : "text-haze-400 hover:bg-ink-800/70 hover:text-haze-100"
+            }`}
+          >
+            <Pull className="size-3.5" />
+            Pull requests
+          </button>
+        </div>
+
         <SidebarGroup>
           <SidebarGroupLabel className="gap-2 pr-1">
             <DropdownMenu>

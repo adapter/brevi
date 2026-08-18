@@ -12,6 +12,15 @@ import type {
   LinearProject,
   ConfigPatch,
   PrStatusResponse,
+  PullCommentRequest,
+  PullDetailResponse,
+  PullListResponse,
+  PullMergeMethod,
+  PullMergeRequest,
+  PullMergeResponse,
+  PullReplyRequest,
+  PullResolveRequest,
+  PullReviewRequest,
   R2ConnectResponse,
   R2Status,
   Run,
@@ -85,6 +94,45 @@ export const api = {
   followUpRun: (runId: string) =>
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/followup`, { method: "POST" }),
   prStatus: (runId: string) => json<PrStatusResponse>(`/api/runs/${encodeURIComponent(runId)}/pr`),
+  pulls: () => json<PullListResponse>("/api/pulls"),
+  pullDetail: (repoKey: string, number: number) =>
+    json<PullDetailResponse>(`/api/pulls/${encodeURIComponent(repoKey)}/${number}`),
+  mergePull: (repoKey: string, number: number, method: PullMergeMethod) =>
+    json<PullMergeResponse>(`/api/pulls/${encodeURIComponent(repoKey)}/${number}/merge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method } satisfies PullMergeRequest),
+    }),
+  closePull: (repoKey: string, number: number) =>
+    json<{ ok: true }>(`/api/pulls/${encodeURIComponent(repoKey)}/${number}/close`, { method: "POST" }),
+  reopenPull: (repoKey: string, number: number) =>
+    json<{ ok: true }>(`/api/pulls/${encodeURIComponent(repoKey)}/${number}/reopen`, { method: "POST" }),
+  readyPull: (repoKey: string, number: number) =>
+    json<{ ok: true }>(`/api/pulls/${encodeURIComponent(repoKey)}/${number}/ready`, { method: "POST" }),
+  commentPull: (repoKey: string, number: number, body: string) =>
+    json<{ ok: true }>(`/api/pulls/${encodeURIComponent(repoKey)}/${number}/comment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body } satisfies PullCommentRequest),
+    }),
+  reviewPull: (repoKey: string, number: number, event: PullReviewRequest["event"], body: string) =>
+    json<{ ok: true }>(`/api/pulls/${encodeURIComponent(repoKey)}/${number}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event, body } satisfies PullReviewRequest),
+    }),
+  replyPull: (repoKey: string, number: number, commentId: number, body: string) =>
+    json<{ ok: true }>(`/api/pulls/${encodeURIComponent(repoKey)}/${number}/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commentId, body } satisfies PullReplyRequest),
+    }),
+  resolvePullThread: (repoKey: string, number: number, threadId: string, resolved: boolean) =>
+    json<{ ok: true }>(`/api/pulls/${encodeURIComponent(repoKey)}/${number}/resolve-thread`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threadId, resolved } satisfies PullResolveRequest),
+    }),
   updateCredentials: (request: CredentialsUpdateRequest) =>
     json<CredentialsUpdateResponse>("/api/settings/credentials", {
       method: "PUT",

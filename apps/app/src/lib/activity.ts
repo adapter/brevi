@@ -127,8 +127,8 @@ export function diffLines(before: string, after: string): DiffLine[] {
   return out;
 }
 
-/** Parse a unified diff body (Codex patches) into display lines. */
-function parseUnifiedDiff(diff: string): DiffLine[] {
+/** Parse a unified diff body (Codex or GitHub patches) into display lines. */
+export function parseUnifiedDiff(diff: string): DiffLine[] {
   const out: DiffLine[] = [];
   for (const line of diff.split("\n")) {
     if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ")) continue;

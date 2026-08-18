@@ -97,12 +97,23 @@ export type ConfigSection =
   | "orchestrator"
   | "server";
 
-export type Page = "home" | "setup" | "usage" | `config:${ConfigSection}` | `repo:${string}`;
+export type Page =
+  | "home"
+  | "setup"
+  | "usage"
+  | "pulls"
+  /** One pull request: "pull:<repoKey>/<number>". */
+  | `pull:${string}`
+  | `config:${ConfigSection}`
+  | `repo:${string}`;
 
 /** Non-run pages live at fixed paths; anything else is the home/run view. */
 function pageFromPath(pathname: string): Page {
   if (/^\/setup\/?$/.test(pathname)) return "setup";
   if (/^\/usage\/?$/.test(pathname)) return "usage";
+  if (/^\/pulls\/?$/.test(pathname)) return "pulls";
+  const pull = /^\/pulls\/([^/]+)\/(\d+)\/?$/.exec(pathname);
+  if (pull?.[1] && pull[2]) return `pull:${decodeURIComponent(pull[1])}/${pull[2]}`;
   const repo = /^\/repos\/([^/]+)\/?$/.exec(pathname);
   if (repo?.[1]) return `repo:${decodeURIComponent(repo[1])}`;
   const match =
@@ -395,6 +406,26 @@ export function useOrchestrator() {
     [selectRun],
   );
 
+  /** Open the Pull Requests page at its own URL. */
+  const openPulls = useCallback(() => {
+    if (window.location.pathname !== "/pulls") {
+      window.history.pushState(null, "", desktopPath("/pulls"));
+    }
+    dispatch({ t: "page", page: "pulls" });
+    selectRun(null);
+  }, [selectRun]);
+
+  /** Open one pull request's detail page at its own URL. */
+  const openPull = useCallback(
+    (repoKey: string, number: number) => {
+      const path = `/pulls/${encodeURIComponent(repoKey)}/${number}`;
+      if (window.location.pathname !== path) window.history.pushState(null, "", desktopPath(path));
+      dispatch({ t: "page", page: `pull:${repoKey}/${number}` });
+      selectRun(null);
+    },
+    [selectRun],
+  );
+
   /** Open the Usage page at its own URL. */
   const openUsage = useCallback(() => {
     if (window.location.pathname !== "/usage") {
@@ -540,6 +571,8 @@ export function useOrchestrator() {
     openConfig,
     openRepoSettings,
     openUsage,
+    openPulls,
+    openPull,
     runTicket,
     cancelRun,
     retryRun,

@@ -42,6 +42,16 @@ Every management request and dashboard WebSocket requires a random per-launch to
 | `POST` | `/api/connect/r2` | `R2ConnectResponse` |
 | `GET` | `/api/connect/linear/callback` | HTML (OAuth redirect target) |
 | `GET` | `/api/github/repos` | `GithubRepo[]` |
+| `GET` | `/api/pulls` | `PullListResponse`: PRs across every configured repo |
+| `GET` | `/api/pulls/:repo/:number` | `PullDetailResponse` |
+| `POST` | `/api/pulls/:repo/:number/merge` | `PullMergeResponse` |
+| `POST` | `/api/pulls/:repo/:number/close` | `{ ok: true }` |
+| `POST` | `/api/pulls/:repo/:number/reopen` | `{ ok: true }` |
+| `POST` | `/api/pulls/:repo/:number/ready` | `{ ok: true }`: take the PR out of draft |
+| `POST` | `/api/pulls/:repo/:number/comment` | `{ ok: true }` |
+| `POST` | `/api/pulls/:repo/:number/review` | `{ ok: true }` |
+| `POST` | `/api/pulls/:repo/:number/reply` | `{ ok: true }` |
+| `POST` | `/api/pulls/:repo/:number/resolve-thread` | `{ ok: true }` |
 | `GET` | `/api/linear/projects` | `LinearProject[]` |
 | `PUT` | `/api/settings` | `SettingsUpdateResponse` |
 | `GET` | `/ws` | WebSocket upgrade |
@@ -312,6 +322,23 @@ Only the fields you send are touched. Each is validated against its provider bef
 `GET /api/github/repos` lists repos visible to the connected token, most recently pushed first, as `{ fullName, defaultBranch, private, description, pushedAt }`. It returns `400` when GitHub isn't connected.
 
 Repo mappings themselves are edited through `PUT /api/settings` (below), like every other config field.
+
+### Pull requests
+
+The Pull Requests page's API. `:repo` is the URL-encoded repo key from `config.repos`; every route returns `400` when GitHub isn't connected, and GitHub API failures map to `404` (unknown PR), `409` (state conflicts such as an unmergeable PR), or `400`.
+
+`GET /api/pulls` lists pull requests across every configured repository, newest activity first, as `{ pulls: PullSummary[], errors }`. Each `PullSummary` is `{ repo, remote, number, url, title, state, author, baseBranch, headBranch, createdAt, updatedAt, mergedAt? }` with `state` one of `open | draft | merged | closed`. A repo whose lookup fails lands in `errors` as `{ repo, remote, message }` instead of failing the list.
+
+`GET /api/pulls/:repo/:number` gathers everything the detail view renders: the summary plus `body`, `draft`, `headSha`, `mergeableState?`, `additions`, `deletions`, `changedFiles`, conversation (`comments`, `reviews`, review `threads` with resolution state and diff hunks), `files` (with GitHub's unified `patch` when available), `commits`, and `checks` (check runs and commit statuses, `checksLookupFailed` when that lookup was incomplete).
+
+The write routes take JSON bodies:
+
+- `POST .../merge` `{ method: "merge" | "squash" | "rebase" }` → `{ merged: true, message }`; when GitHub declines the merge, the route answers with an error status and GitHub's message instead of `merged: false`
+- `POST .../close`, `POST .../reopen`, `POST .../ready` (no body)
+- `POST .../comment` `{ body }`: a plain conversation comment
+- `POST .../review` `{ event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT", body }`
+- `POST .../reply` `{ commentId, body }`: reply inside a review thread (`commentId` is `PullComment.id` of a thread comment)
+- `POST .../resolve-thread` `{ threadId, resolved }` (`threadId` is `PullThread.id`)
 
 ### Memories
 
