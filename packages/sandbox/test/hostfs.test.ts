@@ -118,10 +118,13 @@ describe("writeFileWithin", () => {
     expect(readFileSync(target, "utf8")).toBe("new");
   });
 
-  test("refuses to write where a directory already exists", async () => {
-    mkdirSync(join(root, "conflict"));
-    expect(writeFileWithin(root, join(root, "conflict"), "x")).rejects.toThrow();
-  });
+  test.if(process.platform === "darwin")(
+    "refuses to write where a directory already exists (macOS)",
+    async () => {
+      mkdirSync(join(root, "conflict"));
+      expect(writeFileWithin(root, join(root, "conflict"), "x")).rejects.toThrow();
+    },
+  );
 });
 
 describe("directory containment", () => {

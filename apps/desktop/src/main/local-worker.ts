@@ -129,6 +129,9 @@ export function startLocalWorker(
         enrollment,
         name: "This machine",
         signal: abort.signal,
+        // Shares ~/.brevi with any standalone worker the operator also runs,
+        // so it must never sweep workspaces it cannot prove it owns.
+        skipWorkspaceSweep: true,
       });
       if (!stopping) log("daemon stopped on its own");
     } catch (error) {

@@ -167,19 +167,29 @@ class SeatbeltSandbox implements Sandbox {
       resolveHostPath(this.workspacePath, options.cwd),
       env,
     );
-    // Each exec leads its own process group; a background process the agent
-    // leaves running (a dev server for demo capture, say) stays up across
-    // execs, exactly as under bwrap, and is reaped when the sandbox is
-    // released or destroyed. The group is tracked, never killed per-exec.
-    return runCommand(launch.file, launch.args, {
-      env: launch.env,
-      timeoutMs: options.timeoutMs,
-      signal: options.signal,
-      onStdout: options.onStdout,
-      onStderr: options.onStderr,
-      detached: true,
-      onSpawn: (pid) => this.#groups.add(pid),
-    });
+    // Each exec leads its own process group. runCommand reaps that group when
+    // the foreground command exits (killing daemonized descendants and
+    // releasing the inherited pipes), so the tracked entry is removed here as
+    // soon as exec returns. #groups therefore holds only groups of execs
+    // still running, which is exactly what release()/destroy() must reap; a
+    // completed pid is never left behind to collide with a reused group id.
+    let pid: number | undefined;
+    try {
+      return await runCommand(launch.file, launch.args, {
+        env: launch.env,
+        timeoutMs: options.timeoutMs,
+        signal: options.signal,
+        onStdout: options.onStdout,
+        onStderr: options.onStderr,
+        detached: true,
+        onSpawn: (spawned) => {
+          pid = spawned;
+          this.#groups.add(spawned);
+        },
+      });
+    } finally {
+      if (pid !== undefined) this.#groups.delete(pid);
+    }
   }
 
   // File and directory ops below run on the host, outside the policy,

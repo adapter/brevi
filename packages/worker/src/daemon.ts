@@ -84,6 +84,15 @@ export interface WorkerOptions {
    * without sending itself a process signal.
    */
   signal?: AbortSignal;
+  /**
+   * Skip the boot-time sweep of WORKSPACES_DIR. The sweep deletes every
+   * directory this process has no record of, which is safe for a machine's
+   * sole worker but would delete a peer worker's active checkout when two
+   * workers share ~/.brevi (the in-process desktop worker beside a standalone
+   * `brevi worker`). The in-process worker sets this and relies on the
+   * orchestrator's own retained-sandbox reaping instead.
+   */
+  skipWorkspaceSweep?: boolean;
 }
 
 /** How often the supervisor watchdog (see WorkerOptions.supervisorPid) polls whether the process that spawned this worker is still alive. */
@@ -319,7 +328,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   // boot is stale scratch, a crash, or a sandbox this worker can no longer
   // resume into. Kept simple on purpose; a later fleet iteration can persist
   // enough state to survive a restart with retention intact.
-  await sweepStaleWorkspaces(knownRuns);
+  if (!options.skipWorkspaceSweep) await sweepStaleWorkspaces(knownRuns);
 
   let connection: WorkerConnection;
   let attachSessions: AttachSessions;

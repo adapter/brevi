@@ -172,6 +172,7 @@ export function createAttachSessions(deps: AttachSessionsDeps): AttachSessions {
       });
       session.pty.onData((data) => send({ type: "attach-data", attachId, data }));
       session.pty.onExit(({ exitCode }) => {
+        reapPtyGroup(session.pty?.pid);
         session.pty = undefined;
         sessions.delete(attachId);
         send({ type: "attach-exit", attachId, code: exitCode });
@@ -192,11 +193,29 @@ export function createAttachSessions(deps: AttachSessionsDeps): AttachSessions {
     if (cols > 0 && rows > 0) sessions.get(attachId)?.pty?.resize(cols, rows);
   }
 
+  /**
+   * Kill a PTY's whole process group, not just its leader: node-pty's child is
+   * a session leader, so a resumed agent that daemonized a child leaves it in
+   * this group. bwrap's PID namespace reaps it anyway; Seatbelt has none, so
+   * this group kill is what stops a lingering profiled process on macOS. A
+   * grandchild that re-setsids escapes, the same residual gap exec() has.
+   */
+  function reapPtyGroup(pid: number | undefined): void {
+    if (pid === undefined) return;
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Group already gone.
+    }
+  }
+
   function close(attachId: string): void {
     const session = sessions.get(attachId);
     if (!session) return;
     sessions.delete(attachId);
+    const pid = session.pty?.pid;
     session.pty?.kill();
+    reapPtyGroup(pid);
     session.pty = undefined;
     releaseSession(session);
   }
