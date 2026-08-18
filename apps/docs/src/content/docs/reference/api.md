@@ -333,7 +333,7 @@ The Pull Requests page's API. `:repo` is the URL-encoded repo key from `config.r
 
 The write routes take JSON bodies:
 
-- `POST .../merge` `{ method: "merge" | "squash" | "rebase" }` → `{ merged, message }`
+- `POST .../merge` `{ method: "merge" | "squash" | "rebase" }` → `{ merged: true, message }`; when GitHub declines the merge, the route answers with an error status and GitHub's message instead of `merged: false`
 - `POST .../close`, `POST .../reopen`, `POST .../ready` (no body)
 - `POST .../comment` `{ body }`: a plain conversation comment
 - `POST .../review` `{ event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT", body }`

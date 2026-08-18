@@ -20,6 +20,20 @@ const SCHEMA = {
 };
 
 /**
+ * Relative URLs in GitHub-sourced markdown are relative to the page they came
+ * from, not to brevi://app; resolve them against that page so links leave the
+ * app and images load.
+ */
+function resolveUrl(url: string | undefined, baseUrl: string): string | undefined {
+  if (!url) return url;
+  try {
+    return new URL(url, baseUrl).href;
+  } catch {
+    return url;
+  }
+}
+
+/**
  * Agent-authored markdown (run summaries, research) and GitHub-sourced
  * markdown (PR bodies, comments), rendered in the house style. Styling rides
  * descendant selectors so the markdown stays unstyled semantic HTML. Raw
@@ -28,9 +42,18 @@ const SCHEMA = {
  *
  * `github` additionally treats single newlines as hard breaks, matching how
  * GitHub renders issue and PR prose (but not how ordinary markdown wraps,
- * so agent summaries leave it off).
+ * so agent summaries leave it off). `baseUrl` is the GitHub page the
+ * markdown came from, used to resolve relative links and images.
  */
-export function Markdown({ children, github = false }: { children: string; github?: boolean }) {
+export function Markdown({
+  children,
+  github = false,
+  baseUrl,
+}: {
+  children: string;
+  github?: boolean;
+  baseUrl?: string;
+}) {
   return (
     <div
       className={[
@@ -63,6 +86,20 @@ export function Markdown({ children, github = false }: { children: string; githu
       <ReactMarkdown
         remarkPlugins={github ? [remarkGfm, remarkBreaks] : [remarkGfm]}
         rehypePlugins={[rehypeRaw, [rehypeSanitize, SCHEMA]]}
+        components={
+          baseUrl === undefined
+            ? undefined
+            : {
+                // Component overrides see raw-HTML elements too, which the
+                // urlTransform hook does not.
+                a: ({ node: _node, href, ...props }) => (
+                  <a {...props} href={resolveUrl(href, baseUrl)} />
+                ),
+                img: ({ node: _node, src, ...props }) => (
+                  <img {...props} src={resolveUrl(src, baseUrl)} />
+                ),
+              }
+        }
       >
         {children}
       </ReactMarkdown>

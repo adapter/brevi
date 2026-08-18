@@ -410,7 +410,7 @@ function ConversationTab({
         </div>
         <div className="p-3.5">
           {detail.body.trim() ? (
-            <Markdown github>{detail.body}</Markdown>
+            <Markdown github baseUrl={pull.url}>{detail.body}</Markdown>
           ) : (
             <p className="text-[12.5px] text-haze-600 italic">No description provided.</p>
           )}
@@ -419,16 +419,19 @@ function ConversationTab({
 
       {timeline.map((item, index) => {
         if (item.kind === "comment") {
-          return <CommentCard key={`c-${item.comment.id}`} comment={item.comment} now={now} />;
+          return (
+            <CommentCard key={`c-${item.comment.id}`} comment={item.comment} now={now} baseUrl={pull.url} />
+          );
         }
         if (item.kind === "review") {
-          return <ReviewCard key={`r-${index}`} review={item.review} now={now} />;
+          return <ReviewCard key={`r-${index}`} review={item.review} now={now} baseUrl={pull.url} />;
         }
         return (
           <ThreadCard
             key={item.thread.id}
             repo={detail.pull.repo}
             number={detail.pull.number}
+            baseUrl={pull.url}
             thread={item.thread}
             now={now}
             busy={busy}
@@ -442,7 +445,15 @@ function ConversationTab({
   );
 }
 
-function CommentCard({ comment, now }: { comment: PullComment; now: number }) {
+function CommentCard({
+  comment,
+  now,
+  baseUrl,
+}: {
+  comment: PullComment;
+  now: number;
+  baseUrl: string;
+}) {
   return (
     <Card className="block gap-0 overflow-hidden py-0">
       <div className="flex h-9 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
@@ -452,7 +463,7 @@ function CommentCard({ comment, now }: { comment: PullComment; now: number }) {
         </span>
       </div>
       <div className="p-3.5">
-        <Markdown github>{comment.body}</Markdown>
+        <Markdown github baseUrl={baseUrl}>{comment.body}</Markdown>
       </div>
     </Card>
   );
@@ -470,7 +481,15 @@ const REVIEW_TONE: Record<string, { label: string; className: string; icon?: "ch
   DISMISSED: { label: "Dismissed", className: "border-ink-600 bg-ink-800/60 text-haze-500" },
 };
 
-function ReviewCard({ review, now }: { review: PullReview; now: number }) {
+function ReviewCard({
+  review,
+  now,
+  baseUrl,
+}: {
+  review: PullReview;
+  now: number;
+  baseUrl: string;
+}) {
   const tone = REVIEW_TONE[review.state] ?? {
     label: review.state.toLowerCase().replace(/_/g, " "),
     className: "border-ink-600 bg-ink-800/60 text-haze-400",
@@ -491,7 +510,7 @@ function ReviewCard({ review, now }: { review: PullReview; now: number }) {
       </div>
       {body && (
         <div className="p-3.5">
-          <Markdown github>{body}</Markdown>
+          <Markdown github baseUrl={baseUrl}>{body}</Markdown>
         </div>
       )}
     </Card>
@@ -504,6 +523,7 @@ const HUNK_TAIL_LINES = 8;
 function ThreadCard({
   repo,
   number,
+  baseUrl,
   thread,
   now,
   busy,
@@ -511,6 +531,7 @@ function ThreadCard({
 }: {
   repo: string;
   number: number;
+  baseUrl: string;
   thread: PullThread;
   now: number;
   busy: string | null;
@@ -574,7 +595,7 @@ function ThreadCard({
               </span>
             </p>
             <div className="mt-1.5">
-              <Markdown github>{comment.body}</Markdown>
+              <Markdown github baseUrl={baseUrl}>{comment.body}</Markdown>
             </div>
           </li>
         ))}

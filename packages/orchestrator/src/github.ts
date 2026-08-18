@@ -831,7 +831,12 @@ export async function mergePullRequest(options: {
     pull_number: options.number,
     merge_method: options.method,
   });
-  return { merged: result.data.merged, message: result.data.message };
+  // GitHub can answer 200 with merged: false (e.g. the PR became unmergeable
+  // after the detail loaded); surface its explanation instead of success.
+  if (!result.data.merged) {
+    throw new Error(result.data.message || "GitHub did not merge the pull request.");
+  }
+  return { merged: true, message: result.data.message };
 }
 
 /** Close or reopen a pull request. */
