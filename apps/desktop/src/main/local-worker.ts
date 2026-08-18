@@ -1,3 +1,6 @@
+import { execFile } from "node:child_process";
+import { homedir } from "node:os";
+import { delimiter, join } from "node:path";
 import { collectBwrapProblems, collectSeatbeltProblems } from "@brevi/sandbox";
 import type { HostExecution } from "@brevi/shared";
 import { runWorker } from "@brevi/worker";
@@ -11,8 +14,47 @@ import { HEALTHY_UPTIME_MS, restartDelay } from "./backoff.js";
  * listener, with a host-minted credential and no pairing ceremony.
  */
 
+/**
+ * A GUI-launched app inherits launchd's minimal PATH, which hides agent CLIs
+ * installed via Homebrew, npm prefixes, or version managers. Resolve the
+ * user's login-shell PATH once and merge it (plus the usual install
+ * locations) into this process before the worker probes for agents.
+ */
+let pathEnsured: Promise<void> | undefined;
+export function ensureUsablePath(): Promise<void> {
+  pathEnsured ??= (async () => {
+    const shellPath = await loginShellPath();
+    const fallbacks = [
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      join(homedir(), ".local", "bin"),
+      join(homedir(), ".bun", "bin"),
+    ];
+    const parts = [
+      ...(shellPath ?? "").split(delimiter),
+      ...(process.env.PATH ?? "").split(delimiter),
+      ...fallbacks,
+    ].filter(Boolean);
+    process.env.PATH = [...new Set(parts)].join(delimiter);
+  })();
+  return pathEnsured;
+}
+
+function loginShellPath(): Promise<string | undefined> {
+  const shell = process.env.SHELL || "/bin/zsh";
+  return new Promise((resolve) => {
+    execFile(
+      shell,
+      ["-l", "-c", 'printf "%s" "$PATH"'],
+      { timeout: 8_000 },
+      (error, stdout) => resolve(error ? undefined : stdout.trim() || undefined),
+    );
+  });
+}
+
 /** What this machine can execute runs through, reported on /api/health. */
 export async function resolveHostExecution(): Promise<HostExecution> {
+  await ensureUsablePath();
   if (process.platform === "linux") {
     return (await collectBwrapProblems()).length === 0
       ? { kind: "local-worker" }

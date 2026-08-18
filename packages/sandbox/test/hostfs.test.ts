@@ -2,7 +2,14 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { ensureDirWithin, readFileWithin, resolveDirWithin, writeFileWithin } from "../src/hostfs.js";
+import {
+  copyDirIntoWithin,
+  copyDirOutOfWithin,
+  ensureDirWithin,
+  readFileWithin,
+  resolveDirWithin,
+  writeFileWithin,
+} from "../src/hostfs.js";
 
 let outside: string;
 let root: string;
@@ -131,5 +138,46 @@ describe("directory containment", () => {
   test("ensureDirWithin creates and accepts a directory under the root", async () => {
     const dir = await ensureDirWithin(root, join(root, "workspace", "artifacts"));
     expect(dir).toBe(join(root, "workspace", "artifacts"));
+  });
+});
+
+describe.if(process.platform === "darwin")("directory copies on macOS", () => {
+  test("round-trips a tree, copying symlink entries verbatim", async () => {
+    const src = join(outside, "src");
+    mkdirSync(join(src, "nested"), { recursive: true });
+    writeFileSync(join(src, "a.txt"), "alpha");
+    writeFileSync(join(src, "nested", "b.txt"), "beta");
+    symlinkSync("/etc/hosts", join(src, "link"));
+
+    await copyDirIntoWithin(root, src, join(root, "workspace", "in"));
+    expect(readFileSync(join(root, "workspace", "in", "a.txt"), "utf8")).toBe("alpha");
+    expect(readFileSync(join(root, "workspace", "in", "nested", "b.txt"), "utf8")).toBe("beta");
+    expect(lstatSync(join(root, "workspace", "in", "link")).isSymbolicLink()).toBe(true);
+
+    const out = join(outside, "out");
+    await copyDirOutOfWithin(root, join(root, "workspace", "in"), out);
+    expect(readFileSync(join(out, "nested", "b.txt"), "utf8")).toBe("beta");
+    expect(lstatSync(join(out, "link")).isSymbolicLink()).toBe(true);
+  });
+
+  test("push refuses a symlinked destination component", async () => {
+    const src = join(outside, "src2");
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "a.txt"), "alpha");
+    const elsewhere = join(outside, "victim2");
+    mkdirSync(elsewhere);
+    symlinkSync(elsewhere, join(root, "escape"));
+    expect(copyDirIntoWithin(root, src, join(root, "escape", "in"))).rejects.toThrow();
+    expect(lstatSync(join(elsewhere, "in"), { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  test("pull refuses to read file contents through a symlink", async () => {
+    const dir = join(root, "workspace", "leak");
+    mkdirSync(dir, { recursive: true });
+    symlinkSync("/etc/hosts", join(dir, "hosts"));
+    const out = join(outside, "out2");
+    await copyDirOutOfWithin(root, dir, out);
+    // Copied as a symlink, not as the contents of /etc/hosts.
+    expect(lstatSync(join(out, "hosts")).isSymbolicLink()).toBe(true);
   });
 });

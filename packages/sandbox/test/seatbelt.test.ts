@@ -18,6 +18,8 @@ describe("seatbeltPolicy", () => {
     expect(policy).toContain('(allow file-read* (subpath "/Users/op/.brevi/workspaces/run-1"))');
     expect(policy).toContain('(allow file-write* (subpath "/Users/op/.brevi/workspaces/run-1"))');
     expect(policy).toContain('/Users/op/.ssh');
+    expect(policy).toContain('/Users/op/.claude');
+    expect(policy).toContain('/Users/op/.codex');
     expect(policy).toContain('/Users/op/Library/Keychains');
     // The deny rules land after the broad read allow, so they win in SBPL.
     expect(policy.indexOf("(allow file-read*)")).toBeLessThan(policy.indexOf('(deny file-read* (subpath'));

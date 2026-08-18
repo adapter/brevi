@@ -1,6 +1,7 @@
-import { constants } from "node:fs";
+import { constants, createWriteStream } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
-import { lstat, mkdir, open, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, readlink, realpath, rm, symlink } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 
 /**
@@ -38,6 +39,113 @@ async function darwinOpenWithin(
 ): Promise<FileHandle> {
   const real = await realpath(rootDir);
   return open(join(real, ...parts), flags | O_NOFOLLOW_ANY, mode);
+}
+
+/** macOS-only open(2) flag: open the symlink itself rather than its target. */
+const O_SYMLINK = 0x200000;
+
+/**
+ * macOS directory copy out of the sandbox (e.g. pulling the workspace after a
+ * run). fs.cp would re-walk pathnames a still-running sandbox process could
+ * swap for symlinks mid-copy; instead every file is opened with
+ * O_NOFOLLOW_ANY (a racing swap turns into ELOOP, never a host read) and
+ * symlink entries are copied verbatim as symlinks, never followed.
+ */
+export async function copyDirOutOfWithin(rootDir: string, srcDir: string, destDir: string): Promise<void> {
+  const parts = relativeParts(rootDir, srcDir, "copy");
+  const real = await realpath(rootDir);
+  await copyOut(real, parts, destDir);
+}
+
+async function copyOut(rootReal: string, parts: string[], destDir: string): Promise<void> {
+  const srcPath = join(rootReal, ...parts);
+  const dirCheck = await open(srcPath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY);
+  await dirCheck.close();
+  await mkdir(destDir, { recursive: true });
+  for (const entry of await readdir(srcPath, { withFileTypes: true })) {
+    const childParts = [...parts, entry.name];
+    const childSrc = join(rootReal, ...childParts);
+    const childDest = join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      await copyOut(rootReal, childParts, childDest);
+    } else if (entry.isSymbolicLink()) {
+      // The link's content is copied as a string; nothing ever follows it.
+      const target = await readlink(childSrc);
+      await rm(childDest, { recursive: true, force: true });
+      await symlink(target, childDest);
+    } else if (entry.isFile()) {
+      const src = await open(childSrc, O_RDONLY | O_NOFOLLOW_ANY);
+      try {
+        const stats = await src.stat();
+        if (!stats.isFile()) continue;
+        await rm(childDest, { recursive: true, force: true });
+        await pipeline(src.createReadStream(), createWriteStream(childDest, { mode: stats.mode & 0o777 }));
+      } finally {
+        await src.close();
+      }
+    }
+    // Sockets and fifos are not copied.
+  }
+}
+
+/**
+ * macOS directory copy into the sandbox (checkout push, follow-up .git
+ * refresh). Destination files are created through O_NOFOLLOW_ANY opens and
+ * every directory level is verified after mkdir, so a swapped component
+ * fails the copy instead of redirecting it. A replaced symlink entry is
+ * re-verified with O_SYMLINK | O_NOFOLLOW_ANY after creation and removed if
+ * the verification fails.
+ */
+export async function copyDirIntoWithin(rootDir: string, srcDir: string, destDir: string): Promise<void> {
+  const parts = relativeParts(rootDir, destDir, "create");
+  const real = await realpath(rootDir);
+  await darwinDescendDir(rootDir, parts, true);
+  await copyInto(real, parts, srcDir);
+}
+
+async function copyInto(rootReal: string, parts: string[], srcDir: string): Promise<void> {
+  for (const entry of await readdir(srcDir, { withFileTypes: true })) {
+    const childParts = [...parts, entry.name];
+    const destPath = join(rootReal, ...childParts);
+    const childSrc = join(srcDir, entry.name);
+    if (entry.isDirectory()) {
+      if ((await lstatType(destPath)) === "file") await rm(destPath, { force: true });
+      try {
+        await mkdir(destPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      const check = await open(destPath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY);
+      await check.close();
+      await copyInto(rootReal, childParts, childSrc);
+    } else if (entry.isSymbolicLink()) {
+      const target = await readlink(childSrc);
+      if ((await lstatType(destPath)) !== "missing") await rm(destPath, { recursive: true, force: true });
+      await symlink(target, destPath);
+      try {
+        const check = await open(destPath, O_RDONLY | O_SYMLINK | O_NOFOLLOW_ANY);
+        await check.close();
+      } catch (error) {
+        await rm(destPath, { force: true });
+        throw error;
+      }
+    } else if (entry.isFile()) {
+      const stats = await lstat(childSrc);
+      const existing = await lstatType(destPath);
+      if (existing === "other") await rm(destPath, { recursive: true, force: true });
+      const src = await open(childSrc, O_RDONLY);
+      try {
+        const dest = await open(destPath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, stats.mode & 0o777);
+        try {
+          await pipeline(src.createReadStream(), dest.createWriteStream());
+        } finally {
+          await dest.close();
+        }
+      } finally {
+        await src.close();
+      }
+    }
+  }
 }
 
 /** macOS descent: create/verify each directory level, refusing symlinks at every step. */

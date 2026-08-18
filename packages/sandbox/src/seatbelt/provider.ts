@@ -1,9 +1,9 @@
-import { cp, mkdir, mkdtemp, rm, stat, writeFile as writeHostFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile as writeHostFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BREVI_HOME, WORKSPACES_DIR } from "@brevi/shared";
 import { runCommand } from "../exec.js";
-import { ensureDirWithin, readFileWithin, resolveDirWithin, writeFileWithin } from "../hostfs.js";
+import { copyDirIntoWithin, copyDirOutOfWithin, readFileWithin, writeFileWithin } from "../hostfs.js";
 import { resolveHostPath } from "../paths.js";
 import type {
   CreateSandboxOptions,
@@ -165,14 +165,11 @@ class SeatbeltSandbox implements Sandbox {
   // write to host files (see hostfs.ts).
 
   async pushDirectory(localPath: string, destPath: string): Promise<void> {
-    const dest = await ensureDirWithin(this.#rootDir, resolveHostPath(this.workspacePath, destPath));
-    await cp(localPath, dest, { recursive: true });
+    await copyDirIntoWithin(this.#rootDir, localPath, resolveHostPath(this.workspacePath, destPath));
   }
 
   async pullDirectory(srcPath: string, localPath: string): Promise<void> {
-    const src = await resolveDirWithin(this.#rootDir, resolveHostPath(this.workspacePath, srcPath));
-    await mkdir(localPath, { recursive: true });
-    await cp(src, localPath, { recursive: true });
+    await copyDirOutOfWithin(this.#rootDir, resolveHostPath(this.workspacePath, srcPath), localPath);
   }
 
   async writeFile(path: string, contents: string): Promise<void> {

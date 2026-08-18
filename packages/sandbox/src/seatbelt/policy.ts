@@ -14,6 +14,12 @@ import { BREVI_HOME } from "@brevi/shared";
 
 /** Home-relative trees an agent must never read: keys, tokens, cookies. */
 const SENSITIVE_HOME_SUBPATHS = [
+  // The operator's own agent CLI logins; runs get per-run copies under the
+  // sandbox root, never these.
+  ".claude",
+  ".claude.json",
+  ".codex",
+  ".grok",
   ".ssh",
   ".aws",
   ".gnupg",
