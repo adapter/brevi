@@ -62,6 +62,10 @@ export function RepoSettingsPage({
         </p>
       ) : (
         <RepoSettingsBody
+          // Remount on repo switch: the drafts inside hold entries keyed by
+          // the previous repo's paths, and a reused instance would carry
+          // repo A's unsaved edits onto repo B's page and save them there.
+          key={repoKey}
           config={config}
           linearStatus={linearStatus}
           repoKey={repoKey}

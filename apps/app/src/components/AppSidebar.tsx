@@ -56,12 +56,17 @@ function useTodayCost(): number | null {
         .then((response) => {
           if (cancelled) return;
           const today = dayKey(new Date());
+          // ccusage keys days in each machine's local time, so a worker past
+          // midnight ahead of the browser reports its running day under
+          // tomorrow's key: take each machine's newest bucket at or after the
+          // browser's today rather than an exact match. A machine whose date
+          // is behind the browser's cannot be told apart from an idle one and
+          // counts zero until its date catches up.
           setCost(
-            response.machines.reduce(
-              (total, machine) =>
-                total + (machine.days.find((day) => day.date === today)?.costUsd ?? 0),
-              0,
-            ),
+            response.machines.reduce((total, machine) => {
+              const current = machine.days.filter((day) => day.date >= today).at(-1);
+              return total + (current?.costUsd ?? 0);
+            }, 0),
           );
         })
         .catch(() => {

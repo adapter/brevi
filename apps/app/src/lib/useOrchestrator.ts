@@ -106,12 +106,14 @@ function pageFromPath(pathname: string): Page {
   const repo = /^\/repos\/([^/]+)\/?$/.exec(pathname);
   if (repo?.[1]) return `repo:${decodeURIComponent(repo[1])}`;
   const match =
-    /^\/config(?:\/(connectors|repositories|agent|fleet|workers|orchestrator|server))?\/?$/.exec(
+    /^\/config(?:\/(connectors|repositories|agent|fleet|workers|memory|orchestrator|server))?\/?$/.exec(
       pathname,
     );
   if (!match) return "home";
-  // "workers" is the section's pre-rename URL; old bookmarks land on Fleet.
-  const segment = match[1] === "workers" ? "fleet" : match[1];
+  // Legacy URLs: "workers" is Fleet's pre-rename path, and "memory" was its
+  // own section before its controls moved to Agent; old bookmarks still land.
+  const segment =
+    match[1] === "workers" ? "fleet" : match[1] === "memory" ? "agent" : match[1];
   const section = (segment ?? "connectors") as ConfigSection;
   return `config:${section}`;
 }
