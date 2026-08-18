@@ -286,7 +286,7 @@ function ProjectSection({
         <span className="ml-auto font-mono text-[10px] leading-none text-haze-700">{count}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <ul className="flex flex-col gap-px pb-1">
+        <ul className="flex flex-col gap-1 pt-0.5 pr-0.5 pb-1.5 pl-5">
           {project.active.map((run) => (
             <li key={run.id}>
               <RunRow
@@ -339,8 +339,9 @@ function ProjectSection({
 }
 
 /**
- * One run as a compact row: status dot, title, and time. Everything else
- * (chips, costs, actions) lives on the run's own page; the row is a plain
+ * One run as a three-line card: the ticket id line, then the title given two
+ * reserved lines so every card sits at the same height. Everything else
+ * (chips, costs, actions) lives on the run's own page; the card is a plain
  * link so copy link and middle-click behave normally.
  */
 function RunRow({
@@ -368,15 +369,28 @@ function RunRow({
       }}
       aria-current={selected ? "page" : undefined}
       title={`${run.ticket.identifier}: ${run.ticket.title} (${STATUS_TONE[run.status].label})`}
-      className={`flex items-center gap-2 rounded-lg py-1.5 pr-2 pl-[26px] transition-colors ${
+      className={`block rounded-lg px-2.5 py-2 ring-1 transition-colors ${
         selected
-          ? "bg-ink-750 text-haze-50"
-          : "text-haze-300 hover:bg-ink-800/70 hover:text-haze-100"
+          ? "bg-ink-750 ring-ink-500"
+          : "bg-card ring-foreground/10 hover:bg-ink-800"
       }`}
     >
-      <StatusDot status={run.status} size={6} />
-      <span className="min-w-0 flex-1 truncate text-[12.5px]">{run.ticket.title}</span>
-      <span className="shrink-0 font-mono text-[10px] tabular-nums text-haze-600">{time}</span>
+      <span className="flex h-6 items-center gap-1.5">
+        <StatusDot status={run.status} size={6} />
+        <span className="font-mono text-[10.5px] leading-none text-haze-400">
+          {run.ticket.identifier}
+        </span>
+        <span className="ml-auto font-mono text-[10px] leading-none tabular-nums text-haze-600">
+          {time}
+        </span>
+      </span>
+      <span
+        className={`mt-1 line-clamp-2 min-h-[34px] text-[12.5px] leading-[17px] ${
+          selected ? "text-haze-50" : "text-haze-200"
+        }`}
+      >
+        {run.ticket.title}
+      </span>
     </a>
   );
 }
@@ -400,40 +414,53 @@ function TicketRow({
 }) {
   return (
     <div
-      className="group/ticket flex items-center gap-2 rounded-lg py-1 pr-1 pl-[26px] text-haze-300 transition-colors hover:bg-ink-800/70"
+      className="group/ticket block rounded-lg bg-card px-2.5 py-2 ring-1 ring-foreground/10 transition-colors hover:bg-ink-800"
       title={`${ticket.identifier}: ${ticket.title}`}
     >
-      {active ? (
-        <StatusDot status={active.status} size={6} />
-      ) : (
-        <span
-          className="inline-block size-[6px] shrink-0 rounded-full border border-haze-600"
-          aria-hidden="true"
-        />
-      )}
+      <span className="flex h-6 items-center gap-1.5">
+        {active ? (
+          <StatusDot status={active.status} size={6} />
+        ) : (
+          <span
+            className="inline-block size-[6px] shrink-0 rounded-full border border-haze-600"
+            aria-hidden="true"
+          />
+        )}
+        <span className="font-mono text-[10.5px] leading-none text-haze-400">
+          {ticket.identifier}
+        </span>
+        <span className="ml-auto">
+          {active ? (
+            <Button
+              variant="ghost"
+              size="plate"
+              onClick={() => onOpenRun(active.id)}
+              className={`h-6 py-0 ${STATUS_TONE[active.status].fg}`}
+            >
+              {STATUS_TONE[active.status].label}
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="plate"
+              onClick={onRun}
+              disabled={busy}
+              className="h-6 py-0"
+            >
+              <Play className="size-2.5" />
+              {busy ? "Queueing" : "Run"}
+            </Button>
+          )}
+        </span>
+      </span>
       <a
         href={ticket.url}
         target="_blank"
         rel="noreferrer"
-        className="min-w-0 flex-1 truncate text-[12.5px] hover:text-haze-100"
+        className="mt-1 line-clamp-2 min-h-[34px] text-[12.5px] leading-[17px] text-haze-200 hover:text-haze-50"
       >
         {ticket.title}
       </a>
-      {active ? (
-        <Button
-          variant="ghost"
-          size="plate"
-          onClick={() => onOpenRun(active.id)}
-          className={STATUS_TONE[active.status].fg}
-        >
-          {STATUS_TONE[active.status].label}
-        </Button>
-      ) : (
-        <Button variant="outline" size="plate" onClick={onRun} disabled={busy}>
-          <Play className="size-2.5" />
-          {busy ? "Queueing" : "Run"}
-        </Button>
-      )}
     </div>
   );
 }
