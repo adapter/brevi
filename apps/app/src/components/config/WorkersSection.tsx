@@ -3,7 +3,7 @@ import type {
   FleetResponse,
   HealthResponse,
   HostExecution,
-  PairingTokenResponse,
+  WorkerProvisionRequest,
   WorkerConnection,
   WorkerView,
 } from "@brevi/shared";
@@ -13,12 +13,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Command } from "../Bits";
 import { api } from "../../lib/api";
 import { relative } from "../../lib/format";
 import { useSettingsDraft, type SettingsDraft } from "../../lib/settings";
 import { useNow } from "../../lib/useNow";
-import { Check, Copy, Edit, Warn } from "../Icons";
+import { Edit, Warn } from "../Icons";
 import { FieldRow, NumberField, SectionIntro, SettingsCard } from "./Fields";
 
 const ALL_INTERFACES = "0.0.0.0";
@@ -44,8 +43,7 @@ function emptyFleetCopy(hostExecution: HostExecution | undefined) {
   if (hostExecution.reason === "bwrap-unavailable") {
     return (
       <>
-        No workers enrolled yet, and this machine can&apos;t run agents itself. Install bubblewrap (
-        <code className="font-mono text-[11px]">brevi setup</code>) or use{" "}
+        No workers enrolled yet, and this machine can&apos;t run agents itself. Use{" "}
         <span className="text-haze-400">Add a worker</span> above to enroll a Linux machine.
       </>
     );
@@ -105,10 +103,15 @@ export function WorkersSection({
   const fleet = useSettingsDraft(config, onConfig);
   const liveness = useSettingsDraft(config, onConfig);
 
-  const [pairing, setPairing] = useState<PairingTokenResponse | null>(null);
-  const [pairBusy, setPairBusy] = useState(false);
-  const [pairError, setPairError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [provision, setProvision] = useState<WorkerProvisionRequest>({
+    host: "",
+    port: 22,
+    user: "root",
+    concurrency: 1,
+  });
+  const [provisionBusy, setProvisionBusy] = useState(false);
+  const [provisionError, setProvisionError] = useState<string | null>(null);
+  const [provisionResult, setProvisionResult] = useState<string | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Record<string, true | undefined>>({});
@@ -118,27 +121,16 @@ export function WorkersSection({
   const [revokeConfirmId, setRevokeConfirmId] = useState<string | null>(null);
 
   const addWorker = () => {
-    setPairBusy(true);
-    setPairError(null);
+    setProvisionBusy(true);
+    setProvisionError(null);
+    setProvisionResult(null);
     api
-      .pairWorker()
+      .provisionWorker(provision)
       .then((response) => {
-        setPairing(response);
-        setCopied(false);
+        setProvisionResult(response.output || "Worker installed; waiting for it to connect.");
       })
-      .catch((cause: unknown) => setPairError(errorText(cause)))
-      .finally(() => setPairBusy(false));
-  };
-
-  const copyCommand = () => {
-    if (!pairing) return;
-    navigator.clipboard
-      .writeText(pairing.command)
-      .then(() => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 2000);
-      })
-      .catch(() => setPairError("Could not use the clipboard; select the command and copy it by hand."));
+      .catch((cause: unknown) => setProvisionError(errorText(cause)))
+      .finally(() => setProvisionBusy(false));
   };
 
   const mutate = (id: string, action: Promise<FleetResponse>) => {
@@ -168,10 +160,6 @@ export function WorkersSection({
     mutate(worker.id, api.renameWorker(worker.id, value));
   };
 
-  const minutesLeft = pairing
-    ? Math.max(0, Math.round((Date.parse(pairing.expiresAt) - now) / 60_000))
-    : 0;
-
   // The host's own local worker pinned first, out of enrollment order.
   const orderedWorkers = [...workers].sort(
     (a, b) => Number(Boolean(b.local)) - Number(Boolean(a.local)),
@@ -180,9 +168,8 @@ export function WorkersSection({
   return (
     <>
       <SectionIntro title="Workers">
-        Every run executes on an enrolled worker; this host only schedules them. A machine joins
-        the fleet by running one printed command, and its credential can be revoked from here at
-        any time.
+        Every run executes on an enrolled Linux worker; Mission Control connects over SSH,
+        installs the worker service, and keeps the pairing credential out of the renderer.
       </SectionIntro>
 
       <div className="mt-3 flex flex-col gap-2.5">
@@ -190,70 +177,75 @@ export function WorkersSection({
           <CardHeader className="gap-0">
             <div className="flex items-baseline justify-between gap-3">
               <h3 className="font-plate text-[12px] font-semibold tracking-[0.04em] text-haze-50">
-                Enroll a worker
+                Set up a worker over SSH
               </h3>
-              <Button type="button" size="plate" onClick={addWorker} disabled={pairBusy}>
-                {pairBusy ? "Minting" : "Add a worker"}
+              <Button
+                type="button"
+                size="plate"
+                onClick={addWorker}
+                disabled={provisionBusy || !provision.host.trim() || !provision.user.trim()}
+              >
+                {provisionBusy ? "Installing" : "Install worker"}
               </Button>
             </div>
             <p className="mt-1.5 text-[12px] leading-relaxed text-haze-400">
-              Mints a single-use pairing token and the command that redeems it. Run it on the
-              machine that should join the fleet.
+              Uses your system SSH agent or a selected private key. The remote account must have
+              passwordless sudo; host keys are verified and newly discovered keys are saved by SSH.
             </p>
           </CardHeader>
           <CardContent className="mt-2.5 flex flex-col gap-2.5">
-            {pairError && (
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Input
+                value={provision.host}
+                onChange={(event) => setProvision((value) => ({ ...value, host: event.target.value }))}
+                placeholder="worker.example.com"
+                aria-label="SSH host"
+              />
+              <Input
+                value={provision.user}
+                onChange={(event) => setProvision((value) => ({ ...value, user: event.target.value }))}
+                placeholder="SSH user"
+                aria-label="SSH user"
+              />
+              <Input
+                type="number"
+                min={1}
+                max={65535}
+                value={provision.port ?? 22}
+                onChange={(event) => setProvision((value) => ({ ...value, port: Number(event.target.value) }))}
+                aria-label="SSH port"
+              />
+              <Input
+                value={provision.identityFile ?? ""}
+                onChange={(event) => setProvision((value) => ({ ...value, identityFile: event.target.value || undefined }))}
+                placeholder="Private key path (optional)"
+                aria-label="SSH private key path"
+              />
+              <Input
+                value={provision.name ?? ""}
+                onChange={(event) => setProvision((value) => ({ ...value, name: event.target.value || undefined }))}
+                placeholder="Worker name (optional)"
+                aria-label="Worker name"
+              />
+              <Input
+                type="number"
+                min={1}
+                max={16}
+                value={provision.concurrency ?? 1}
+                onChange={(event) => setProvision((value) => ({ ...value, concurrency: Number(event.target.value) }))}
+                aria-label="Worker concurrency"
+              />
+            </div>
+            {provisionError && (
               <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-rust-400">
                 <Warn className="mt-px size-3 shrink-0" />
-                {pairError}
+                {provisionError}
               </p>
             )}
-            {pairing && (
-              <div className="flex flex-col gap-2">
-                <div className="flex items-start gap-1.5">
-                  <div className="min-w-0 flex-1">
-                    <Command text={pairing.command} />
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon-xs"
-                    onClick={copyCommand}
-                    aria-label="Copy the enrollment command"
-                    title="Copy"
-                    className="mt-0.5 shrink-0"
-                  >
-                    {copied ? <Check /> : <Copy />}
-                  </Button>
-                </div>
-                <p className="text-[11.5px] leading-relaxed text-haze-700">
-                  {copied ? "Copied. " : ""}
-                  Single-use, shown once: it expires unredeemed in {minutesLeft}{" "}
-                  {minutesLeft === 1 ? "minute" : "minutes"}, and this page cannot show it again
-                  after you leave. Mint a new one if it lapses.
-                </p>
-                {pairing.remote ? (
-                  <p className="text-[11.5px] leading-relaxed text-haze-700">
-                    The command points at{" "}
-                    <span className="font-mono text-haze-400">{pairing.host}</span>, an address the
-                    worker channel is listening on. If the worker reaches this host at a different
-                    one, edit the <code className="font-mono">--host</code> value before running
-                    the command.
-                  </p>
-                ) : (
-                  <p className="flex items-start gap-1.5 text-[11.5px] leading-relaxed text-haze-700">
-                    <Warn className="mt-px size-3 shrink-0" />
-                    <span>
-                      Only this machine can enroll with this command right now: the worker
-                      channel's only listener is loopback-only, so{" "}
-                      <span className="font-mono text-haze-400">{pairing.host}</span> answers
-                      nowhere else. Set a bind address on the{" "}
-                      <span className="text-haze-400">Worker channel</span> card below and restart
-                      brevi to enroll a machine on the network.
-                    </span>
-                  </p>
-                )}
-              </div>
+            {provisionResult && (
+              <p className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-mint-500">
+                {provisionResult}
+              </p>
             )}
           </CardContent>
         </Card>

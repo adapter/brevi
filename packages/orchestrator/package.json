@@ -20,10 +20,6 @@
       "types": "./dist/internal.d.ts",
       "default": "./dist/internal.js"
     },
-    "./pid": {
-      "types": "./dist/pid.d.ts",
-      "default": "./dist/pid.js"
-    },
     "./config": {
       "types": "./dist/config.d.ts",
       "default": "./dist/config.js"
@@ -39,7 +35,6 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
-    "@brevi/app": "*",
     "@brevi/shared": "*",
     "@hono/node-server": "^2.1.0",
     "@linear/sdk": "^89.0.0",

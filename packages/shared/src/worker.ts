@@ -317,7 +317,7 @@ export const workerCapabilitiesSchema = z.object({
   agentCommands: z.array(z.string().min(1)).min(1),
   /** How many dispatched runs this worker executes at once. */
   maxConcurrency: z.number().int().min(1).max(WORKER_MAX_CONCURRENCY),
-  /** @brevi/cli version the worker runs. */
+  /** Dedicated brevi-worker release version. */
   version: z.string(),
 });
 export type WorkerCapabilities = z.infer<typeof workerCapabilitiesSchema>;
@@ -599,7 +599,7 @@ export type LeaseGapMessage = z.infer<typeof leaseGapMessageSchema>;
 // --- Interactive attach ----------------------------------------------------
 //
 // A finished run's retained sandbox lives on the worker that executed it, so
-// `brevi attach` and the dashboard's web terminal cannot reach it directly.
+// The desktop terminal cannot reach it directly.
 // The worker runs the PTY inside the retained bwrap sandbox and the host
 // relays its bytes between that PTY and the browser or CLI socket. Terminal
 // bytes travel as UTF-8 strings, exactly as they already do on the

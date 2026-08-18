@@ -23,19 +23,8 @@ Agent CLIs (`claude`, `codex`, `gh`, `wrangler`) come from the worker host's `PA
 
 ## Setup
 
-On Linux, `brevi setup` installs bubblewrap and passt when they are missing (`apt install bubblewrap passt`) and checks that unprivileged user namespaces work. `brevi doctor` reports the same.
-
-```sh
-brevi setup
-```
-
-The [Linux worker installer](/guides/workers/) installs bubblewrap and passt as root (`apt-get install bubblewrap passt`), installs the Claude and Codex CLIs globally, and probes user namespaces (both bwrap and pasta) as the `brevi` service user.
+The [Linux worker installer](/guides/workers/) installs bubblewrap and passt as root (`apt-get install bubblewrap passt`), installs the Claude and Codex agents globally, and probes user namespaces (both bwrap and pasta) as the `brevi` service user.
 
 ## Workers
 
-Every run executes on a `brevi worker` daemon. On Linux, `brevi start` also supervises a local worker on this machine. Add more workers from the Workers page; each one is a bwrap worker.
-
-```sh
-curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- \
-  --host https://your-host:4400 --token <pairing-token>
-```
+Every run executes on a remote worker daemon. Add a Linux machine from the desktop app's Workers page; brevi connects over SSH and performs the installation without exposing the pairing credential to the renderer or command line.

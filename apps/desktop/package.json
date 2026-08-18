@@ -1,6 +1,6 @@
 {
   "name": "@brevi/desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -14,17 +14,20 @@
   "bugs": "https://github.com/adapter/brevi/issues",
   "main": "dist/main.js",
   "scripts": {
-    "build": "bun build src/main/index.ts --outfile dist/main.js --target=node --format=esm --external electron && cp src/renderer/status.html dist/status.html",
+    "build": "rm -rf dist && bun build src/main/index.ts --outfile dist/main.js --target=node --format=esm --external electron --external @lydell/node-pty && cp src/renderer/status.html dist/status.html && cp -R ../app/dist dist/app",
     "dev": "tsc --noEmit --watch",
     "start": "bun run build && bun run scripts/start.ts",
-    "stage": "bun run build && bun run scripts/stage-cli.ts",
-    "package": "bun run stage && electron-builder --publish never -c.extraMetadata.version=$(bun scripts/cli-version.ts)",
-    "package:mac": "bun run build && bun run scripts/stage-cli.ts --darwin-universal && electron-builder --mac --universal --publish never -c.extraMetadata.version=$(bun scripts/cli-version.ts)",
-    "package:linux": "bun run stage && electron-builder --linux --x64 --publish never -c.extraMetadata.version=$(bun scripts/cli-version.ts)",
+    "package": "bun run build && electron-builder --publish never",
+    "package:mac": "bun run build && electron-builder --mac --universal --publish never",
+    "package:linux": "bun run build && electron-builder --linux --x64 --publish never",
     "lint": "oxlint --max-warnings 0",
     "check-types": "tsc --noEmit"
   },
+  "dependencies": {
+    "@lydell/node-pty": "^1.1.0"
+  },
   "devDependencies": {
+    "@brevi/app": "*",
     "@brevi/orchestrator": "*",
     "@brevi/shared": "*",
     "@repo/typescript-config": "*",

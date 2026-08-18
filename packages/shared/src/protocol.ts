@@ -30,12 +30,12 @@ import type { PrState, RepoMemory, Run, RunEvent, Ticket } from "./types.js";
  *        follow-up button.
  *   POST /api/runs/:id/resume            -> ResumeRunResponse
  *        Boot the run's retained sandbox back up (when needed) and prepare an
- *        interactive `claude --resume` session inside it; `brevi attach` calls
+ *        interactive `claude --resume` session inside it; the desktop terminal calls
  *        this and opens the returned session. 410 once the retention window
  *        has passed and the disk was reclaimed.
  *   POST /api/runs/:id/release           -> Run
  *        Stop the resumed sandbox's compute again, keeping its disk until the
- *        retention window ends. Called by `brevi attach` on detach; a no-op
+ *        retention window ends. Called by the desktop terminal on detach; a no-op
  *        when nothing is booted.
  *   WS   /ws/runs/:id/attach             -> AttachServerMessage / AttachClientMessage
  *        Web-terminal bridge for the dashboard: booting the retained sandbox
@@ -80,9 +80,9 @@ import type { PrState, RepoMemory, Run, RunEvent, Ticket } from "./types.js";
  *   GET  /api/workers                    -> FleetResponse
  *        Every enrolled worker with its live connection state, capabilities,
  *        and current load. No credential material, ever.
- *   POST /api/workers/pair               -> PairingTokenResponse
- *        Mint a single-use pairing token and the `brevi worker` command that
- *        redeems it. The token is returned once and expires unused.
+ *   POST /api/workers/provision          -> WorkerProvisionResponse
+ *        Ask the desktop-owned SSH provisioner to install a worker. The
+ *        single-use pairing token never crosses into renderer state.
  *   POST /api/workers/:id/rename         -> FleetResponse
  *        body: WorkerRenameRequest.
  *   POST /api/workers/:id/drain          -> FleetResponse
@@ -289,7 +289,7 @@ export interface PrStatusResponse {
 /**
  * Where the interactive session a resume prepared actually runs. A run's
  * retained sandbox lives on the worker that executed it, never on the
- * scheduling host, so both `brevi attach` and the dashboard's web terminal
+ * scheduling host, so the desktop terminal
  * reach it the same way: over `WS /ws/runs/:id/attach`, which the host relays
  * to that worker's PTY.
  */

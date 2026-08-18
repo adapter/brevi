@@ -1,28 +1,13 @@
 # @brevi/desktop
 
-Mission Control as a desktop app: an Electron shell that starts, supervises, and displays the brevi orchestrator, so a terminal is never required. It loads the same dashboard (`@brevi/app`) straight from the embedded orchestrator's own server; there's no separate UI to keep in sync.
-
-Interchangeable with the CLI: both read and write the same `~/.brevi/config.json`, the same run history, and the same server. If an orchestrator is already running (started with `brevi` in a terminal), the app attaches to it instead of starting a second one and leaves it running when it quits; `brevi status` sees an app-managed orchestrator as running too.
-
-## Development
+Mission Control is the only brevi host. Its Electron main process starts the orchestrator directly, serves the renderer from `brevi://app`, and protects the loopback management API with a random per-launch token.
 
 ```sh
-bun run build   # bundle src/main/index.ts to dist/main.js with bun
-bun run start   # build, then launch (macOS runs a local brevi.app so the menu bar is not "Electron")
+bun run build
+bun run start
+bun run package
 ```
 
-The app supervises the *built* CLI (`packages/cli/dist/index.js`), so `bun run build` at the repo root must have run first. Set `BREVI_DESKTOP_CLI_ENTRY` to point at a different entry during development.
+Remote Linux workers are provisioned from the Workers page over system SSH. Pairing tokens remain in the main process and are transferred through stdin to a short-lived remote file; they never enter renderer state or process arguments.
 
-## Packaging
-
-```sh
-bun run package   # electron-builder, macOS and Linux distributables
-```
-
-Not wired into CI: the Electron GUI needs system GTK/X11 libraries a headless runner doesn't have, so CI only lints, type-checks, and builds this workspace.
-
-## Targets
-
-macOS and Linux only. Windows is out of scope for the whole project.
-
-Docs: [brevi.dev](https://brevi.dev) · Source: [github.com/adapter/brevi](https://github.com/adapter/brevi)
+The version in this package is the authoritative desktop release version.

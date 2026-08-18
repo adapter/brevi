@@ -492,7 +492,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   }
 
   /**
-   * Mint a pairing token and the ready-to-copy `brevi worker` command for it.
+   * Mint a pairing token and a low-level `brevi-worker` enrollment command.
    * The fleet listener is preferred when one is bound, since that's the
    * channel a worker on another machine is meant to dial; the dashboard
    * listener is the fallback, which serves the same worker path for a worker
@@ -503,7 +503,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     const { token, expiresAt } = this.#workers.mintPairingToken();
     const { host: dialHost, port, remote } = this.#pairingEndpoint();
     const host = `http://${dialHost}:${port}`;
-    return { token, expiresAt, command: `brevi worker --host ${host} --token ${token}`, host, remote };
+    return { token, expiresAt, command: `brevi-worker --host ${host} --token ${token}`, host, remote };
   }
 
   /**
@@ -1658,7 +1658,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
 
   /**
    * Check a finished run is eligible for interactive resume and resolve
-   * which worker its retained sandbox lives on. `brevi attach` and the
+   * which worker its retained sandbox lives on. The desktop terminal and the
    * dashboard's web terminal both call this first, then open
    * `WS /ws/runs/:id/attach`, which the host relays to that worker: the
    * sandbox itself never lives on the scheduling host, so there is nothing
@@ -1707,7 +1707,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    * Thin on purpose: the worker that holds a run's retained sandbox releases
    * its compute itself once the last attach session for that run closes (see
    * WorkerRegistry.openAttach), so the host has nothing left to release. The
-   * endpoint stays so `brevi attach` and the dashboard's terminal keep a
+   * endpoint stays so the desktop terminal keeps a
    * symmetric resume/release pair to call, without needing to know that the
    * second half became a no-op when execution moved to the fleet.
    */

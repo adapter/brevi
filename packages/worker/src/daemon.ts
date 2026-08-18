@@ -39,11 +39,9 @@ const VERSION = ((): string => {
     const pkg = require("../package.json") as { version?: string };
     return pkg.version ?? "0.0.0";
   } catch {
-    // A compiled worker binary (bun build --compile, see packages/cli's
-    // build-binary.ts) has no package.json to require; it reports the
-    // @brevi/cli release it was built from instead, baked in at compile
-    // time via --define.
-    return process.env.BREVI_EMBEDDED_CLI_VERSION || "0.0.0";
+    // A compiled worker binary has no package.json to require; its dedicated
+    // release version is baked in by packages/worker/scripts/build-binary.ts.
+    return process.env.BREVI_EMBEDDED_WORKER_VERSION || "0.0.0";
   }
 })();
 
@@ -66,7 +64,7 @@ export interface WorkerOptions {
   configPath?: string;
   /**
    * A supervisor-injected identity, minted by the host itself with no
-   * pairing token (how `brevi start` provisions the localhost worker it
+   * pairing token (used only by an in-process test/local integration that
    * spawns). Used exactly as given against `hostUrl`; `~/.brevi/worker.json`
    * is never read, written, or cleared on its behalf, since that file
    * belongs to a separate, real enrollment this machine might also hold.
@@ -219,13 +217,13 @@ function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T | "timeout"
  * reconnects with the credential an earlier enrollment left behind), executes
  * whatever it dispatches, and mirrors every run mutation back over the
  * socket. Resolves once a SIGINT/SIGTERM shuts it down cleanly and rejects
- * when the host revoked this machine's enrollment; the caller (packages/cli's
- * `brevi worker` command) just awaits it.
+ * when the host revoked this machine's enrollment; the standalone worker
+ * entry point awaits it.
  */
 export async function runWorker(options: WorkerOptions): Promise<void> {
   const name = options.name ?? hostname();
-  // A machine that only ever runs `brevi worker` has no reason to have run
-  // `brevi init`, so an absent (or unreadable) config is not fatal here the
+  // A dedicated worker may have no config at all, so an absent (or unreadable)
+  // config is not fatal here the
   // way it is for every other command: fall back to the schema's own
   // defaults: bwrap at concurrency 1.
   const config = await loadConfig(options.configPath).catch((error: unknown) => {

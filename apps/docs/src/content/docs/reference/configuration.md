@@ -3,7 +3,7 @@ title: Configuration
 description: "Every field in ~/.brevi/config.json: Linear, GitHub, repositories, agent, sandbox, connect, triggers and server settings."
 ---
 
-brevi's entire configuration is one JSON file at **`~/.brevi/config.json`**. It is created by `brevi init` and then written for you by the dashboard. The file is validated on load; an unknown shape or an out-of-range value makes brevi refuse to start rather than run with a surprise.
+brevi's configuration is one JSON file at **`~/.brevi/config.json`**. Mission Control creates it on first launch and writes changes from Configuration. The file is validated on load; an unknown shape or out-of-range value makes startup fail rather than run with a surprise.
 
 The orchestrator reads no environment variables for configuration.
 
@@ -116,7 +116,7 @@ There is no credential field here. Authentication goes through the host's `wrang
 
 At the end of a successful run, once artifacts are collected on the host, each screenshot (`png`/`jpg`) and recording (`webm`/`mp4`/`mov`/`gif`) is uploaded to `<bucket>/<runId>/<name>`, keyed by run id so names never collide across runs. Uploads are strictly best-effort: a failure is logged in the run's console and never fails the run. If wrangler is logged out, missing, or either field is unset, runs behave exactly as before and evidence stays local.
 
-Connecting from the dashboard provisions both fields automatically: it creates the `brevi-evidence` bucket and enables its r2.dev development URL. A bucket that already exists is reused only when it is already public (as a previous brevi setup's would be); brevi never enables public access on a bucket it did not create, so that case fails with instructions instead. Edit the fields by hand only if you want a different bucket name or a custom domain.
+Connecting from the dashboard provisions both fields automatically: it creates the `brevi-evidence` bucket and enables its r2.dev development URL. A bucket that already exists is reused only when it is already public (as a previous brevi installation's would be); brevi never enables public access on a bucket it did not create, so that case fails with instructions instead. Edit the fields by hand only if you want a different bucket name or a custom domain.
 
 :::caution
 The bucket is public: anyone with a URL can view any screenshot or recording brevi has uploaded, which may include your codebase or product. Leave both fields empty to keep all evidence local.
@@ -219,15 +219,15 @@ Where runs execute. These fields are read by the **worker** that executes a run,
 | --- | --- | --- | --- |
 | `concurrency` | integer 1-16 | `1` | How many sandboxed runs this worker executes at once. Adjustable live; takes effect immediately, no restart needed. |
 | `timeoutMinutes` | integer ≥ 1 | `240` | Hard wall-clock limit applied per agent execution: the implementation pass, each of the parallel Codex reviewers, the synthesis pass, and the fix pass each get their own budget, rather than one limit for the whole run. The default 240 minutes gives each execution four hours. |
-| `retentionHours` | number ≥ 0 | `24` | How many hours a finished (completed or failed) run's sandbox disk is kept for interactive resume, either from the dashboard's "Open terminal" button or `brevi attach <runId>`. `0` disables retention. A retained sandbox's compute is stopped; it costs disk only, no memory or CPU. |
+| `retentionHours` | number ≥ 0 | `24` | How many hours a finished (completed or failed) run's sandbox disk is kept for interactive resume from the desktop app's "Open terminal" button. `0` disables retention. A retained sandbox's compute is stopped; it costs disk only, no memory or CPU. |
 
-A leftover `sandbox.provider` or other unknown `sandbox.*` key in an older file is stripped on load, and `brevi doctor` warns that it is ignored.
+A leftover `sandbox.provider` or other unknown `sandbox.*` key in an older file is stripped on load and ignored.
 
 ## `fleet`
 
-The fleet is the pool of `brevi worker` daemons that dial into this host and execute runs. The host itself is a pure scheduler: it holds the run store, polls Linear, and opens PRs, but every run's sandbox lives on a connected worker, never on the host process itself.
+The fleet is the pool of worker daemons that dial into this host and execute runs. The host itself is a pure scheduler: it holds the run store, polls Linear, and opens PRs, but every run's sandbox lives on a connected worker, never on the host process itself.
 
-Which machines are enrolled is not configured here. Workers are runtime state, kept in `~/.brevi/fleet.json` (mode `0600`), and their credentials are minted rather than written by hand: a machine enrolls by redeeming a single-use pairing token from the dashboard's Workers page, and the host stores only the sha256 of the durable credential that token buys. This section holds nothing secret; see [Workers](/reference/api/#workers) for enrolling, renaming, draining and revoking them.
+Which machines are enrolled is not configured here. Workers are runtime state, kept in `~/.brevi/fleet.json` (mode `0600`), and their credentials are minted rather than written by hand: the desktop app provisions a machine over SSH with a single-use pairing token, and the host stores only the sha256 of the durable credential that token buys. This section holds nothing secret; see [Workers](/reference/api/#workers) for enrolling, renaming, draining and revoking them.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
@@ -236,9 +236,9 @@ Which machines are enrolled is not configured here. Workers are runtime state, k
 | `heartbeatTimeoutSeconds` | integer 30-600 | `45` | Seconds a connected worker may go silent before the host drops it from the fleet. Workers heartbeat every 15 seconds, so the floor is two intervals: a timeout close to one interval lets ordinary jitter drop a healthy worker. Dropping the worker does not by itself touch its in-flight runs; see `reconnectGraceSeconds`. |
 | `reconnectGraceSeconds` | integer 10-3600 | `120` | How much longer, after a dropped worker's runs go quiet, their leases are held before the host gives up on that worker: reconnecting within the window resumes those runs in place, not reconnecting requeues each one for another worker (or, if that worker already opened the run's pull request, completes the run by adopting it instead of dispatching it twice). |
 
-The worker channel gets its own listener because the dashboard's does more than serve workers: `server.host` also carries the unauthenticated dashboard and management API, so exposing it to the network would let any reachable peer mint a pairing token and enroll a worker of its own. The worker channel authenticates (a single-use pairing token, then a durable per-worker credential), so it can safely bind wider without widening that API. The `fleet.host` listener serves nothing but `/ws/worker`; every other request on it gets a `404`. When it fails to bind (port in use, address unavailable), brevi logs it and keeps running without it, and workers on this machine can still enroll through the dashboard's own listener.
+The worker channel gets its own listener because the loopback management API is private to the desktop app. The worker channel authenticates (a single-use pairing token, then a durable per-worker credential), so it can safely bind wider without exposing the management surface. The `fleet.host` listener serves nothing but `/ws/worker`; every other request on it gets a `404`. When it fails to bind (port in use, address unavailable), brevi logs it and keeps running without it.
 
-The listener binds once at startup, so `host` and `port` need a restart; the two timing fields apply live. All four are editable from the dashboard's Workers page (Configuration > Workers), which is also where a pairing token is minted and the ready-to-copy `brevi worker` command is shown. See [Workers](/guides/workers/) for enrolling a worker end to end.
+The listener binds once at startup, so `host` and `port` need a restart; the two timing fields apply live. All four are editable from Mission Control's Workers page, which also provisions remote machines over SSH. See [Workers](/guides/workers/).
 
 ### Placement
 
@@ -282,7 +282,7 @@ What happens when the agent hits a provider usage limit mid-run. Instead of fail
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `port` | integer 1-65535 | `4400` | The orchestrator serves both the API and the dashboard on this port. |
-| `host` | string | `"127.0.0.1"` | Bind address. The default keeps the dashboard reachable only from the machine itself; set `"0.0.0.0"` to reach it from other devices on the network. Prefer `"0.0.0.0"` over a specific interface address: loopback stays bound too, so `brevi status` and `brevi stop` keep working. **The dashboard and API have no authentication**, so anyone who can reach the port has full control of brevi, including a shell into its sandboxes; only expose it on networks you trust. |
+| `host` | string | `"127.0.0.1"` | Legacy field retained for config compatibility. Mission Control always forces the management listener to `127.0.0.1`; it cannot be exposed to the LAN. |
 
 ## `pollIntervalSeconds`
 

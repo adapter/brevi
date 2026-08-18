@@ -483,14 +483,7 @@ function QueuedBanner({
       {hostExecution && (
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
           This machine can&apos;t run agents itself.{" "}
-          {hostExecution.reason === "bwrap-unavailable" ? (
-            <>
-              Install bubblewrap (<code className="font-mono text-[11px]">brevi setup</code>) or
-              enroll another machine from the{" "}
-            </>
-          ) : (
-            "Enroll another machine from the "
-          )}
+          Set up a Linux machine over SSH from the{" "}
           <Button
             type="button"
             variant="link"

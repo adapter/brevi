@@ -8,7 +8,7 @@ export async function loadConfig(path: string = CONFIG_PATH): Promise<BreviConfi
   try {
     raw = await readFile(path, "utf8");
   } catch {
-    throw new Error(`No brevi config found at ${path}. Run \`brevi init\` first.`);
+    throw new Error(`No brevi config found at ${path}. Open Mission Control to create it.`);
   }
   return configSchema.parse(JSON.parse(raw));
 }

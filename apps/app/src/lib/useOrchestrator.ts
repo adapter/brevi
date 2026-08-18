@@ -85,6 +85,10 @@ function pathForRun(runId: string | null): string {
   return runId ? `/runs/${encodeURIComponent(runId)}` : "/";
 }
 
+function desktopPath(path: string): string {
+  return `${path}${window.location.search}`;
+}
+
 export type ConfigSection =
   | "connectors"
   | "repositories"
@@ -356,7 +360,7 @@ export function useOrchestrator() {
   const openRun = useCallback(
     (runId: string | null) => {
       const path = pathForRun(runId);
-      if (window.location.pathname !== path) window.history.pushState(null, "", path);
+      if (window.location.pathname !== path) window.history.pushState(null, "", desktopPath(path));
       dispatch({ t: "page", page: "home" });
       selectRun(runId);
     },
@@ -367,7 +371,7 @@ export function useOrchestrator() {
   const openConfig = useCallback(
     (section: ConfigSection = "connectors") => {
       const path = `/config/${section}`;
-      if (window.location.pathname !== path) window.history.pushState(null, "", path);
+      if (window.location.pathname !== path) window.history.pushState(null, "", desktopPath(path));
       dispatch({ t: "page", page: `config:${section}` });
       selectRun(null);
     },
@@ -379,7 +383,7 @@ export function useOrchestrator() {
   // without adding a history entry, so refresh reflects the actual page.
   useEffect(() => {
     if (/^\/config\/?$/.test(window.location.pathname)) {
-      window.history.replaceState(null, "", "/config/connectors");
+      window.history.replaceState(null, "", desktopPath("/config/connectors"));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only
   }, []);

@@ -5,7 +5,7 @@ description: Download Mission Control, the self-updating desktop app for macOS a
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
-Mission Control is brevi as a desktop app: an Electron shell that starts and supervises the orchestrator and shows the same dashboard in its own window, no terminal required. It reads and writes the same `~/.brevi` config, run history and server as the CLI, so the two are interchangeable: only one orchestrator ever runs at a time, and starting the app while `brevi start` is already running just attaches to it instead of starting a second one.
+Mission Control is brevi. The desktop app owns the orchestrator, configuration, and private local renderer; there is no separate web or CLI host.
 
 Each link below always points at the newest release.
 
@@ -57,12 +57,4 @@ The dmg and AppImage builds update themselves in the background against a static
 deb and rpm installs don't self-update by design: the app detects it was installed by a package manager and leaves updates to `apt`/`dnf`. Re-download or re-install to get a newer version.
 </Aside>
 
-The app version is always the `@brevi/cli` version: the orchestrator ships inside the app, so an update always brings a matching orchestrator with it.
-
-## Prefer the CLI?
-
-The CLI remains fully supported and is what CI and headless machines use. See [Getting started](/getting-started/):
-
-```sh
-npx @brevi/cli
-```
+The version in Mission Control's desktop manifest is the release version. The orchestrator ships inside the app, so an update always brings the matching host runtime with it.

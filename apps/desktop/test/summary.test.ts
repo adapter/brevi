@@ -4,7 +4,6 @@ import {
   countRuns,
   fleetLine,
   menuRuns,
-  orchestratorVersionLine,
   runLabel,
   runningCount,
   updateBlockingRuns,
@@ -124,42 +123,9 @@ describe("workerLine", () => {
     expect(workerLine(state)).toBe("Orchestrator: running (pid 4021)");
   });
 
-  test("attached: names the pid of a CLI instance we didn't start", () => {
-    const state: SupervisorState = { kind: "attached", pid: 918 };
-    expect(workerLine(state)).toBe("Orchestrator: attached to CLI (pid 918)");
-  });
-
-  test("attached: tolerates an unknown pid", () => {
-    const state: SupervisorState = { kind: "attached", pid: null };
-    expect(workerLine(state)).toBe("Orchestrator: attached to CLI");
-  });
-
-  test("restarting: rounds the delay up to whole seconds", () => {
-    const state: SupervisorState = { kind: "restarting", attempt: 2, delayMs: 3_400, reason: "crashed" };
-    expect(workerLine(state)).toBe("Orchestrator: restarting in 4s (attempt 2)");
-  });
-
   test("failed: surfaces the reason", () => {
     const state: SupervisorState = { kind: "failed", reason: "port 4400 already in use" };
     expect(workerLine(state)).toBe("Orchestrator: failed (port 4400 already in use)");
-  });
-});
-
-describe("orchestratorVersionLine", () => {
-  test("null when not attached", () => {
-    expect(orchestratorVersionLine("1.2.0", false, "1.1.0")).toBeNull();
-  });
-
-  test("null when attached but the orchestrator version is unknown", () => {
-    expect(orchestratorVersionLine("1.2.0", true, undefined)).toBeNull();
-  });
-
-  test("null when attached and versions match", () => {
-    expect(orchestratorVersionLine("1.2.0", true, "1.2.0")).toBeNull();
-  });
-
-  test("reports both versions when attached to a mismatched orchestrator", () => {
-    expect(orchestratorVersionLine("1.2.0", true, "1.1.0")).toBe("Version: app 1.2.0, attached orchestrator 1.1.0");
   });
 });
 

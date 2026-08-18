@@ -32,7 +32,7 @@ bind of the per-run directory (`~/.brevi/workspaces/<id>/`). The operator's `$HO
 is not bound. The process `HOME` is `~/.brevi/workspaces/<id>/home`, beside the
 checkout. Network is shared with the host so agents can use git, npm, and model APIs.
 
-`brevi setup` installs `bubblewrap` when it is missing. `createSandboxProvider()`
+The Linux worker installer installs `bubblewrap` when it is missing. `createSandboxProvider()`
 fails at startup if the host is not Linux or `bwrap` is missing or cannot unshare
 user namespaces.
 

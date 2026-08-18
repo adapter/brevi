@@ -3,9 +3,10 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-// In dev, the orchestrator (started via `brevi` or `brevi start`) runs on 4400;
-// the Vite dev server proxies API and WebSocket traffic to it.
+// The standalone Vite server is for renderer development only; production is
+// loaded by Electron from the private brevi:// origin.
 export default defineConfig({
+  base: "./",
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

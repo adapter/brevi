@@ -11,7 +11,6 @@ import type {
   HealthResponse,
   LinearProject,
   ConfigPatch,
-  PairingTokenResponse,
   PrStatusResponse,
   R2ConnectResponse,
   R2Status,
@@ -20,14 +19,33 @@ import type {
   SettingsUpdateResponse,
   Ticket,
   WorkerRenameRequest,
+  WorkerProvisionRequest,
+  WorkerProvisionResponse,
 } from "@brevi/shared";
 
-/** Thin REST client. Everything is same-origin; Vite proxies /api to the orchestrator. */
+function desktopRuntime(): { apiBase: string; token: string } {
+  const query = new URLSearchParams(window.location.search);
+  return {
+    apiBase: query.get("apiBase")?.replace(/\/$/, "") ?? "",
+    token: query.get("token") ?? "",
+  };
+}
+
+function apiUrl(path: string): string {
+  return `${desktopRuntime().apiBase}${path}`;
+}
+
+/** Thin REST client for the private loopback API owned by Mission Control. */
 
 async function json<T>(input: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(input, {
+  const { token } = desktopRuntime();
+  const res = await fetch(apiUrl(input), {
     ...init,
-    headers: { Accept: "application/json", ...init?.headers },
+    headers: {
+      Accept: "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
   });
   if (!res.ok) {
     const body = (await res.text().catch(() => "")).trim();
@@ -94,8 +112,6 @@ export const api = {
       body: JSON.stringify({ patch }),
     }),
   workers: () => json<FleetResponse>("/api/workers"),
-  /** Mint a single-use pairing token and the `brevi worker` command that redeems it. */
-  pairWorker: () => json<PairingTokenResponse>("/api/workers/pair", { method: "POST" }),
   renameWorker: (id: string, name: string) =>
     json<FleetResponse>(`/api/workers/${encodeURIComponent(id)}/rename`, {
       method: "POST",
@@ -108,19 +124,27 @@ export const api = {
     json<FleetResponse>(`/api/workers/${encodeURIComponent(id)}/enable`, { method: "POST" }),
   revokeWorker: (id: string) =>
     json<FleetResponse>(`/api/workers/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  provisionWorker: (request: WorkerProvisionRequest) =>
+    json<WorkerProvisionResponse>("/api/workers/provision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }),
 };
 
 export function artifactUrl(runId: string, name: string): string {
-  return `/api/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(name)}`;
+  const { token } = desktopRuntime();
+  const path = `/api/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(name)}`;
+  return `${apiUrl(path)}?token=${encodeURIComponent(token)}`;
 }
 
 export function wsUrl(): string {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/ws`;
+  const { apiBase, token } = desktopRuntime();
+  return `${apiBase.replace(/^http/, "ws")}/ws?token=${encodeURIComponent(token)}`;
 }
 
 /** Socket bridging the web terminal to a run's retained sandbox. */
 export function attachWsUrl(runId: string): string {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/ws/runs/${encodeURIComponent(runId)}/attach`;
+  const { apiBase, token } = desktopRuntime();
+  return `${apiBase.replace(/^http/, "ws")}/ws/runs/${encodeURIComponent(runId)}/attach?token=${encodeURIComponent(token)}`;
 }

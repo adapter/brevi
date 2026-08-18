@@ -13,6 +13,7 @@ export interface FleetState {
 export interface FleetMonitorOptions {
   /** http base url of the orchestrator. */
   url: string;
+  token: string;
   onChange: (state: FleetState) => void;
   /** A run reached a terminal status while we were watching it. */
   onRunFinished: (run: Run) => void;
@@ -113,7 +114,7 @@ export class FleetMonitor {
 
   #open(): void {
     if (this.#stopped) return;
-    const url = `${this.#options.url.replace(/^http/, "ws")}/ws`;
+    const url = `${this.#options.url.replace(/^http/, "ws")}/ws?token=${encodeURIComponent(this.#options.token)}`;
     const ws = new WebSocket(url);
     this.#ws = ws;
 
