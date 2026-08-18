@@ -21,6 +21,15 @@ export const DEFAULT_FLEET_PORT = 4410;
  */
 export const MAX_SANDBOX_CONCURRENCY = 16;
 
+/**
+ * Current ~/.brevi/config.json migration stamp. Stored configs materialize
+ * every schema default, so changing a default cannot reach existing installs
+ * on its own; loadConfig (packages/orchestrator) rewrites stale stored
+ * defaults for files stamped below this version, then stamps them current.
+ * v1: pollIntervalSeconds default dropped from 60 to 15.
+ */
+export const CONFIG_VERSION = 1;
+
 export const repoConfigSchema = z.object({
   /** Git remote in "owner/name" form. */
   remote: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'expected "owner/name"'),
@@ -305,7 +314,16 @@ export const configSchema = z.object({
       host: z.string().default(DEFAULT_HOST),
     })
     .prefault({}),
-  pollIntervalSeconds: z.number().int().min(10).default(60),
+  /**
+   * How often the orchestrator polls Linear for eligible tickets. Kept low
+   * by default so a newly labeled ticket starts within roughly one interval.
+   */
+  pollIntervalSeconds: z.number().int().min(10).default(15),
+  /**
+   * Migration stamp (see CONFIG_VERSION). Not a setting: deliberately absent
+   * from the /config forms, and defaulted so fresh saves are stamped current.
+   */
+  configVersion: z.number().int().min(0).default(CONFIG_VERSION),
 });
 
 export type BreviConfig = z.infer<typeof configSchema>;

@@ -131,6 +131,13 @@ export class LinearService {
     if (this.#config.linear.teamKeys.length > 0) {
       filter.team = { key: { in: this.#config.linear.teamKeys } };
     }
+    // Filter on the trigger label server side. The poll runs every
+    // pollIntervalSeconds (default 15s, 240 cycles/hour), and #toTicket costs
+    // a labels() request per returned issue, so without this every assigned
+    // backlog issue would add ~240 requests/hour against Linear's budget
+    // (2,500/hour for personal API keys, 5,000/hour for OAuth). With it, a
+    // cycle with no eligible tickets is a single request.
+    filter.labels = { some: { name: { eqIgnoreCase: this.#config.trigger.label } } };
     const connection = await this.#client.issues({ filter, first: 100 });
     const tickets: Ticket[] = [];
     for (const issue of connection.nodes) {
