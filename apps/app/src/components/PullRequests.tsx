@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import type { BreviConfig, PrState, PullListResponse, PullSummary } from "@brevi/shared";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import type { BreviConfig, PrState, PullSummary } from "@brevi/shared";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -59,30 +60,22 @@ export function PullRequestsPage({
   /** Opens the Connectors config page, for the not-connected empty state. */
   onOpenConfig: () => void;
 }) {
-  const [response, setResponse] = useState<PullListResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<Filter>("open");
   const [repoFilter, setRepoFilter] = useState<string>("");
 
-  const load = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      setResponse(await api.pulls());
-      setError(null);
-    } catch (err) {
-      // Keep the last good list on a transient failure; the banner says why.
-      setError(err instanceof Error ? err.message : "The orchestrator did not respond.");
-    } finally {
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-    const id = setInterval(() => void load(), LIST_POLL_MS);
-    return () => clearInterval(id);
-  }, [load]);
+  // The query keeps the last good list through a transient failure; the
+  // banner says why the refresh failed while the stale rows stay readable.
+  const {
+    data: response,
+    error: queryError,
+    isFetching: refreshing,
+    refetch,
+  } = useQuery({
+    queryKey: ["pulls"],
+    queryFn: api.pulls,
+    refetchInterval: LIST_POLL_MS,
+  });
+  const error = queryError === null ? null : queryError.message;
 
   const notConnected = error !== null && /GitHub is not connected/i.test(error);
   const pulls = (response?.pulls ?? []).filter(
@@ -135,7 +128,7 @@ export function PullRequestsPage({
             size="icon-xs"
             aria-label="Refresh pull requests"
             title="Refresh from GitHub"
-            onClick={() => void load()}
+            onClick={() => void refetch()}
             disabled={refreshing}
             className="text-haze-600 hover:text-haze-200"
           >
@@ -167,7 +160,7 @@ export function PullRequestsPage({
               }`}
             >
               {label}
-              {response !== null && (
+              {response !== undefined && (
                 <span className="font-mono text-[10.5px] leading-none text-haze-600">
                   {counts.get(id) ?? 0}
                 </span>
@@ -216,7 +209,7 @@ export function PullRequestsPage({
             </Button>{" "}
             to fill this page.
           </EmptyNote>
-        ) : response === null && error === null ? (
+        ) : response === undefined && error === null ? (
           <EmptyNote>Loading pull requests from GitHub…</EmptyNote>
         ) : pulls.length === 0 ? (
           <EmptyNote>

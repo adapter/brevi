@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   PullComment,
   PullDetailResponse,
@@ -57,61 +58,56 @@ export function PullRequestDetailPage({
   /** Returns to the Pull Requests list. */
   onBack: () => void;
 }) {
-  const [detail, setDetail] = useState<PullDetailResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  /** A failed action's message; load failures use `error` instead. */
+  /** A failed action's message; load failures render from the query's error. */
   const [notice, setNotice] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  /** Key of the action in flight, so exactly one spinner shows. */
-  const [busy, setBusy] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("conversation");
   const [mergeMethod, setMergeMethod] = useState<PullMergeMethod>("squash");
 
-  const load = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      setDetail(await api.pullDetail(repoKey, number));
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "The orchestrator did not respond.");
-    } finally {
-      setRefreshing(false);
-    }
-  }, [repoKey, number]);
+  const queryClient = useQueryClient();
+  // The App keys this component by "<repoKey>/<number>", so local state resets
+  // on navigation; the query cache carries the detail across revisits.
+  const {
+    data: detail,
+    error: queryError,
+    isFetching: refreshing,
+    refetch,
+  } = useQuery({
+    queryKey: ["pull", repoKey, number],
+    queryFn: () => api.pullDetail(repoKey, number),
+    refetchInterval: DETAIL_POLL_MS,
+  });
+  const error = queryError === null ? null : queryError.message;
 
-  useEffect(() => {
-    setDetail(null);
-    setError(null);
-    setNotice(null);
-    setTab("conversation");
-    void load();
-    const id = setInterval(() => void load(), DETAIL_POLL_MS);
-    return () => clearInterval(id);
-  }, [load]);
-
-  /** Run one write action, then re-fetch so the view shows GitHub's truth. */
+  /**
+   * One mutation for every write action, keyed so exactly one control shows
+   * its spinner; success re-fetches the detail (and invalidates the list,
+   * whose states a merge or close just changed) so the view shows GitHub's
+   * truth rather than an optimistic guess.
+   */
+  const mutation = useMutation({
+    mutationFn: ({ action }: { key: string; action: () => Promise<unknown> }) => action(),
+  });
+  const busy = mutation.isPending ? mutation.variables.key : null;
   const act = useCallback(
     async (key: string, action: () => Promise<unknown>) => {
-      setBusy(key);
       setNotice(null);
       try {
-        await action();
-        await load();
+        await mutation.mutateAsync({ key, action });
+        await queryClient.invalidateQueries({ queryKey: ["pull", repoKey, number] });
+        await queryClient.invalidateQueries({ queryKey: ["pulls"] });
         return true;
       } catch (err) {
         setNotice(err instanceof Error ? err.message : "The orchestrator did not respond.");
         return false;
-      } finally {
-        setBusy(null);
       }
     },
-    [load],
+    [mutation, queryClient, repoKey, number],
   );
 
   const timeline = useMemo(() => (detail ? buildTimeline(detail) : []), [detail]);
   const now = Date.now();
 
-  if (detail === null) {
+  if (detail === undefined) {
     return (
       <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-5 sm:py-7 md:px-8">
         <BackLink onBack={onBack} />
@@ -164,7 +160,7 @@ export function PullRequestDetailPage({
             size="icon-xs"
             aria-label="Refresh pull request"
             title="Refresh from GitHub"
-            onClick={() => void load()}
+            onClick={() => void refetch()}
             disabled={refreshing}
             className="text-haze-600 hover:text-haze-200"
           >

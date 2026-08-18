@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { BreviConfig, HealthResponse, LinearStatus, Run, Ticket, WorkerView } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -42,45 +43,31 @@ import { Archive, ChevronRight, Gear, Graph, Play, Plus, Pull, Repo, Unarchive }
 
 /**
  * Today's agent spend across every machine, for the footer's Usage row.
- * Null until the first read lands; a failed read stays null and the row
- * simply shows no figure. The orchestrator caches collections for a minute,
- * so the poll here costs one ccusage read at most.
+ * Null until the first read lands; a failed read keeps the last figure (the
+ * query retains its data) and the row simply shows nothing before then. The
+ * orchestrator caches collections for a minute, so the poll here costs one
+ * ccusage read at most.
  */
 function useTodayCost(): number | null {
-  const [cost, setCost] = useState<number | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      api
-        .usage()
-        .then((response) => {
-          if (cancelled) return;
-          const today = dayKey(new Date());
-          // ccusage keys days in each machine's local time, so a worker past
-          // midnight ahead of the browser reports its running day under
-          // tomorrow's key: take each machine's newest bucket at or after the
-          // browser's today rather than an exact match. A machine whose date
-          // is behind the browser's cannot be told apart from an idle one and
-          // counts zero until its date catches up.
-          setCost(
-            response.machines.reduce((total, machine) => {
-              const current = machine.days.filter((day) => day.date >= today).at(-1);
-              return total + (current?.costUsd ?? 0);
-            }, 0),
-          );
-        })
-        .catch(() => {
-          // The figure is decoration; the Usage page still opens without it.
-        });
-    };
-    load();
-    const id = setInterval(load, 5 * 60_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
-  return cost;
+  const { data } = useQuery({
+    queryKey: ["usage"],
+    queryFn: api.usage,
+    refetchInterval: 5 * 60_000,
+    // The figure is decoration; the Usage page still opens without it.
+    retry: false,
+  });
+  if (!data) return null;
+  const today = dayKey(new Date());
+  // ccusage keys days in each machine's local time, so a worker past
+  // midnight ahead of the browser reports its running day under tomorrow's
+  // key: take each machine's newest bucket at or after the browser's today
+  // rather than an exact match. A machine whose date is behind the browser's
+  // cannot be told apart from an idle one and counts zero until its date
+  // catches up.
+  return data.machines.reduce((total, machine) => {
+    const current = machine.days.filter((day) => day.date >= today).at(-1);
+    return total + (current?.costUsd ?? 0);
+  }, 0);
 }
 
 /** Orchestrator connection states, compact enough for the sidebar header. */
