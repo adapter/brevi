@@ -105,11 +105,13 @@ function pageFromPath(pathname: string): Page {
   if (/^\/setup\/?$/.test(pathname)) return "setup";
   if (/^\/usage\/?$/.test(pathname)) return "usage";
   const match =
-    /^\/config(?:\/(connectors|repositories|agent|fleet|memory|orchestrator|server))?\/?$/.exec(
+    /^\/config(?:\/(connectors|repositories|agent|fleet|workers|memory|orchestrator|server))?\/?$/.exec(
       pathname,
     );
   if (!match) return "home";
-  const section = (match[1] ?? "connectors") as ConfigSection;
+  // "workers" is the section's pre-rename URL; old bookmarks land on Fleet.
+  const segment = match[1] === "workers" ? "fleet" : match[1];
+  const section = (segment ?? "connectors") as ConfigSection;
   return `config:${section}`;
 }
 

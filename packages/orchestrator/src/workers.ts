@@ -1640,6 +1640,15 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
     const timer = this.#heartbeatTimers.get(entry.id);
     if (timer) clearTimeout(timer);
     this.#heartbeatTimers.delete(entry.id);
+    // Settle this worker's in-flight usage requests now: the answer can no
+    // longer arrive on this socket, and waiting out the timeout would hold
+    // /api/usage open for a disconnect that is already known.
+    for (const [requestId, request] of this.#usageRequests) {
+      if (request.workerId !== entry.id) continue;
+      clearTimeout(request.timer);
+      this.#usageRequests.delete(requestId);
+      request.reject(new Error("the worker disconnected before answering"));
+    }
     this.#emitWorkers();
 
     const leases = this.#leasesForWorker(entry.id);

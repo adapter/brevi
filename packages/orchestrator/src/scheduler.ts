@@ -1812,6 +1812,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         error: undefined,
         limit: undefined,
         resumeAt: undefined,
+        // Archive is a terminal-only state; a reactivated run must reappear.
+        archivedAt: undefined,
       });
       if (!this.#queue.includes(runId)) this.#queue.push(runId);
       this.#dispatchQueued();
@@ -2208,6 +2210,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     // for as long as the run waits for a free worker. Run-level PR metadata
     // (prUrl, prState) survives: the PR still exists while the retry runs,
     // and finalization replaces it.
+    // archivedAt clears too: only terminal runs can be archived, so a run
+    // coming back to life must reappear in the default list.
     const run = await this.store.setStatus(runId, "queued", {
       resumeAt: undefined,
       queuedAt: new Date().toISOString(),
@@ -2216,6 +2220,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       limit: undefined,
       result: undefined,
       queueReason,
+      archivedAt: undefined,
     });
     if (!this.#queue.includes(runId)) this.#queue.push(runId);
     this.#dispatchQueued();
