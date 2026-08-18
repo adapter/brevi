@@ -8,5 +8,10 @@ export function dayKey(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-export const usd = (value: number) =>
-  value >= 100 ? `$${Math.round(value)}` : `$${value.toFixed(2)}`;
+const usdFormat = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+});
+
+/** "$1,234.56": thousands separated, cents always shown. */
+export const usd = (value: number) => usdFormat.format(value);
