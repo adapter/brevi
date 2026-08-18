@@ -225,6 +225,20 @@ export const Edit = (p: IconProps) => (
   </Svg>
 );
 
+export const Archive = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="2" y="3" width="12" height="3.2" rx="0.8" />
+    <path d="M3.2 6.2v6a1 1 0 0 0 1 1h7.6a1 1 0 0 0 1-1v-6M6.4 8.8h3.2" />
+  </Svg>
+);
+
+export const Unarchive = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="2" y="3" width="12" height="3.2" rx="0.8" />
+    <path d="M3.2 6.2v6a1 1 0 0 0 1 1h7.6a1 1 0 0 0 1-1v-6M8 12v-3.4M6.5 10.1 8 8.6l1.5 1.5" />
+  </Svg>
+);
+
 export const Gear = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="8" cy="8" r="2.1" />

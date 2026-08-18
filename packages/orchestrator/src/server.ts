@@ -401,6 +401,22 @@ function buildApp(
     }
   });
 
+  app.post("/api/runs/:id/archive", async (c) => {
+    try {
+      return c.json(await orchestrator.archiveRun(c.req.param("id")));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/runs/:id/unarchive", async (c) => {
+    try {
+      return c.json(await orchestrator.unarchiveRun(c.req.param("id")));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
   app.post("/api/runs/:id/followup", async (c) => {
     try {
       return c.json(await orchestrator.followUpRun(c.req.param("id")));

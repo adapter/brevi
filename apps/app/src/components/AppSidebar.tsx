@@ -27,7 +27,7 @@ import { isActive, isTerminal, STATUS_TONE } from "../lib/status";
 import type { Page } from "../lib/useOrchestrator";
 import { Plate, StatusDot } from "./Bits";
 import { PROVIDERS } from "./config/ConnectorsSection";
-import { ChevronRight, Gear, Play, Repo } from "./Icons";
+import { Archive, ChevronRight, Gear, Play, Repo, Unarchive } from "./Icons";
 import { ThemeToggle } from "./ThemeToggle";
 
 /** Everything one project (repo key) holds, in the order the list renders it. */
@@ -59,6 +59,8 @@ export function AppSidebar({
   page,
   onRun,
   onOpenRun,
+  onArchiveRun,
+  onUnarchiveRun,
   onOpenConfig,
   onOpenWorkers,
 }: {
@@ -78,6 +80,8 @@ export function AppSidebar({
   /** Queues a run for the ticket; resolves to the new run's id, or null. */
   onRun: (ticketId: string) => Promise<string | null>;
   onOpenRun: (runId: string) => void;
+  onArchiveRun: (runId: string) => void;
+  onUnarchiveRun: (runId: string) => void;
   onOpenConfig: () => void;
   /** Opens the Workers config page, for the queue-only notice below. */
   onOpenWorkers: () => void;
@@ -108,8 +112,10 @@ export function AppSidebar({
       !runs.some((r) => r.ticket.id === ticket.id && r.ticket.updatedAt === ticket.updatedAt),
   );
 
-  const projects = groupByProject(runs, pending, config);
-  const runCount = runs.length + pending.length;
+  const visible = runs.filter((run) => run.archivedAt === undefined);
+  const archived = runs.filter((run) => run.archivedAt !== undefined);
+  const projects = groupByProject(visible, pending, config);
+  const runCount = visible.length + pending.length;
 
   const hostExecution = health?.hostExecution;
   const showQueueOnly = queueOnly(health, workers);
@@ -167,8 +173,41 @@ export function AppSidebar({
                     busy={busy}
                     onRun={onRun}
                     onOpenRun={openRun}
+                    onArchiveRun={onArchiveRun}
                   />
                 ))}
+              </div>
+            )}
+            {archived.length > 0 && (
+              <div className="mt-2 border-t border-sidebar-border px-1 pt-2">
+                <Collapsible>
+                  <CollapsibleTrigger className="group/archived touch-target flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-ink-800/60">
+                    <ChevronRight className="size-3 shrink-0 text-haze-700 transition-transform group-data-[panel-open]/archived:rotate-90" />
+                    <Archive className="size-3.5 shrink-0 text-haze-600" />
+                    <span className="min-w-0 truncate text-[12.5px] font-medium text-haze-400">
+                      Archived
+                    </span>
+                    <span className="ml-auto font-mono text-[10px] leading-none text-haze-700">
+                      {archived.length}
+                    </span>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <ul className="flex flex-col gap-1 pt-0.5 pr-0.5 pb-1.5 pl-5">
+                      {archived.map((run) => (
+                        <li key={run.id}>
+                          <RunRow
+                            run={run}
+                            now={now}
+                            selected={run.id === selectedRunId}
+                            busy={busy[run.id] === true}
+                            onOpen={() => openRun(run.id)}
+                            onArchive={() => onUnarchiveRun(run.id)}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  </CollapsibleContent>
+                </Collapsible>
               </div>
             )}
           </SidebarGroupContent>
@@ -260,6 +299,7 @@ function ProjectSection({
   busy,
   onRun,
   onOpenRun,
+  onArchiveRun,
 }: {
   project: ProjectGroup;
   now: number;
@@ -268,6 +308,7 @@ function ProjectSection({
   busy: Record<string, true | undefined>;
   onRun: (ticketId: string) => Promise<string | null>;
   onOpenRun: (runId: string) => void;
+  onArchiveRun: (runId: string) => void;
 }) {
   const count =
     project.active.length + project.queued.length + project.pending.length + project.finished.length;
@@ -293,7 +334,9 @@ function ProjectSection({
                 run={run}
                 now={now}
                 selected={run.id === selectedRunId}
+                busy={busy[run.id] === true}
                 onOpen={() => onOpenRun(run.id)}
+                onArchive={() => onArchiveRun(run.id)}
               />
             </li>
           ))}
@@ -303,7 +346,9 @@ function ProjectSection({
                 run={run}
                 now={now}
                 selected={run.id === selectedRunId}
+                busy={busy[run.id] === true}
                 onOpen={() => onOpenRun(run.id)}
+                onArchive={() => onArchiveRun(run.id)}
               />
             </li>
           ))}
@@ -328,7 +373,9 @@ function ProjectSection({
                 run={run}
                 now={now}
                 selected={run.id === selectedRunId}
+                busy={busy[run.id] === true}
                 onOpen={() => onOpenRun(run.id)}
+                onArchive={() => onArchiveRun(run.id)}
               />
             </li>
           ))}
@@ -340,58 +387,85 @@ function ProjectSection({
 
 /**
  * One run as a three-line card: the ticket id line, then the title given two
- * reserved lines so every card sits at the same height. Everything else
- * (chips, costs, actions) lives on the run's own page; the card is a plain
- * link so copy link and middle-click behave normally.
+ * reserved lines so every card sits at the same height. The whole card is a
+ * stretched link (so copy link and middle-click behave normally) with the
+ * archive control floated above it; a finished run archives, an archived one
+ * unarchives, and a live run has no archive control at all.
  */
 function RunRow({
   run,
   now,
   selected,
+  busy,
   onOpen,
+  onArchive,
 }: {
   run: Run;
   now: number;
   selected: boolean;
+  busy: boolean;
   onOpen: () => void;
+  /** Archives the run, or restores it when the run is already archived. */
+  onArchive: () => void;
 }) {
   const live = isActive(run.status);
   const time =
     live && run.startedAt ? duration(run.startedAt, now) : relative(run.createdAt, now);
+  const archived = run.archivedAt !== undefined;
+  const archiveLabel = archived ? "Unarchive run" : "Archive run";
 
   return (
-    <a
-      href={`/runs/${encodeURIComponent(run.id)}`}
-      onClick={(event) => {
-        if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
-        event.preventDefault();
-        onOpen();
-      }}
-      aria-current={selected ? "page" : undefined}
-      title={`${run.ticket.identifier}: ${run.ticket.title} (${STATUS_TONE[run.status].label})`}
-      className={`block rounded-lg px-2.5 py-2 ring-1 transition-colors ${
+    <div
+      className={`group/run relative rounded-lg px-2.5 py-2 ring-1 transition-colors ${
         selected
           ? "bg-ink-750 ring-ink-500"
           : "bg-card ring-foreground/10 hover:bg-ink-800"
       }`}
     >
-      <span className="flex h-6 items-center gap-1.5">
+      <a
+        href={`/runs/${encodeURIComponent(run.id)}`}
+        onClick={(event) => {
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+          event.preventDefault();
+          onOpen();
+        }}
+        aria-current={selected ? "page" : undefined}
+        aria-label={`Open run for ${run.ticket.identifier}: ${run.ticket.title}`}
+        title={`${run.ticket.identifier}: ${run.ticket.title} (${STATUS_TONE[run.status].label})`}
+        className="absolute inset-0 rounded-lg"
+      />
+      <span className="pointer-events-none relative flex h-6 items-center gap-1.5">
         <StatusDot status={run.status} size={6} />
         <span className="font-mono text-[10.5px] leading-none text-haze-400">
           {run.ticket.identifier}
         </span>
-        <span className="ml-auto font-mono text-[10px] leading-none tabular-nums text-haze-600">
-          {time}
+        <span className="ml-auto flex items-center gap-1">
+          {isTerminal(run.status) && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={archiveLabel}
+              title={archiveLabel}
+              disabled={busy}
+              onClick={onArchive}
+              className="pointer-events-auto text-haze-600 opacity-0 transition-opacity group-hover/run:opacity-100 hover:text-haze-200 focus-visible:opacity-100 pointer-coarse:opacity-100"
+            >
+              {archived ? <Unarchive className="size-3" /> : <Archive className="size-3" />}
+            </Button>
+          )}
+          <span className="font-mono text-[10px] leading-none tabular-nums text-haze-600">
+            {time}
+          </span>
         </span>
       </span>
       <span
-        className={`mt-1 line-clamp-2 min-h-[34px] text-[12.5px] leading-[17px] ${
+        className={`pointer-events-none relative mt-1 line-clamp-2 min-h-[34px] text-[12.5px] leading-[17px] ${
           selected ? "text-haze-50" : "text-haze-200"
         }`}
       >
         {run.ticket.title}
       </span>
-    </a>
+    </div>
   );
 }
 

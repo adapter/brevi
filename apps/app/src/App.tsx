@@ -37,6 +37,8 @@ export default function App() {
     runTicket,
     cancelRun,
     retryRun,
+    archiveRun,
+    unarchiveRun,
     followUpRun,
     dismissNotice,
     applyConfig,
@@ -87,6 +89,8 @@ export default function App() {
         page={page}
         onRun={handleRun}
         onOpenRun={openRun}
+        onArchiveRun={(id) => void archiveRun(id)}
+        onUnarchiveRun={(id) => void unarchiveRun(id)}
         onOpenConfig={() => openConfig()}
         onOpenWorkers={() => openConfig("workers")}
       />
@@ -128,6 +132,9 @@ export default function App() {
                 busy={busy[selectedRun.id] === true}
                 onCancel={() => void cancelRun(selectedRun.id)}
                 onRetry={() => void retryRun(selectedRun.id)}
+                onArchive={() =>
+                  void (selectedRun.archivedAt ? unarchiveRun : archiveRun)(selectedRun.id)
+                }
                 onFollowUp={() => followUpRun(selectedRun.id)}
                 onOpenWorkers={() => openConfig("workers")}
               />

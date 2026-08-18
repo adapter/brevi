@@ -77,6 +77,10 @@ export const api = {
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
   retryRun: (runId: string) =>
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/retry`, { method: "POST" }),
+  archiveRun: (runId: string) =>
+    json<Run>(`/api/runs/${encodeURIComponent(runId)}/archive`, { method: "POST" }),
+  unarchiveRun: (runId: string) =>
+    json<Run>(`/api/runs/${encodeURIComponent(runId)}/unarchive`, { method: "POST" }),
   followUpRun: (runId: string) =>
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/followup`, { method: "POST" }),
   prStatus: (runId: string) => json<PrStatusResponse>(`/api/runs/${encodeURIComponent(runId)}/pr`),

@@ -23,7 +23,7 @@ import { AttachTerminal } from "./AttachTerminal";
 import { Plate, PrChip, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { CostBadge, CostBreakdown } from "./CostBadge";
-import { External, Play, Refresh, Stop } from "./Icons";
+import { Archive, External, Play, Refresh, Stop, Unarchive } from "./Icons";
 import { ResultCard } from "./ResultCard";
 
 export function RunDetail({
@@ -36,6 +36,7 @@ export function RunDetail({
   busy,
   onCancel,
   onRetry,
+  onArchive,
   onFollowUp,
   onOpenWorkers,
 }: {
@@ -51,6 +52,8 @@ export function RunDetail({
   busy: boolean;
   onCancel: () => void;
   onRetry: () => void;
+  /** Archives the run, or restores it when the run is already archived. */
+  onArchive: () => void;
   onFollowUp: () => void | Promise<void>;
   /** Opens the Workers config page, for the queued banner's fix. */
   onOpenWorkers: () => void;
@@ -167,7 +170,7 @@ export function RunDetail({
             </span>
           </Badge>
           {prChipUrl && prChipState && <PrChip url={prChipUrl} state={prChipState} />}
-          {(live || retryable || showFollowUp) && (
+          {(live || retryable || showFollowUp || isTerminal(run.status)) && (
             <span aria-hidden className="h-4 w-px shrink-0 bg-ink-700" />
           )}
           {/* Coexists with Cancel while a follow-up is running (live): the user
@@ -196,6 +199,22 @@ export function RunDetail({
             <Button variant="outline" size="plate" onClick={onRetry} disabled={busy}>
               <Play className="size-3" />
               {busy ? "Retrying" : "Retry run"}
+            </Button>
+          )}
+          {isTerminal(run.status) && (
+            <Button
+              variant="outline"
+              size="plate"
+              onClick={onArchive}
+              disabled={busy}
+              title={
+                run.archivedAt
+                  ? "Bring the run back into the sidebar list"
+                  : "Hide the run from the sidebar list; it stays under Archived"
+              }
+            >
+              {run.archivedAt ? <Unarchive className="size-3" /> : <Archive className="size-3" />}
+              {run.archivedAt ? "Unarchive" : "Archive"}
             </Button>
           )}
         </span>

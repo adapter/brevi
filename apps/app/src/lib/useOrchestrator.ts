@@ -451,6 +451,30 @@ export function useOrchestrator() {
     }
   }, []);
 
+  const archiveRun = useCallback(async (runId: string) => {
+    dispatch({ t: "busy", key: runId, on: true });
+    dispatch({ t: "notice", notice: null });
+    try {
+      dispatch({ t: "run", run: await api.archiveRun(runId) });
+    } catch (err) {
+      dispatch({ t: "notice", notice: `Could not archive the run. ${errorText(err)}` });
+    } finally {
+      dispatch({ t: "busy", key: runId, on: false });
+    }
+  }, []);
+
+  const unarchiveRun = useCallback(async (runId: string) => {
+    dispatch({ t: "busy", key: runId, on: true });
+    dispatch({ t: "notice", notice: null });
+    try {
+      dispatch({ t: "run", run: await api.unarchiveRun(runId) });
+    } catch (err) {
+      dispatch({ t: "notice", notice: `Could not unarchive the run. ${errorText(err)}` });
+    } finally {
+      dispatch({ t: "busy", key: runId, on: false });
+    }
+  }, []);
+
   const followUpRun = useCallback(async (runId: string) => {
     dispatch({ t: "busy", key: runId, on: true });
     dispatch({ t: "notice", notice: null });
@@ -491,6 +515,8 @@ export function useOrchestrator() {
     runTicket,
     cancelRun,
     retryRun,
+    archiveRun,
+    unarchiveRun,
     followUpRun,
     dismissNotice,
     applyConfig,

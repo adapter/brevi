@@ -348,10 +348,21 @@ export interface Run {
    * the PR merges or closes. Absent while no PR exists.
    */
   prState?: PrState;
+  /** When the run's PR merged on GitHub, recorded when prState flips to "merged". Feeds the auto-archive merge rule. */
+  prMergedAt?: string;
+  /** When the run's Linear ticket completed or canceled, learned by the auto-archive sweep. */
+  ticketClosedAt?: string;
   /** When status is "waiting", the earliest time the next attempt may start. */
   resumeAt?: string;
   /** The most recent usage limit that interrupted this run. */
   limit?: LimitInfo;
+  /**
+   * When set, the run is archived: hidden from the default dashboard list
+   * but fully retained on disk. Set by hand from the dashboard or by the
+   * orchestrator's auto-archive sweep (see config.archive); cleared by
+   * unarchiving. Only terminal runs can be archived.
+   */
+  archivedAt?: string;
 }
 
 /** A single line of run activity, persisted as JSONL and streamed to the dashboard. */
