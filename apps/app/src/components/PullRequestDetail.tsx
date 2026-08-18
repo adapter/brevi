@@ -109,7 +109,7 @@ export function PullRequestDetailPage({
 
   if (detail === undefined) {
     return (
-      <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-5 sm:py-7 md:px-8">
+      <div className="w-full px-4 py-5 md:px-6">
         <BackLink onBack={onBack} />
         {error !== null ? (
           <Alert
@@ -136,10 +136,10 @@ export function PullRequestDetailPage({
   const failingChecks = detail.checks.filter((check) => isFailure(check.status)).length;
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-5 sm:py-7 md:px-8">
+    <div className="w-full px-4 py-5 md:px-6">
       <BackLink onBack={onBack} />
 
-      <header className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 lg:mt-0">
         <h2 className="min-w-0 flex-1 basis-64 text-[16px] leading-snug font-semibold text-haze-50">
           {pull.title}{" "}
           <a
@@ -304,6 +304,7 @@ export function PullRequestDetailPage({
   );
 }
 
+/** In the split view the list is always beside the detail; the back link only exists where the panes take turns. */
 function BackLink({ onBack }: { onBack: () => void }) {
   return (
     <a
@@ -313,7 +314,7 @@ function BackLink({ onBack }: { onBack: () => void }) {
         event.preventDefault();
         onBack();
       }}
-      className="touch-target inline-flex items-center gap-1.5 text-[12px] font-medium text-haze-500 hover:text-haze-100"
+      className="touch-target mb-3 inline-flex items-center gap-1.5 text-[12px] font-medium text-haze-500 hover:text-haze-100 lg:hidden"
     >
       <ArrowLeft className="size-3.5" />
       Pull requests
@@ -409,7 +410,7 @@ function ConversationTab({
         </div>
         <div className="p-3.5">
           {detail.body.trim() ? (
-            <Markdown>{detail.body}</Markdown>
+            <Markdown github>{detail.body}</Markdown>
           ) : (
             <p className="text-[12.5px] text-haze-600 italic">No description provided.</p>
           )}
@@ -451,7 +452,7 @@ function CommentCard({ comment, now }: { comment: PullComment; now: number }) {
         </span>
       </div>
       <div className="p-3.5">
-        <Markdown>{comment.body}</Markdown>
+        <Markdown github>{comment.body}</Markdown>
       </div>
     </Card>
   );
@@ -490,7 +491,7 @@ function ReviewCard({ review, now }: { review: PullReview; now: number }) {
       </div>
       {body && (
         <div className="p-3.5">
-          <Markdown>{body}</Markdown>
+          <Markdown github>{body}</Markdown>
         </div>
       )}
     </Card>
@@ -573,7 +574,7 @@ function ThreadCard({
               </span>
             </p>
             <div className="mt-1.5">
-              <Markdown>{comment.body}</Markdown>
+              <Markdown github>{comment.body}</Markdown>
             </div>
           </li>
         ))}

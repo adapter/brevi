@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { api } from "../lib/api";
 import { relative } from "../lib/format";
+import { PullRequestDetailPage } from "./PullRequestDetail";
 import { ChevronRight, Merge, Pull, Refresh, Warn } from "./Icons";
 
 /** Refresh cadence while the list is on screen. */
@@ -46,18 +47,79 @@ export function PullStateIcon({ state, className = "size-4" }: { state: PrState;
   return <Icon className={`${className} ${STATE_FG[state]}`} />;
 }
 
+/** One selected pull request, parsed out of the "pull:<repoKey>/<number>" page. */
+export interface PullSelection {
+  repoKey: string;
+  number: number;
+}
+
 /**
- * The Pull Requests page: every configured repository's PRs in one list,
- * filterable by state and repo, so working a PR never needs GitHub's own UI.
+ * The Pull Requests page as a full-width split view: the list pane on the
+ * left, the selected PR's detail filling the rest. Below lg the panes take
+ * turns instead (the detail carries a back link), since both cannot fit.
  */
-export function PullRequestsPage({
+export function PullsPage({
   config,
+  selected,
+  onOpenPull,
+  onOpenPulls,
+  onOpenConfig,
+}: {
+  config: BreviConfig | null;
+  selected: PullSelection | null;
+  onOpenPull: (repoKey: string, number: number) => void;
+  /** Clears the selection; the detail pane's back link on small screens. */
+  onOpenPulls: () => void;
+  /** Opens the Connectors config page, for the not-connected empty state. */
+  onOpenConfig: () => void;
+}) {
+  return (
+    <div className="flex h-full min-h-0">
+      <div
+        className={`${
+          selected ? "hidden lg:flex" : "flex"
+        } h-full min-h-0 w-full flex-col border-ink-700 lg:w-80 lg:shrink-0 lg:border-r xl:w-88`}
+      >
+        <PullListPane
+          config={config}
+          selected={selected}
+          onOpenPull={onOpenPull}
+          onOpenConfig={onOpenConfig}
+        />
+      </div>
+      <div className={`${selected ? "block" : "hidden lg:block"} h-full min-h-0 flex-1 overflow-y-auto`}>
+        {selected ? (
+          <PullRequestDetailPage
+            key={`${selected.repoKey}/${selected.number}`}
+            repoKey={selected.repoKey}
+            number={selected.number}
+            onBack={onOpenPulls}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center p-8">
+            <div className="text-center">
+              <Pull className="mx-auto size-6 text-haze-700" />
+              <p className="mt-3 text-[13px] font-medium text-haze-400">Select a pull request</p>
+              <p className="mt-1 text-[12px] leading-relaxed text-haze-600">
+                Its conversation, diff, checks, and merge controls open here.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PullListPane({
+  config,
+  selected,
   onOpenPull,
   onOpenConfig,
 }: {
   config: BreviConfig | null;
+  selected: PullSelection | null;
   onOpenPull: (repoKey: string, number: number) => void;
-  /** Opens the Connectors config page, for the not-connected empty state. */
   onOpenConfig: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>("open");
@@ -93,10 +155,10 @@ export function PullRequestsPage({
   const now = Date.now();
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-5 sm:py-7 md:px-8">
-      <header className="flex items-center gap-2.5">
-        <h2 className="text-[16px] font-semibold text-haze-50">Pull requests</h2>
-        <span className="ml-auto flex items-center gap-2">
+    <>
+      <header className="flex shrink-0 items-center gap-2 px-3 pt-4">
+        <h2 className="text-[14px] leading-none font-semibold text-haze-50">Pull requests</h2>
+        <span className="ml-auto flex items-center gap-1">
           {repoKeys.length > 1 && (
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -104,12 +166,15 @@ export function PullRequestsPage({
                   <button
                     type="button"
                     aria-label="Filter by repository"
-                    className="touch-target flex cursor-pointer items-center gap-1.5 rounded-md text-[12px] font-medium text-haze-400 hover:text-haze-100"
+                    title={repoFilter === "" ? "All repositories" : repoDisplayName(config, repoFilter)}
+                    className="touch-target flex max-w-40 cursor-pointer items-center gap-1 rounded-md text-[11.5px] font-medium text-haze-500 hover:text-haze-100"
                   />
                 }
               >
-                {repoFilter === "" ? "All repositories" : repoDisplayName(config, repoFilter)}
-                <ChevronRight className="size-3 rotate-90 text-haze-600" />
+                <span className="min-w-0 truncate">
+                  {repoFilter === "" ? "All repos" : repoDisplayName(config, repoFilter)}
+                </span>
+                <ChevronRight className="size-3 shrink-0 rotate-90 text-haze-600" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-44">
                 <DropdownMenuRadioGroup value={repoFilter} onValueChange={setRepoFilter}>
@@ -136,14 +201,10 @@ export function PullRequestsPage({
           </Button>
         </span>
       </header>
-      <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
-        Every configured repository&apos;s pull requests: read the diff, answer reviews, watch
-        checks, and merge, all without leaving Mission Control.
-      </p>
 
       <nav
         aria-label="Pull request states"
-        className="no-scrollbar mt-4 flex items-center gap-4 overflow-x-auto border-b border-ink-700"
+        className="no-scrollbar mx-3 mt-2.5 flex shrink-0 items-center gap-3.5 overflow-x-auto border-b border-ink-700"
       >
         {FILTERS.map(({ id, label }) => {
           const active = filter === id;
@@ -170,32 +231,31 @@ export function PullRequestsPage({
         })}
       </nav>
 
-      {error !== null && !notConnected && (
-        <Alert
-          variant="destructive"
-          className="mt-4 items-center rounded-lg border-rust-500/30 bg-rust-500/10 px-3 py-2"
-        >
-          <Warn className="size-3.5 text-rust-400" />
-          <AlertDescription className="text-[12.5px] text-rust-400">
-            Could not refresh pull requests. {error}
-          </AlertDescription>
-        </Alert>
-      )}
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        {error !== null && !notConnected && (
+          <Alert
+            variant="destructive"
+            className="mb-2 items-center rounded-lg border-rust-500/30 bg-rust-500/10 px-2.5 py-1.5"
+          >
+            <Warn className="size-3.5 text-rust-400" />
+            <AlertDescription className="text-[11.5px] text-rust-400">
+              Could not refresh. {error}
+            </AlertDescription>
+          </Alert>
+        )}
+        {response?.errors.map((repoError) => (
+          <Alert
+            key={repoError.repo}
+            variant="destructive"
+            className="mb-2 items-center rounded-lg border-rust-500/30 bg-rust-500/10 px-2.5 py-1.5"
+          >
+            <Warn className="size-3.5 text-rust-400" />
+            <AlertDescription className="text-[11.5px] text-rust-400">
+              {repoError.remote}: {repoError.message}
+            </AlertDescription>
+          </Alert>
+        ))}
 
-      {response?.errors.map((repoError) => (
-        <Alert
-          key={repoError.repo}
-          variant="destructive"
-          className="mt-4 items-center rounded-lg border-rust-500/30 bg-rust-500/10 px-3 py-2"
-        >
-          <Warn className="size-3.5 text-rust-400" />
-          <AlertDescription className="text-[12.5px] text-rust-400">
-            {repoError.remote}: {repoError.message}
-          </AlertDescription>
-        </Alert>
-      ))}
-
-      <div className="mt-4">
         {notConnected ? (
           <EmptyNote>
             GitHub isn&apos;t connected, so there are no pull requests to show.{" "}
@@ -218,16 +278,21 @@ export function PullRequestsPage({
               : `No ${filter === "all" ? "" : `${filter} `}pull requests${repoFilter ? " in this repository" : ""}.`}
           </EmptyNote>
         ) : (
-          <ul className="flex flex-col overflow-hidden rounded-lg ring-1 ring-foreground/10">
+          <ul className="flex flex-col gap-1">
             {pulls.map((pull) => (
-              <li key={`${pull.repo}#${pull.number}`} className="border-b border-ink-700/60 last:border-b-0">
-                <PullRow pull={pull} now={now} onOpen={() => onOpenPull(pull.repo, pull.number)} />
+              <li key={`${pull.repo}#${pull.number}`}>
+                <PullRow
+                  pull={pull}
+                  now={now}
+                  selected={selected?.repoKey === pull.repo && selected.number === pull.number}
+                  onOpen={() => onOpenPull(pull.repo, pull.number)}
+                />
               </li>
             ))}
           </ul>
         )}
       </div>
-    </div>
+    </>
   );
 }
 
@@ -236,15 +301,25 @@ function repoDisplayName(config: BreviConfig | null, key: string): string {
 }
 
 function EmptyNote({ children }: { children: React.ReactNode }) {
-  return <p className="px-1 py-6 text-[12.5px] leading-relaxed text-haze-600">{children}</p>;
+  return <p className="px-1.5 py-4 text-[12.5px] leading-relaxed text-haze-600">{children}</p>;
 }
 
 /**
- * One pull request row: state icon, title, and the who/where/when line,
- * GitHub's list distilled. The whole row is a real link so middle-click and
+ * One pull request row, compact for the pane: the state and where/when line,
+ * then the title clamped to two lines. A real link, so middle-click and
  * copy-link behave.
  */
-function PullRow({ pull, now, onOpen }: { pull: PullSummary; now: number; onOpen: () => void }) {
+function PullRow({
+  pull,
+  now,
+  selected,
+  onOpen,
+}: {
+  pull: PullSummary;
+  now: number;
+  selected: boolean;
+  onOpen: () => void;
+}) {
   return (
     <a
       href={`/pulls/${encodeURIComponent(pull.repo)}/${pull.number}`}
@@ -253,28 +328,35 @@ function PullRow({ pull, now, onOpen }: { pull: PullSummary; now: number; onOpen
         event.preventDefault();
         onOpen();
       }}
-      className="flex cursor-pointer items-start gap-2.5 bg-card px-3 py-2.5 transition-colors hover:bg-ink-800"
+      aria-current={selected ? "page" : undefined}
+      title={`${pull.remote}#${pull.number}: ${pull.title}`}
+      className={`block rounded-lg px-2.5 py-1.5 ring-1 transition-colors ${
+        selected ? "bg-ink-750 ring-ink-500" : "bg-card ring-foreground/10 hover:bg-ink-800"
+      }`}
     >
-      <PullStateIcon state={pull.state} className="mt-[1px] size-4 shrink-0" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-medium text-haze-100" title={pull.title}>
-          {pull.title}
+      <span className="flex h-5 items-center gap-1.5">
+        <PullStateIcon state={pull.state} className="size-3.5 shrink-0" />
+        <span className="min-w-0 truncate font-mono text-[10.5px] leading-none text-haze-400">
+          {pull.remote.split("/")[1] ?? pull.remote}#{pull.number}
         </span>
-        <span className="mt-0.5 block truncate font-mono text-[10.5px] leading-relaxed text-haze-600">
-          {pull.remote}#{pull.number}
-          <span className="text-haze-700"> · </span>
-          {pull.author}
-          <span className="text-haze-700"> · </span>
-          {pull.headBranch}
-          <span className="text-haze-700"> → </span>
-          {pull.baseBranch}
+        <span
+          className="ml-auto shrink-0 font-mono text-[10px] leading-none tabular-nums text-haze-600"
+          title={pull.state === "merged" ? "Merged" : "Last activity"}
+        >
+          {relative(pull.mergedAt ?? pull.updatedAt, now)}
         </span>
       </span>
       <span
-        className="mt-[2px] shrink-0 font-mono text-[10.5px] leading-none tabular-nums text-haze-600"
-        title={pull.state === "merged" ? "Merged" : "Last activity"}
+        className={`mt-0.5 line-clamp-2 text-[12px] leading-[16px] ${
+          selected ? "text-haze-50" : "text-haze-200"
+        }`}
       >
-        {relative(pull.mergedAt ?? pull.updatedAt, now)}
+        {pull.title}
+      </span>
+      <span className="mt-0.5 block truncate font-mono text-[10px] leading-relaxed text-haze-600">
+        {pull.author}
+        <span className="text-haze-700"> · </span>
+        {pull.headBranch}
       </span>
     </a>
   );

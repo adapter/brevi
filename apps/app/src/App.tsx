@@ -7,8 +7,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger, useSidebar } from "@/com
 import { AppSidebar } from "./components/AppSidebar";
 import { ConfigurationPage } from "./components/Configuration";
 import { Overview } from "./components/Overview";
-import { PullRequestDetailPage } from "./components/PullRequestDetail";
-import { PullRequestsPage } from "./components/PullRequests";
+import { PullsPage, type PullSelection } from "./components/PullRequests";
 import { RepoSettingsPage } from "./components/RepoSettings";
 import { RunDetail } from "./components/RunDetail";
 import { Setup } from "./components/Setup";
@@ -35,6 +34,17 @@ function FloatingSidebarTrigger() {
       />
     </div>
   );
+}
+
+/**
+ * Selection carried by a "pull:<repoKey>/<number>" page; the key may itself
+ * contain slashes, so the number is whatever follows the last one.
+ */
+function pullSelectionOf(page: string): PullSelection | null {
+  if (!page.startsWith("pull:")) return null;
+  const raw = page.slice("pull:".length);
+  const cut = raw.lastIndexOf("/");
+  return { repoKey: raw.slice(0, cut), number: Number(raw.slice(cut + 1)) };
 }
 
 export default function App() {
@@ -177,27 +187,14 @@ export default function App() {
             )
           ) : page === "usage" ? (
             <UsagePage />
-          ) : page === "pulls" ? (
-            <PullRequestsPage
+          ) : page === "pulls" || page.startsWith("pull:") ? (
+            <PullsPage
               config={config}
+              selected={pullSelectionOf(page)}
               onOpenPull={openPull}
+              onOpenPulls={openPulls}
               onOpenConfig={() => openConfig("connectors")}
             />
-          ) : page.startsWith("pull:") ? (
-            (() => {
-              // "pull:<repoKey>/<number>"; the key may itself contain slashes,
-              // so the number is whatever follows the last one.
-              const raw = page.slice("pull:".length);
-              const cut = raw.lastIndexOf("/");
-              return (
-                <PullRequestDetailPage
-                  key={raw}
-                  repoKey={raw.slice(0, cut)}
-                  number={Number(raw.slice(cut + 1))}
-                  onBack={openPulls}
-                />
-              );
-            })()
           ) : page === "setup" ? (
             <Setup
               config={config}
