@@ -69,8 +69,17 @@ export interface Sandbox {
   readFile(path: string): Promise<string>;
   /** How to open an interactive session inside this sandbox from the host. */
   connection(): SandboxConnection;
-  /** argv that runs `command` inside the sandbox (PTY attach uses the same wrap as exec). */
-  wrap(command: string, args: string[], cwd?: string, options?: { newSession?: boolean }): SandboxLaunch;
+  /**
+   * argv that runs `command` inside the sandbox (PTY attach uses the same
+   * wrap as exec). `env` is extra environment merged over the sandbox's
+   * sanitized env (same semantics and precedence as `ExecOptions.env` in exec).
+   */
+  wrap(
+    command: string,
+    args: string[],
+    cwd?: string,
+    options?: { newSession?: boolean; env?: Record<string, string> },
+  ): SandboxLaunch;
   /**
    * Stop the sandbox's compute but keep its filesystem on host disk so
    * provider.rehydrate() can bring it back later.

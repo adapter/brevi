@@ -110,6 +110,111 @@ describe("usageCollector (claude)", () => {
     expect(withCost[0]?.costUsd).toBe(1.25);
   });
 
+  it("uses the result event's modelUsage as the per-model split when present", () => {
+    // modelUsage covers the main loop, Task subagents, and sidechains, so it's
+    // the authoritative split (Claude Agent SDK and recent CLIs); it should
+    // win over the assistant-event accumulation rather than merely supplement it.
+    const usage = usageCollector("claude");
+    usage.observe(init);
+    usage.observe(assistant("claude-opus-5", { input_tokens: 100, output_tokens: 50 }));
+    usage.observe({
+      type: "result",
+      usage: { input_tokens: 510, output_tokens: 255 },
+      total_cost_usd: 1.25,
+      modelUsage: {
+        "claude-opus-5": {
+          inputTokens: 300,
+          outputTokens: 150,
+          cacheReadInputTokens: 2_000,
+          cacheCreationInputTokens: 500,
+          costUSD: 0.9,
+        },
+        "claude-haiku-4-5": {
+          inputTokens: 210,
+          outputTokens: 105,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+          costUSD: 0.35,
+        },
+      },
+    });
+
+    const entry = usage.snapshot({ label: "implementation", subscription: false });
+    if (!entry) throw new Error("expected an entry");
+    // Top-level figures still come from the result event's usage/total_cost_usd.
+    expect(entry.inputTokens).toBe(510);
+    expect(entry.outputTokens).toBe(255);
+    expect(entry.costUsd).toBe(1.25);
+    expect(entry.estimated).toBeUndefined();
+
+    const breakdown = entry.breakdown ?? [];
+    expect(breakdown.map((row) => row.model).sort()).toEqual(["claude-haiku-4-5", "claude-opus-5"]);
+    const opus = breakdown.find((row) => row.model === "claude-opus-5");
+    expect(opus?.inputTokens).toBe(300);
+    expect(opus?.outputTokens).toBe(150);
+    expect(opus?.cacheReadTokens).toBe(2_000);
+    expect(opus?.cacheWriteTokens).toBe(500);
+    expect(opus?.costUsd).toBe(0.9);
+    const haiku = breakdown.find((row) => row.model === "claude-haiku-4-5");
+    expect(haiku?.inputTokens).toBe(210);
+    expect(haiku?.outputTokens).toBe(105);
+    expect(haiku?.costUsd).toBe(0.35);
+  });
+
+  it("does not let a modelUsage row's costUSD of 0 count as a known cost", () => {
+    const usage = usageCollector("claude");
+    usage.observe(init);
+    usage.observe({
+      type: "result",
+      usage: { input_tokens: 100, output_tokens: 50 },
+      modelUsage: {
+        "claude-opus-5": { inputTokens: 100, outputTokens: 50, costUSD: 0 },
+      },
+    });
+
+    const entry = usage.snapshot({ label: "implementation", subscription: false });
+    if (!entry) throw new Error("expected an entry");
+    // No source reported a usable cost (result carried no total_cost_usd, and
+    // the row's costUSD was 0), so the pricing table estimates it instead.
+    expect(entry.breakdown).toBeUndefined();
+    expect(entry.estimated).toBe(true);
+    expect(entry.costUsd).toBeGreaterThan(0);
+  });
+
+  it("falls back to assistant-event accumulation when modelUsage is malformed", () => {
+    const usage = usageCollector("claude");
+    usage.observe(init);
+    usage.observe(assistant("claude-opus-5", { input_tokens: 100, output_tokens: 50 }));
+    usage.observe(assistant("claude-haiku-4-5", { input_tokens: 400, output_tokens: 200 }));
+    usage.observe({
+      type: "result",
+      usage: { input_tokens: 500, output_tokens: 250 },
+      total_cost_usd: 0.75,
+      modelUsage: "not-a-dict",
+    });
+
+    const entry = usage.snapshot({ label: "implementation", subscription: false });
+    if (!entry) throw new Error("expected an entry");
+    expect(entry.costUsd).toBe(0.75);
+    expect(entry.breakdown?.map((row) => row.model).sort()).toEqual(["claude-haiku-4-5", "claude-opus-5"]);
+
+    const usage2 = usageCollector("claude");
+    usage2.observe(init);
+    usage2.observe(assistant("claude-opus-5", { input_tokens: 100, output_tokens: 50 }));
+    usage2.observe({
+      type: "result",
+      usage: { input_tokens: 100, output_tokens: 50 },
+      total_cost_usd: 0.5,
+      modelUsage: { "claude-opus-5": "not-a-dict", "claude-haiku-4-5": 42 },
+    });
+
+    const entry2 = usage2.snapshot({ label: "implementation", subscription: false });
+    if (!entry2) throw new Error("expected an entry");
+    expect(entry2.costUsd).toBe(0.5);
+    expect(entry2.breakdown).toBeUndefined();
+    expect(entry2.model).toBe("claude-opus-5");
+  });
+
   it("stays single-model (no breakdown) for undelegated executions", () => {
     const usage = usageCollector("claude");
     usage.observe(init);

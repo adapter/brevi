@@ -124,8 +124,13 @@ class BwrapSandbox implements Sandbox {
     this.#env = env;
   }
 
-  wrap(command: string, args: string[], cwd?: string, options?: { newSession?: boolean }): SandboxLaunch {
-    const env = sandboxEnv(this.homePath, this.#env);
+  wrap(
+    command: string,
+    args: string[],
+    cwd?: string,
+    options?: { newSession?: boolean; env?: Record<string, string> },
+  ): SandboxLaunch {
+    const env = sandboxEnv(this.homePath, this.#env, options?.env);
     return wrapInBwrap(this.#tools, this.#rootDir, command, args, resolveHostPath(this.workspacePath, cwd), {
       newSession: options?.newSession ?? true,
       env,

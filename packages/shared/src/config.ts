@@ -110,9 +110,17 @@ export const configSchema = z.object({
     .object({
       /**
        * Coding agent CLI brevi executes. It has to be on the worker host's
-       * PATH (bwrap bind-mounts the host binaries into the sandbox).
+       * PATH (bwrap bind-mounts the host binaries into the sandbox). For
+       * Claude it names the executable handed to the Agent SDK as the
+       * Claude Code binary; for Codex/Grok it is executed directly.
        */
       command: z.string().default("claude"),
+      /**
+       * Extra arguments. For Claude runs these are mapped onto the Agent
+       * SDK's extra CLI arguments (flag/value or bare-flag pairs only;
+       * positional tokens are skipped with a run log line). For Codex/Grok
+       * they are appended verbatim after brevi's own arguments.
+       */
       args: z.array(z.string()).default([]),
       /**
        * When set, runs everything on this one model with no subagent

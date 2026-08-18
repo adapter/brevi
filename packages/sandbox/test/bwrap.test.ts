@@ -151,6 +151,16 @@ describe("sandboxEnv", () => {
     expect(env.PLAYWRIGHT_CHROMIUM_SANDBOX).toBe("0");
     expect(env.BREVI_WORKER_CREDENTIAL).toBeUndefined();
   });
+
+  // This is the merge BwrapSandbox.wrap() applies to a caller's `options.env`;
+  // exercised directly here because BwrapProvider.create() needs bwrap/pasta
+  // on PATH, which this (macOS) test host does not have.
+  test("caller extras from wrap() override create-time env for the same key and keep the rest", () => {
+    const env = sandboxEnv("/tmp/run-1/home", { CODEX_HOME: "/create-time", KEPT: "yes" }, { CODEX_HOME: "/x" });
+    expect(env.HOME).toBe("/tmp/run-1/home");
+    expect(env.CODEX_HOME).toBe("/x");
+    expect(env.KEPT).toBe("yes");
+  });
 });
 
 describe("collectBwrapProblems", () => {
