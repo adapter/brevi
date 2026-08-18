@@ -28,6 +28,13 @@ export interface UsageSnapshot {
   source: "claude";
   projectKey: string;
   sessionId: string;
+  /**
+   * Set when this snapshot came from a subagent transcript rather than the
+   * main session file: the stem of the subagent's jsonl file name (Claude
+   * writes it as `projects/<dir>/<sessionId>/subagents/<subagentId>.jsonl`).
+   * Absent for a main-session snapshot, so existing consumers see no change.
+   */
+  subagentId?: string;
   jsonl: string;
   contentHash: string;
 }
@@ -103,17 +110,31 @@ export function minimizeClaudeSessionJsonl(raw: string, sessionId: string): { js
   return { jsonl: out.length > 0 ? `${out.join("\n")}\n` : "", kept: out.length, malformed };
 }
 
+/** One discovered transcript file: a main session's own file, or one of its subagents'. */
+interface TranscriptRecord {
+  sessionId: string;
+  subagentId?: string;
+  path: string;
+}
+
 /**
  * Every session transcript under the home's Claude data roots, optionally
  * narrowed to one session id. Claude mangles the cwd into the project
  * directory's name, which is undocumented and version-dependent, so the tree
- * is scanned rather than the name computed. First root wins on a duplicate id.
+ * is scanned rather than the name computed. First root wins on a duplicate
+ * identity (a main session's own id, or `sessionId/subagentId` for a
+ * subagent transcript).
+ *
+ * Alongside each project directory's top-level `<sessionId>.jsonl` files,
+ * Claude also nests subagent transcripts one level deeper, at
+ * `<sessionId>/subagents/<subagentId>.jsonl`; both shapes are scanned so a
+ * run's exported usage snapshot never misses tokens burned by a subagent.
  */
-async function findSessionTranscripts(homePath: string, sessionId?: string): Promise<Array<{ sessionId: string; path: string }>> {
-  const found = new Map<string, string>();
+async function findSessionTranscripts(homePath: string, sessionId?: string): Promise<TranscriptRecord[]> {
+  const found = new Map<string, TranscriptRecord>();
   for (const root of CLAUDE_DATA_ROOTS) {
     const projectsDir = join(homePath, root, "projects");
-    // Both directory levels sit in the agent-writable tree, so they are
+    // Every directory level sits in the agent-writable tree, so each is
     // enumerated through the sandbox package's no-follow traversal: a
     // component swapped for a symlink fails the listing instead of pointing
     // the scan at an arbitrary host directory.
@@ -125,21 +146,45 @@ async function findSessionTranscripts(homePath: string, sessionId?: string): Pro
     }
     for (const dir of projectDirs) {
       if (!isSafePathSegment(dir)) continue;
-      let files: string[];
+      let entries: string[];
       try {
-        files = await readdirWithin(homePath, join(projectsDir, dir));
+        entries = await readdirWithin(homePath, join(projectsDir, dir));
       } catch {
         continue;
       }
-      for (const file of files) {
-        if (!file.endsWith(".jsonl") || !isSafePathSegment(file)) continue;
-        const id = file.slice(0, -".jsonl".length);
-        if (id.length === 0 || (sessionId !== undefined && id !== sessionId)) continue;
-        if (!found.has(id)) found.set(id, join(projectsDir, dir, file));
+      for (const entry of entries) {
+        if (!isSafePathSegment(entry)) continue;
+        if (entry.endsWith(".jsonl")) {
+          // A main session's own transcript.
+          const id = entry.slice(0, -".jsonl".length);
+          if (id.length === 0 || (sessionId !== undefined && id !== sessionId)) continue;
+          if (!found.has(id)) found.set(id, { sessionId: id, path: join(projectsDir, dir, entry) });
+          continue;
+        }
+        // Otherwise `entry` may be a session directory holding subagent
+        // transcripts; a plain file or a missing/non-directory `subagents`
+        // throws ENOTDIR/ENOENT from the traversal, which is simply skipped,
+        // same idiom as the listings above.
+        if (sessionId !== undefined && entry !== sessionId) continue;
+        let subagentFiles: string[];
+        try {
+          subagentFiles = await readdirWithin(homePath, join(projectsDir, dir, entry, "subagents"));
+        } catch {
+          continue;
+        }
+        for (const subagentFile of subagentFiles) {
+          if (!subagentFile.endsWith(".jsonl") || !isSafePathSegment(subagentFile)) continue;
+          const subagentId = subagentFile.slice(0, -".jsonl".length);
+          if (subagentId.length === 0) continue;
+          const identity = `${entry}/${subagentId}`;
+          if (!found.has(identity)) {
+            found.set(identity, { sessionId: entry, subagentId, path: join(projectsDir, dir, entry, "subagents", subagentFile) });
+          }
+        }
       }
     }
   }
-  return [...found].map(([id, path]) => ({ sessionId: id, path }));
+  return [...found.values()];
 }
 
 export interface CollectUsageSnapshotsOptions {
@@ -166,6 +211,10 @@ export async function collectUsageSnapshots(options: CollectUsageSnapshotsOption
   }
   const snapshots: UsageSnapshot[] = [];
   for (const transcript of transcripts) {
+    // Identifies this transcript in diagnostics: a subagent's is qualified
+    // with its parent session so a read failure or malformed line can be
+    // traced back to the right transcript file.
+    const label = transcript.subagentId !== undefined ? `session ${transcript.sessionId} subagent ${transcript.subagentId}` : `session ${transcript.sessionId}`;
     let raw: string;
     try {
       // The transcript sits in an agent-writable tree, and another process
@@ -176,22 +225,23 @@ export async function collectUsageSnapshots(options: CollectUsageSnapshotsOption
       // and the read bounded to it.
       raw = await readFileWithin(homePath, transcript.path, MAX_RAW_TRANSCRIPT_BYTES);
     } catch (error) {
-      log(`usage snapshot: could not read session ${transcript.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+      log(`usage snapshot: could not read ${label}: ${error instanceof Error ? error.message : String(error)}`);
       continue;
     }
     const minimized = minimizeClaudeSessionJsonl(raw, transcript.sessionId);
     if (minimized.malformed > 0) {
-      log(`usage snapshot: skipped ${minimized.malformed} malformed transcript line(s) for session ${transcript.sessionId}`);
+      log(`usage snapshot: skipped ${minimized.malformed} malformed transcript line(s) for ${label}`);
     }
     if (minimized.kept === 0) continue;
     if (Buffer.byteLength(minimized.jsonl, "utf8") > WORKER_MAX_USAGE_SNAPSHOT_BYTES) {
-      log(`usage snapshot: session ${transcript.sessionId} minimizes to over the ${WORKER_MAX_USAGE_SNAPSHOT_BYTES}-byte transfer limit; skipped`);
+      log(`usage snapshot: ${label} minimizes to over the ${WORKER_MAX_USAGE_SNAPSHOT_BYTES}-byte transfer limit; skipped`);
       continue;
     }
     snapshots.push({
       source: "claude",
       projectKey,
       sessionId: transcript.sessionId,
+      ...(transcript.subagentId !== undefined ? { subagentId: transcript.subagentId } : {}),
       jsonl: minimized.jsonl,
       contentHash: createHash("sha256").update(minimized.jsonl).digest("hex"),
     });

@@ -36,6 +36,13 @@ import type {
  */
 
 /**
+ * 5 since subagent usage snapshots: a version-5 worker exports subagent
+ * transcripts as `run-usage-snapshot` frames distinguished only by the new
+ * `subagentId` field. A version-4 host parses such a frame fine but strips
+ * the unknown field, and would archive the subagent snapshot over its parent
+ * session's file, silently corrupting the usage archive it exists to keep.
+ * That pairing has to be rejected, not miscounted.
+ *
  * 4 since usage snapshots: a version-4 worker stamps `run-usage-snapshot`
  * frames into its lease sequence and never drops them, but a version-3 host
  * cannot parse the frame and would silently discard it, leaving a permanent
@@ -50,7 +57,7 @@ import type {
  * pairing token, and the host answers with the worker's assigned id, so a
  * version-1 worker's frame is not merely older, it is unauthenticatable.
  */
-export const WORKER_PROTOCOL_VERSION = 4;
+export const WORKER_PROTOCOL_VERSION = 5;
 /** WebSocket path workers dial on the host. */
 export const WORKER_WS_PATH = "/ws/worker";
 /**
@@ -547,6 +554,14 @@ export const runUsageSnapshotMessageSchema = z.object({
   projectKey: z.string().min(1).max(200),
   /** Claude session id; names the session's file in the archive. */
   sessionId: z.string().min(1).max(200),
+  /**
+   * Present when the snapshot is a subagent transcript nested under the
+   * session (Claude writes them to
+   * `projects/<dir>/<session-id>/subagents/agent-<hash>.jsonl`). The archive
+   * mirrors that layout, so the pair (sessionId, subagentId) names the file
+   * and a re-export still replaces it wholesale instead of double-counting.
+   */
+  subagentId: z.string().min(1).max(200).optional(),
   /** Sanitized usage-only session JSONL, bounded by WORKER_MAX_USAGE_SNAPSHOT_BYTES (the host re-checks the byte length). */
   jsonl: z.string().max(WORKER_MAX_USAGE_SNAPSHOT_BYTES),
   /** Hex SHA-256 of jsonl; the host drops a frame whose payload does not match it. */

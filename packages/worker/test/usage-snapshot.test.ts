@@ -124,6 +124,15 @@ describe("collectUsageSnapshots", () => {
     return path;
   };
 
+  /** A subagent transcript nested under its session directory, mirroring Claude's own layout. */
+  const writeSubagentTranscript = (root: string, sessionId: string, subagentId: string, content: string): string => {
+    const dir = join(home, root, "projects", "-home-brevi-workspace", sessionId, "subagents");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, `${subagentId}.jsonl`);
+    writeFileSync(path, content);
+    return path;
+  };
+
   it("finds the captured session under .claude/projects and hashes its sanitized snapshot", async () => {
     writeTranscript(".claude", SESSION_ID, `${promptLine}\n${assistantLine}\n`);
     const snapshots = await collectUsageSnapshots({ homePath: home, projectKey: "brevi-a-b", sessionId: SESSION_ID, log });
@@ -190,5 +199,57 @@ describe("collectUsageSnapshots", () => {
     const snapshots = await collectUsageSnapshots({ homePath: home, projectKey: "brevi-a-b", sessionId: SESSION_ID, log });
     expect(snapshots).toEqual([]);
     expect(logs.some((line) => line.includes("malformed"))).toBe(true);
+  });
+
+  it("finds a subagent transcript nested under its session directory alongside the main session", async () => {
+    writeTranscript(".claude", SESSION_ID, `${assistantLine}\n`);
+    writeSubagentTranscript(".claude", SESSION_ID, "agent-abc123", `${assistantLine}\n`);
+    const snapshots = await collectUsageSnapshots({ homePath: home, projectKey: "brevi-a-b", sessionId: SESSION_ID, log });
+    expect(snapshots).toHaveLength(2);
+    const subagent = snapshots.find((s) => s.subagentId !== undefined);
+    expect(subagent?.subagentId).toBe("agent-abc123");
+    expect(subagent?.sessionId).toBe(SESSION_ID);
+    expect(subagent?.jsonl).not.toContain("secret");
+    expect(subagent?.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    const main = snapshots.find((s) => s.subagentId === undefined);
+    expect(main?.sessionId).toBe(SESSION_ID);
+  });
+
+  it("excludes a different session's subagent transcripts when filtering by sessionId", async () => {
+    const otherSessionId = "66666666-7777-8888-9999-000000000000";
+    writeTranscript(".claude", SESSION_ID, `${assistantLine}\n`);
+    writeSubagentTranscript(".claude", otherSessionId, "agent-other", `${assistantLine}\n`);
+    const snapshots = await collectUsageSnapshots({ homePath: home, projectKey: "brevi-a-b", sessionId: SESSION_ID, log });
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]!.subagentId).toBeUndefined();
+    expect(snapshots[0]!.sessionId).toBe(SESSION_ID);
+  });
+
+  it("exports subagent transcripts for every session too when no id is given: the attach re-export", async () => {
+    const otherSessionId = "66666666-7777-8888-9999-000000000000";
+    writeTranscript(".claude", SESSION_ID, `${assistantLine}\n`);
+    writeTranscript(".claude", otherSessionId, `${assistantLine}\n`);
+    writeSubagentTranscript(".claude", SESSION_ID, "agent-abc123", `${assistantLine}\n`);
+    writeSubagentTranscript(".claude", otherSessionId, "agent-def456", `${assistantLine}\n`);
+    const snapshots = await collectUsageSnapshots({ homePath: home, projectKey: "brevi-a-b", log });
+    expect(snapshots).toHaveLength(4);
+    const identities = snapshots.map((s) => (s.subagentId !== undefined ? `${s.sessionId}/${s.subagentId}` : s.sessionId)).sort();
+    expect(identities).toEqual([SESSION_ID, `${SESSION_ID}/agent-abc123`, otherSessionId, `${otherSessionId}/agent-def456`].sort());
+  });
+
+  it("yields no subagent snapshots when the subagents directory is a symlink out of the sandbox home", async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), "brevi-usage-subagents-elsewhere-"));
+    try {
+      writeFileSync(join(elsewhere, "agent-outside.jsonl"), `${assistantLine}\n`);
+      writeTranscript(".claude", SESSION_ID, `${assistantLine}\n`);
+      const sessionDir = join(home, ".claude", "projects", "-home-brevi-workspace", SESSION_ID);
+      mkdirSync(sessionDir, { recursive: true });
+      symlinkSync(elsewhere, join(sessionDir, "subagents"));
+      const snapshots = await collectUsageSnapshots({ homePath: home, projectKey: "brevi-a-b", sessionId: SESSION_ID, log });
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]!.subagentId).toBeUndefined();
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
   });
 });
