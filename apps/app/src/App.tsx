@@ -101,7 +101,7 @@ export default function App() {
 
       <SidebarInset className="relative flex h-svh min-w-0 flex-col overflow-hidden">
         {/* No top bar: below xl the offcanvas sidebar still needs its toggle. */}
-        <div className="absolute top-2.5 left-2.5 z-30 xl:hidden">
+        <div className="floating-sidebar-trigger absolute top-2.5 left-2.5 z-30 xl:hidden">
           <SidebarTrigger
             aria-label="Toggle runs"
             className="rounded-lg border border-ink-700 bg-ink-850 text-haze-400 shadow-sm"

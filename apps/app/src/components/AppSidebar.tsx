@@ -147,7 +147,7 @@ export function AppSidebar({
 
   return (
     <Sidebar collapsible="offcanvas" className="border-sidebar-border">
-      <SidebarHeader className="h-13 justify-center border-b border-sidebar-border px-4">
+      <SidebarHeader className="h-12 justify-center border-b border-sidebar-border px-4">
         <div className="flex items-center gap-2.5">
           <img src="/logo.png" alt="" className="size-[22px]" />
           <span className="text-[14px] leading-none font-semibold text-haze-50">

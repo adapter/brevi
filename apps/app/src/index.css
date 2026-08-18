@@ -264,6 +264,24 @@
   background-color: var(--color-ember-500);
 }
 
+/*
+  Frameless window ergonomics (macOS): the sidebar header doubles as the
+  window's drag strip and clears the inset traffic lights; every control
+  inside it opts back out so it still takes clicks. The floating sidebar
+  trigger shifts right for the same reason.
+*/
+[data-platform="mac"] [data-slot="sidebar-header"] {
+  padding-left: 4.75rem;
+  -webkit-app-region: drag;
+}
+[data-platform="mac"] [data-slot="sidebar-header"] button,
+[data-platform="mac"] [data-slot="sidebar-header"] a {
+  -webkit-app-region: no-drag;
+}
+[data-platform="mac"] .floating-sidebar-trigger {
+  left: 5rem;
+}
+
 /* Scrollable strips (tab bars, the sidebar body) that hide their scrollbar. */
 @utility no-scrollbar {
   scrollbar-width: none;

@@ -7,6 +7,11 @@
       // Resolve the theme before first paint so there is no flash.
       // Preference: "light" | "dark" | "system" (default system).
       (() => {
+        // Mac windows are frameless with inset traffic lights; the CSS pads
+        // the sidebar header for them (see index.css).
+        document.documentElement.dataset.platform = /mac/i.test(navigator.platform)
+          ? "mac"
+          : "other";
         const pref = localStorage.getItem("brevi.theme");
         const dark =
           pref === "dark" ||

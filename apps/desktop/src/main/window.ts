@@ -113,9 +113,14 @@ export class MissionControl {
       height: 900,
       minWidth: 900,
       minHeight: 600,
-      backgroundColor: "#101014",
+      backgroundColor: "#0d0d0d",
       show: false, // shown on 'ready-to-show' to avoid a white flash
       title: "brevi",
+      // No title bar: on macOS the traffic lights float over the sidebar
+      // header (the renderer pads and drags that strip); elsewhere the
+      // option is ignored and the native frame stays.
+      titleBarStyle: "hiddenInset",
+      trafficLightPosition: { x: 12, y: 16 },
       // macOS reads the .app icon for the dock; this is what Linux uses
       // for the taskbar / window list.
       icon: join(ASSETS_DIR, "icon.png"),
