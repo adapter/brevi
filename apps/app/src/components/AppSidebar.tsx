@@ -148,7 +148,7 @@ export function AppSidebar({
   return (
     <Sidebar collapsible="offcanvas" className="border-sidebar-border">
       <SidebarHeader className="h-12 justify-center px-3">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-end gap-2">
           <span
             className={`flex items-center gap-1.5 ${CONNECTION[conn].text}`}
             title={conn === "offline" ? "Orchestrator offline" : CONNECTION[conn].label}
@@ -162,7 +162,7 @@ export function AppSidebar({
               {CONNECTION[conn].label}
             </span>
           </span>
-          <SidebarTrigger className="ml-auto text-haze-500" aria-label="Collapse sidebar" />
+          <SidebarTrigger className="text-haze-500" aria-label="Collapse sidebar" />
         </div>
       </SidebarHeader>
 
@@ -181,9 +181,6 @@ export function AppSidebar({
               >
                 <span className="text-[14px] leading-none font-semibold text-haze-100">
                   {list === "runs" ? "Runs" : "Archived"}
-                </span>
-                <span className="font-mono text-[10.5px] leading-none text-haze-700">
-                  {list === "runs" ? runCount : archived.length}
                 </span>
                 <ChevronRight className="size-3.5 rotate-90 text-haze-600" />
               </DropdownMenuTrigger>
