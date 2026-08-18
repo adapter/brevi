@@ -50,7 +50,7 @@ async function resolveCcusage(): Promise<string | undefined> {
 }
 
 /** One `ccusage <source> daily` read; any failure degrades to an empty list. */
-async function dailyReport(command: string, source: "claude" | "codex"): Promise<UsageDay[]> {
+async function dailyReport(command: string, source: "claude" | "codex" | "grok"): Promise<UsageDay[]> {
   try {
     const result = await execa(command, [source, "daily", "--json", "--offline"], {
       timeout: 60_000,
@@ -63,18 +63,19 @@ async function dailyReport(command: string, source: "claude" | "codex"): Promise
 }
 
 /**
- * The machine's daily usage, Claude Code and Codex reads summed per day.
- * Throws only when no ccusage binary could be resolved at all; a read that
- * finds no transcripts simply returns an empty list.
+ * The machine's daily usage, Claude Code, Codex, and Grok reads summed per
+ * day. Throws only when no ccusage binary could be resolved at all; a read
+ * that finds no transcripts simply returns an empty list.
  */
 export async function readMachineUsage(): Promise<UsageDay[]> {
   const command = await resolveCcusage();
   if (!command) {
     throw new Error("ccusage is not available on this machine and installing it failed");
   }
-  const [claude, codex] = await Promise.all([
+  const [claude, codex, grok] = await Promise.all([
     dailyReport(command, "claude"),
     dailyReport(command, "codex"),
+    dailyReport(command, "grok"),
   ]);
-  return mergeUsageDays(claude, codex);
+  return mergeUsageDays(claude, codex, grok);
 }
