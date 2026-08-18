@@ -60,10 +60,45 @@ function runSsh(
     child.on("close", (code) => {
       clearTimeout(timer);
       if (code === 0) resolve(output.trim());
-      else reject(new Error(output.trim() || `ssh exited with code ${code ?? "unknown"}`));
+      else {
+        const raw = output.trim() || `ssh exited with code ${code ?? "unknown"}`;
+        reject(new Error(explainSshFailure(raw, request)));
+      }
     });
     child.stdin.end(input);
   });
+}
+
+/**
+ * Turn the common raw ssh/sudo failures into instructions. Provisioning runs
+ * with BatchMode=yes so no password prompt can ever appear; the fixes below
+ * are the only ways forward and the raw output alone does not say so.
+ */
+function explainSshFailure(raw: string, request: ValidatedRequest): string {
+  const dest = `${request.user}@${request.host}`;
+  if (/permission denied \(.*(publickey|password)/i.test(raw)) {
+    const key = request.identityFile ? ` -i ${request.identityFile}` : "";
+    return (
+      `${dest} did not accept an SSH key, and brevi never sends passwords, so the machine must ` +
+      `trust your key first. Run "ssh-copy-id${key} ${dest}" from a terminal (it may ask for the ` +
+      `password once), then install again. If the machine only accepts a specific key, set its ` +
+      `path in the Identity file field. (${raw.split("\n").pop()})`
+    );
+  }
+  if (/sudo: (a password is required|no tty present)/i.test(raw)) {
+    return (
+      `${dest} connected, but sudo on that machine asks for a password, which brevi cannot type. ` +
+      `Allow passwordless sudo for ${request.user} (for example "echo '${request.user} ` +
+      `ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/${request.user}"), then install again.`
+    );
+  }
+  if (/could not resolve hostname/i.test(raw)) {
+    return `The host ${request.host} could not be resolved. Check the hostname and try again.`;
+  }
+  if (/connection refused|connection timed out|operation timed out/i.test(raw)) {
+    return `Could not reach ${dest} on port ${request.port}. Check that the machine is up and sshd is listening. (${raw.split("\n").pop()})`;
+  }
+  return raw;
 }
 
 /** Provision a worker without ever placing the single-use pairing token in argv or renderer state. */
