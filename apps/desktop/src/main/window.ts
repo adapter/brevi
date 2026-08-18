@@ -130,6 +130,9 @@ export class MissionControl {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        // The renderer's type scale is sized in raw pixels; this is the one
+        // knob that grows every size in proportion.
+        zoomFactor: 1.1,
       },
     });
 
