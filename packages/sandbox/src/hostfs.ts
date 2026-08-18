@@ -1,7 +1,8 @@
-import { constants } from "node:fs";
+import { constants, createWriteStream } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
-import { lstat, mkdir, open, realpath, rm } from "node:fs/promises";
-import { isAbsolute, relative, sep } from "node:path";
+import { lstat, mkdir, open, readdir, readlink, realpath, rm, symlink } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 /**
  * Symlink-safe host-side file access for sandbox contents. The agent controls
@@ -9,20 +10,217 @@ import { isAbsolute, relative, sep } from "node:path";
  * a planted symlink would escape the sandbox: reads could exfiltrate worker
  * secrets, writes could truncate host files like ~/.brevi/worker.json.
  *
- * The defense never re-walks a path string (an attacker can swap a directory
- * for a symlink between a realpath and the open that follows). Instead it opens
- * the run root as a directory handle and descends one component at a time
- * through /proc/self/fd/<dirfd>/<name> with O_NOFOLLOW, so every intermediate
- * and final component is checked against a real, already-opened parent. Linux
- * only, which is the sole platform bwrap runs on.
+ * The defense never re-walks a path string unchecked (an attacker can swap a
+ * directory for a symlink between a realpath and the open that follows). On
+ * Linux it opens the run root as a directory handle and descends one component
+ * at a time through /proc/self/fd/<dirfd>/<name> with O_NOFOLLOW, so every
+ * component is checked against a real, already-opened parent. On macOS (the
+ * Seatbelt provider's platform) the kernel provides the whole property in one
+ * flag: O_NOFOLLOW_ANY refuses a symlink in any component of the path,
+ * atomically, so the final open itself is the check.
  */
 
-const { O_RDONLY, O_WRONLY, O_CREAT, O_TRUNC, O_DIRECTORY, O_NOFOLLOW } = constants;
+const { O_RDONLY, O_WRONLY, O_CREAT, O_TRUNC, O_DIRECTORY, O_NOFOLLOW, O_NONBLOCK } = constants;
+
+const DARWIN = process.platform === "darwin";
+/** macOS-only open(2) flag: fail with ELOOP if any path component is a symlink. */
+const O_NOFOLLOW_ANY = 0x20000000;
+
+/**
+ * macOS resolution: realpath the host-created root (its ancestors may hold
+ * benign symlinks like /var -> /private/var), then open root/parts in one call
+ * that refuses agent-planted symlinks anywhere below the root.
+ */
+async function darwinOpenWithin(
+  rootDir: string,
+  parts: string[],
+  flags: number,
+  mode?: number,
+): Promise<FileHandle> {
+  const real = await realpath(rootDir);
+  return open(join(real, ...parts), flags | O_NOFOLLOW_ANY, mode);
+}
+
+/** macOS-only open(2) flag: open the symlink itself rather than its target. */
+const O_SYMLINK = 0x200000;
+
+/**
+ * macOS directory copy out of the sandbox (e.g. pulling the workspace after a
+ * run). fs.cp would re-walk pathnames a still-running sandbox process could
+ * swap for symlinks mid-copy; instead every file is opened with
+ * O_NOFOLLOW_ANY (a racing swap turns into ELOOP, never a host read) and
+ * symlink entries are copied verbatim as symlinks, never followed.
+ */
+export async function copyDirOutOfWithin(rootDir: string, srcDir: string, destDir: string): Promise<void> {
+  const parts = relativeParts(rootDir, srcDir, "copy");
+  const real = await realpath(rootDir);
+  await copyOut(real, parts, destDir);
+}
+
+async function copyOut(rootReal: string, parts: string[], destDir: string): Promise<void> {
+  const srcPath = join(rootReal, ...parts);
+  const dirCheck = await open(srcPath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY);
+  await dirCheck.close();
+  await mkdir(destDir, { recursive: true });
+  for (const entry of await readdir(srcPath, { withFileTypes: true })) {
+    const childParts = [...parts, entry.name];
+    const childSrc = join(rootReal, ...childParts);
+    const childDest = join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      await copyOut(rootReal, childParts, childDest);
+    } else if (entry.isSymbolicLink()) {
+      // The link's content is copied as a string; nothing ever follows it.
+      const target = await readlink(childSrc);
+      await rm(childDest, { recursive: true, force: true });
+      await symlink(target, childDest);
+    } else if (entry.isFile()) {
+      // O_NONBLOCK so a regular file swapped for a fifo between readdir and
+      // open cannot block this host-side read waiting for a writer that never
+      // comes; the fstat below then rejects the non-regular file.
+      const src = await open(childSrc, O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK);
+      try {
+        const stats = await src.stat();
+        if (!stats.isFile()) continue;
+        await rm(childDest, { recursive: true, force: true });
+        await pipeline(src.createReadStream(), createWriteStream(childDest, { mode: stats.mode & 0o777 }));
+      } finally {
+        await src.close();
+      }
+    }
+    // Sockets and fifos are not copied.
+  }
+}
+
+/**
+ * macOS directory copy into the sandbox (checkout push, follow-up .git
+ * refresh). Destination files are created through O_NOFOLLOW_ANY opens and
+ * every directory level is verified after mkdir, so a swapped component
+ * fails the copy instead of redirecting it. A replaced symlink entry is
+ * re-verified with O_SYMLINK | O_NOFOLLOW_ANY after creation and removed if
+ * the verification fails.
+ */
+export async function copyDirIntoWithin(rootDir: string, srcDir: string, destDir: string): Promise<void> {
+  const parts = relativeParts(rootDir, destDir, "create");
+  const real = await realpath(rootDir);
+  await darwinDescendDir(rootDir, parts, true);
+  await copyInto(real, parts, srcDir);
+}
+
+/**
+ * Removes a single non-directory entry. Never recursive, and the parent
+ * chain is re-verified with O_NOFOLLOW_ANY immediately before the unlink,
+ * so an ancestor swapped earlier cannot redirect the deletion; the residual
+ * window is one syscall wide and bounded to a single directory entry.
+ */
+async function unlinkVerified(rootReal: string, parts: string[]): Promise<void> {
+  const parent = join(rootReal, ...parts.slice(0, -1));
+  const check = await open(parent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY);
+  try {
+    await rm(join(rootReal, ...parts), { force: false, recursive: false });
+  } finally {
+    await check.close();
+  }
+}
+
+async function copyInto(rootReal: string, parts: string[], srcDir: string): Promise<void> {
+  for (const entry of await readdir(srcDir, { withFileTypes: true })) {
+    const childParts = [...parts, entry.name];
+    const destPath = join(rootReal, ...childParts);
+    const childSrc = join(srcDir, entry.name);
+    if (entry.isDirectory()) {
+      const existing = await lstat(destPath).catch(() => undefined);
+      if (existing && !existing.isDirectory()) await unlinkVerified(rootReal, childParts);
+      try {
+        // A swapped ancestor can misdirect this mkdir; the O_NOFOLLOW_ANY
+        // verify below then fails the copy, bounding the damage to at most
+        // an empty directory (no contents are ever written unverified).
+        await mkdir(destPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      const check = await open(destPath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY);
+      await check.close();
+      await copyInto(rootReal, childParts, childSrc);
+    } else if (entry.isSymbolicLink()) {
+      const target = await readlink(childSrc);
+      const existing = await lstat(destPath).catch(() => undefined);
+      if (existing?.isDirectory()) {
+        throw new Error(`refusing to replace directory ${destPath} with a symlink`);
+      }
+      if (existing) await unlinkVerified(rootReal, childParts);
+      await symlink(target, destPath);
+      try {
+        const check = await open(destPath, O_RDONLY | O_SYMLINK | O_NOFOLLOW_ANY);
+        await check.close();
+      } catch (error) {
+        await rm(destPath, { force: true, recursive: false });
+        throw error;
+      }
+    } else if (entry.isFile()) {
+      const stats = await lstat(childSrc);
+      const src = await open(childSrc, O_RDONLY);
+      try {
+        // O_NOFOLLOW_ANY turns an existing symlink (or a racing swap of any
+        // ancestor) into ELOOP; one unlink of that single entry and a retry
+        // covers the legitimate overwrite-a-symlink case without ever
+        // recursively deleting through a pathname.
+        let dest: FileHandle;
+        try {
+          dest = await open(destPath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, stats.mode & 0o777);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "ELOOP") throw error;
+          const existing = await lstat(destPath).catch(() => undefined);
+          if (existing?.isDirectory()) throw error;
+          await unlinkVerified(rootReal, childParts);
+          dest = await open(destPath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, stats.mode & 0o777);
+        }
+        try {
+          await pipeline(src.createReadStream(), dest.createWriteStream());
+        } finally {
+          await dest.close();
+        }
+      } finally {
+        await src.close();
+      }
+    }
+  }
+}
+
+/** macOS descent: create/verify each directory level, refusing symlinks at every step. */
+async function darwinDescendDir(rootDir: string, parts: string[], create: boolean): Promise<string> {
+  const real = await realpath(rootDir);
+  let current = real;
+  for (const part of parts) {
+    current = join(current, part);
+    if (create) {
+      try {
+        await mkdir(current);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        // EEXIST covers a symlink at this component too; the open below rejects it.
+      }
+    }
+    const handle = await open(current, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY);
+    await handle.close();
+  }
+  return join(rootDir, ...parts);
+}
 
 /** Reads a regular file, refusing any component that escapes rootDir. */
 export async function readFileWithin(rootDir: string, target: string): Promise<string> {
   const parts = relativeParts(rootDir, target, "read");
   if (parts.length === 0) throw new Error(`refusing to read ${target}: it is the sandbox root`);
+  if (DARWIN) {
+    const handle = await darwinOpenWithin(rootDir, parts, O_RDONLY);
+    try {
+      const stats = await handle.stat();
+      if (!stats.isFile()) throw new Error(`refusing to read ${target}: not a regular file`);
+      return await handle.readFile("utf8");
+    } finally {
+      await handle.close();
+    }
+  }
   const dir = await openParent(rootDir, parts, false);
   try {
     const handle = await openAt(dir, last(parts), O_RDONLY | O_NOFOLLOW);
@@ -50,6 +248,30 @@ export async function writeFileWithin(
 ): Promise<void> {
   const parts = relativeParts(rootDir, target, "write");
   if (parts.length === 0) throw new Error(`refusing to write ${target}: it is the sandbox root`);
+  if (DARWIN) {
+    await darwinDescendDir(rootDir, parts.slice(0, -1), true);
+    const real = await realpath(rootDir);
+    const at = join(real, ...parts);
+    const existing = await lstat(at).catch(() => undefined);
+    // A directory here is a conflict, never a target: a recursive delete at a
+    // pathname whose ancestor a racing sandbox process could have swapped is
+    // exactly the escape this module exists to prevent, and no write
+    // legitimately replaces a directory with a file.
+    if (existing?.isDirectory()) {
+      throw new Error(`refusing to write ${target}: a directory exists there`);
+    }
+    // A non-directory (regular file or symlink) is removed with a single
+    // non-recursive unlink, its parent chain re-verified through
+    // O_NOFOLLOW_ANY immediately before the removal.
+    if (existing) await unlinkVerified(real, parts);
+    const handle = await open(at, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, mode);
+    try {
+      await handle.writeFile(contents, "utf8");
+    } finally {
+      await handle.close();
+    }
+    return;
+  }
   const dir = await openParent(rootDir, parts, true);
   try {
     const at = procPath(dir, last(parts));
@@ -84,6 +306,7 @@ export async function ensureDirWithin(rootDir: string, target: string): Promise<
  */
 async function descendDir(rootDir: string, target: string, create: boolean, action: string): Promise<string> {
   const parts = relativeParts(rootDir, target, action);
+  if (DARWIN) return darwinDescendDir(rootDir, parts, create);
   let dir = await openRoot(rootDir);
   try {
     for (const part of parts) dir = await step(dir, part, create);

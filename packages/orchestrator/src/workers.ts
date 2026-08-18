@@ -1077,7 +1077,9 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       };
     }
 
-    const available = notDraining.filter((worker) => worker.capabilities.provider === "bwrap");
+    const available = notDraining.filter(
+      (worker) => worker.capabilities.provider === "bwrap" || worker.capabilities.provider === "seatbelt",
+    );
     if (available.length === 0) {
       return { reason: "no connected worker can execute isolated runs" };
     }

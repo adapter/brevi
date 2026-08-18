@@ -191,7 +191,7 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
     const rehydratable =
       retainedUntil !== undefined &&
       Date.parse(retainedUntil) > Date.now() &&
-      (run.sandbox.provider === undefined || run.sandbox.provider === "bwrap");
+      (run.sandbox.provider === undefined || run.sandbox.provider === provider.name);
     if (rehydratable) {
       try {
         sandbox = await provider.rehydrate({ id: run.id, env: agentEnv });

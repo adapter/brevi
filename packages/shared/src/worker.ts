@@ -311,8 +311,8 @@ export const workerCapabilitiesSchema = z.object({
   /** process.platform of the worker host, e.g. "linux"; the managed macOS VM's worker reports MACOS_VM_OS ("macos-vm") instead (see resolveWorkerOs). */
   os: z.string(),
   arch: z.string(),
-  /** Sandbox provider the worker runs. Only bwrap workers may register. */
-  provider: z.literal("bwrap"),
+  /** Sandbox provider the worker runs: bwrap (Linux) or seatbelt (macOS). */
+  provider: z.enum(["bwrap", "seatbelt"]),
   /** Agent commands this worker resolved on its own PATH at registration time. */
   agentCommands: z.array(z.string().min(1)).min(1),
   /** How many dispatched runs this worker executes at once. */

@@ -87,8 +87,8 @@ export interface CreateSandboxOptions {
 }
 
 export interface SandboxProvider {
-  /** The only provider available for new execution. */
-  name: "bwrap";
+  /** Which sandbox this is: bwrap on Linux, seatbelt on macOS. */
+  name: "bwrap" | "seatbelt";
   /** Throws with a human-readable reason if this provider can't run on this host. */
   ensureAvailable(): Promise<void>;
   create(options: CreateSandboxOptions): Promise<Sandbox>;

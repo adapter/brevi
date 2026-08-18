@@ -19,6 +19,7 @@ import { DesktopUpdater } from "./updater.js";
 import { MissionControl } from "./window.js";
 import { registerDashboardProtocol, registerDashboardScheme } from "./protocol.js";
 import { provisionWorkerOverSsh } from "./ssh.js";
+import { resolveHostExecution, startLocalWorker } from "./local-worker.js";
 
 /** How many recent runs the tray menu lists (see summary.ts's menuRuns). */
 const MENU_RUN_LIMIT = 6;
@@ -145,12 +146,30 @@ async function main(): Promise<void> {
   });
 
   supervisor = new OrchestratorSupervisor({
-    startOrchestrator: async () =>
-      startOrchestrator({
-        config: await loadConfig(),
+    startOrchestrator: async () => {
+      // Probed at every (re)start rather than once: installing bubblewrap or
+      // fixing a Seatbelt problem then restarting the orchestrator is enough
+      // to turn local execution on.
+      const config = await loadConfig();
+      const hostExecution = await resolveHostExecution(config.agent.command);
+      const handle = await startOrchestrator({
+        config,
         managementToken,
         provisionWorker: provisionWorkerOverSsh,
-      }),
+        hostExecution,
+      });
+      const localWorker =
+        hostExecution.kind === "local-worker" ? startLocalWorker(handle) : null;
+      return {
+        ...handle,
+        async stop() {
+          // The worker drains first so its final run reports still reach the
+          // orchestrator it is about to lose.
+          await localWorker?.stop();
+          await handle.stop();
+        },
+      };
+    },
     onState: (state) => handleSupervisorState(state),
   });
 
