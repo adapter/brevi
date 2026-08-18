@@ -216,10 +216,6 @@ export function PullRequestDetailPage({
               Conversation
               <TabCount value={detail.comments.length + detail.reviews.length + detail.threads.length} />
             </TabButton>
-            <TabButton active={tab === "files"} onClick={() => setTab("files")}>
-              Files
-              <TabCount value={detail.changedFiles} />
-            </TabButton>
             <TabButton active={tab === "commits"} onClick={() => setTab("commits")}>
               Commits
               <TabCount value={detail.commits.length} />
@@ -227,6 +223,10 @@ export function PullRequestDetailPage({
             <TabButton active={tab === "checks"} onClick={() => setTab("checks")}>
               Checks
               <TabCount value={detail.checks.length} tone={failingChecks > 0 ? "text-rust-400" : undefined} />
+            </TabButton>
+            <TabButton active={tab === "files"} onClick={() => setTab("files")}>
+              Files
+              <TabCount value={detail.changedFiles} />
             </TabButton>
           </div>
 
