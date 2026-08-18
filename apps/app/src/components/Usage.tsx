@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { MachineUsage, UsageResponse } from "@brevi/shared";
+// Runtime import via the subpath: the shared root index pulls in node-only
+// modules (paths.ts reads os.homedir) that must never reach the browser.
+import { mergeModelRows } from "@brevi/shared/usage";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api } from "../lib/api";
@@ -20,6 +23,12 @@ const SERIES = [
   "var(--color-series-4)",
   "var(--color-series-5)",
 ];
+
+const PROVIDER_LABEL: Record<string, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  grok: "Grok",
+};
 
 const RANGES = [7, 30, 90] as const;
 type Range = (typeof RANGES)[number];
@@ -103,6 +112,11 @@ export function UsagePage() {
       const segments = byMachine.map(({ byDate }) => byDate.get(date)?.costUsd ?? 0);
       return { date, segments, total: segments.reduce((a, b) => a + b, 0) };
     });
+    const models = mergeModelRows(
+      ...byMachine.flatMap(({ byDate }) =>
+        days.map((date) => byDate.get(date)?.models ?? []),
+      ),
+    );
     const totals = byMachine.map(({ machine, byDate }) => {
       const inWindow = days
         .map((date) => byDate.get(date))
@@ -116,11 +130,16 @@ export function UsagePage() {
         cacheWriteTokens: inWindow.reduce((a, d) => a + d.cacheWriteTokens, 0),
       };
     });
-    return { columns, totals };
+    return { columns, totals, models };
   }, [machines, days]);
 
   const rangeCost = view.totals.reduce((a, t) => a + t.costUsd, 0);
-  const rangeIn = view.totals.reduce((a, t) => a + t.inputTokens, 0);
+  // Cache-inclusive, matching ccusage's own totalTokens: with prompt caching
+  // the raw inputTokens figure is a sliver of what actually reached the model.
+  const rangeTokens = view.totals.reduce(
+    (a, t) => a + t.inputTokens + t.outputTokens + t.cacheReadTokens + t.cacheWriteTokens,
+    0,
+  );
   const rangeOut = view.totals.reduce((a, t) => a + t.outputTokens, 0);
   const failing = machines.filter((machine) => machine.error);
 
@@ -153,7 +172,8 @@ export function UsagePage() {
       <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
         What the agents on this machine and every connected worker have spent, day by day, as
         reported by ccusage from their Claude Code and Codex transcripts. Not limited to brevi
-        runs: everything ccusage can see on a machine counts.
+        runs: everything ccusage can see on a machine counts. Token totals include cache reads
+        and writes; the Input column counts only fresh, uncached input.
       </p>
 
       {loading && !data ? (
@@ -169,7 +189,7 @@ export function UsagePage() {
         <>
           <div className="mt-5 grid grid-cols-3 gap-2.5">
             <StatTile label={`Cost, last ${range} days`} value={usd(rangeCost)} />
-            <StatTile label="Input tokens" value={compact.format(rangeIn)} />
+            <StatTile label="Tokens, total" value={compact.format(rangeTokens)} />
             <StatTile label="Output tokens" value={compact.format(rangeOut)} />
           </div>
 
@@ -199,6 +219,64 @@ export function UsagePage() {
             />
           </Card>
 
+          {view.models.length > 0 && (
+            <Card className="mt-2.5 block overflow-x-auto px-4 py-3.5">
+              <Plate className="text-haze-400">By model</Plate>
+              <table className="mt-2.5 w-full text-left text-[12px]">
+                <thead>
+                  <tr className="text-[10.5px] font-medium text-haze-600">
+                    <th className="py-1 pr-3 font-medium">Model</th>
+                    <th className="py-1 pr-3 font-medium">Provider</th>
+                    <th className="py-1 pr-3 text-right font-medium">Cost</th>
+                    <th className="py-1 pr-3 text-right font-medium">Tokens</th>
+                    <th className="py-1 pr-3 text-right font-medium">Output</th>
+                    <th className="w-32 py-1 pl-3 font-medium">Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {view.models.map((row) => {
+                    const share = rangeCost > 0 ? row.costUsd / rangeCost : 0;
+                    return (
+                      <tr
+                        key={`${row.provider}/${row.model}`}
+                        className="border-t border-ink-700/70 text-haze-200"
+                      >
+                        <td className="py-1.5 pr-3 font-mono text-[11.5px]">{row.model}</td>
+                        <td className="py-1.5 pr-3 text-haze-400">
+                          {PROVIDER_LABEL[row.provider] ?? row.provider}
+                        </td>
+                        <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
+                          {usd(row.costUsd)}
+                        </td>
+                        <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
+                          {compact.format(
+                            row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheWriteTokens,
+                          )}
+                        </td>
+                        <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
+                          {compact.format(row.outputTokens)}
+                        </td>
+                        <td className="py-1.5 pl-3">
+                          <span className="flex items-center gap-2">
+                            <span className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-ink-700">
+                              <span
+                                className="block h-full rounded-full bg-haze-400"
+                                style={{ width: `${Math.max(share * 100, 2)}%` }}
+                              />
+                            </span>
+                            <span className="font-mono text-[10.5px] tabular-nums text-haze-500">
+                              {Math.round(share * 100)}%
+                            </span>
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </Card>
+          )}
+
           <Card className="mt-2.5 block overflow-x-auto px-4 py-3.5">
             <Plate className="text-haze-400">By machine</Plate>
             <table className="mt-2.5 w-full text-left text-[12px]">
@@ -206,6 +284,7 @@ export function UsagePage() {
                 <tr className="text-[10.5px] font-medium text-haze-600">
                   <th className="py-1 pr-3 font-medium">Machine</th>
                   <th className="py-1 pr-3 text-right font-medium">Cost</th>
+                  <th className="py-1 pr-3 text-right font-medium">Tokens</th>
                   <th className="py-1 pr-3 text-right font-medium">Input</th>
                   <th className="py-1 pr-3 text-right font-medium">Output</th>
                   <th className="py-1 pr-3 text-right font-medium">Cache read</th>
@@ -226,6 +305,9 @@ export function UsagePage() {
                       </span>
                     </td>
                     <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{usd(t.costUsd)}</td>
+                    <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
+                      {compact.format(t.inputTokens + t.outputTokens + t.cacheReadTokens + t.cacheWriteTokens)}
+                    </td>
                     <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{compact.format(t.inputTokens)}</td>
                     <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{compact.format(t.outputTokens)}</td>
                     <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{compact.format(t.cacheReadTokens)}</td>

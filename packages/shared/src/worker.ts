@@ -627,6 +627,17 @@ export const attachErrorMessageSchema = z.object({
 });
 export type AttachErrorMessage = z.infer<typeof attachErrorMessageSchema>;
 
+/** One model's share of a day, mirroring UsageModelUsage in usage.ts. */
+export const usageModelUsageSchema = z.object({
+  provider: z.string(),
+  model: z.string(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheReadTokens: z.number(),
+  cacheWriteTokens: z.number(),
+  costUsd: z.number(),
+});
+
 /** One calendar day of ccusage-reported usage, mirroring UsageDay in usage.ts. */
 export const usageDaySchema = z.object({
   date: z.string(),
@@ -635,6 +646,7 @@ export const usageDaySchema = z.object({
   cacheReadTokens: z.number(),
   cacheWriteTokens: z.number(),
   costUsd: z.number(),
+  models: z.array(usageModelUsageSchema).optional(),
 });
 
 /**

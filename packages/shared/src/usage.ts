@@ -5,6 +5,18 @@
  * can see on the machine, whether or not brevi ran it.
  */
 
+/** One model's share of a day, with the agent provider that produced it. */
+export interface UsageModelUsage {
+  /** "claude" | "codex" | future providers, from which ccusage read it came. */
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+}
+
 export interface UsageDay {
   /** Calendar day, "YYYY-MM-DD", as ccusage reports it (machine-local time). */
   date: string;
@@ -14,6 +26,8 @@ export interface UsageDay {
   cacheWriteTokens: number;
   /** Sum of ccusage's per-day cost figures; 0 when ccusage priced nothing. */
   costUsd: number;
+  /** Per-model rows behind the day's totals; absent from reports older workers send. */
+  models?: UsageModelUsage[];
 }
 
 /** One machine's slice of the usage report. */
@@ -48,7 +62,7 @@ function num(value: unknown): number {
  * ccusage version drift degrades to fewer figures rather than an empty read.
  * Rows without a parsable date are dropped; rows are returned ascending.
  */
-export function parseCcusageDaily(stdout: string): UsageDay[] {
+export function parseCcusageDaily(stdout: string, provider: string): UsageDay[] {
   let data: unknown;
   try {
     data = JSON.parse(stdout);
@@ -64,6 +78,7 @@ export function parseCcusageDaily(stdout: string): UsageDay[] {
     if (!isDict(raw)) continue;
     const dateRaw = raw.date ?? raw.day;
     if (typeof dateRaw !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) continue;
+    const models = parseModelRows(raw, provider);
     days.push({
       date: dateRaw,
       inputTokens: num(raw.inputTokens),
@@ -71,9 +86,78 @@ export function parseCcusageDaily(stdout: string): UsageDay[] {
       cacheReadTokens: num(raw.cacheReadTokens),
       cacheWriteTokens: num(raw.cacheCreationTokens ?? raw.cacheWriteTokens),
       costUsd: num(raw.totalCost ?? raw.costUSD ?? raw.cost),
+      ...(models.length > 0 ? { models } : {}),
     });
   }
   return days.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * A day's per-model rows. The Claude report carries a `modelBreakdowns`
+ * array (modelName/cost); the Codex report has used both that shape and a
+ * `models` dict keyed by model name, so both are accepted. A row set that
+ * doesn't parse degrades to no breakdown, never to a dropped day.
+ */
+function parseModelRows(raw: Record<string, unknown>, provider: string): UsageModelUsage[] {
+  const rows: UsageModelUsage[] = [];
+  const breakdowns = raw.modelBreakdowns;
+  if (Array.isArray(breakdowns)) {
+    for (const entry of breakdowns) {
+      if (!isDict(entry)) continue;
+      const model = entry.modelName ?? entry.model;
+      if (typeof model !== "string") continue;
+      rows.push({
+        provider,
+        model,
+        inputTokens: num(entry.inputTokens),
+        outputTokens: num(entry.outputTokens),
+        cacheReadTokens: num(entry.cacheReadTokens),
+        cacheWriteTokens: num(entry.cacheCreationTokens ?? entry.cacheWriteTokens),
+        costUsd: num(entry.cost ?? entry.costUSD ?? entry.totalCost),
+      });
+    }
+    return rows;
+  }
+  const models = raw.models;
+  if (isDict(models)) {
+    for (const [model, entry] of Object.entries(models)) {
+      if (!isDict(entry)) continue;
+      rows.push({
+        provider,
+        model,
+        inputTokens: num(entry.inputTokens),
+        outputTokens: num(entry.outputTokens),
+        cacheReadTokens: num(entry.cacheReadTokens),
+        cacheWriteTokens: num(entry.cacheCreationTokens ?? entry.cacheWriteTokens),
+        costUsd: num(entry.cost ?? entry.costUSD ?? entry.totalCost),
+      });
+    }
+  }
+  return rows;
+}
+
+/**
+ * Sum per-model rows by (provider, model), descending by cost. Used when
+ * merging a machine's reads and when the dashboard rolls a range up.
+ */
+export function mergeModelRows(...lists: UsageModelUsage[][]): UsageModelUsage[] {
+  const byKey = new Map<string, UsageModelUsage>();
+  for (const list of lists) {
+    for (const row of list) {
+      const key = `${row.provider}\n${row.model}`;
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, { ...row });
+        continue;
+      }
+      existing.inputTokens += row.inputTokens;
+      existing.outputTokens += row.outputTokens;
+      existing.cacheReadTokens += row.cacheReadTokens;
+      existing.cacheWriteTokens += row.cacheWriteTokens;
+      existing.costUsd = Math.round((existing.costUsd + row.costUsd) * 1e6) / 1e6;
+    }
+  }
+  return [...byKey.values()].sort((a, b) => b.costUsd - a.costUsd);
 }
 
 /**
@@ -95,6 +179,8 @@ export function mergeUsageDays(...lists: UsageDay[][]): UsageDay[] {
       existing.cacheReadTokens += day.cacheReadTokens;
       existing.cacheWriteTokens += day.cacheWriteTokens;
       existing.costUsd = Math.round((existing.costUsd + day.costUsd) * 1e6) / 1e6;
+      const models = mergeModelRows(existing.models ?? [], day.models ?? []);
+      if (models.length > 0) existing.models = models;
     }
   }
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));

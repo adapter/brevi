@@ -56,7 +56,7 @@ async function dailyReport(command: string, source: "claude" | "codex"): Promise
       timeout: 60_000,
     });
     if (result.exitCode !== 0) return [];
-    return parseCcusageDaily(result.stdout);
+    return parseCcusageDaily(result.stdout, source);
   } catch {
     return [];
   }
