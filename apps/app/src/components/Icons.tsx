@@ -246,9 +246,11 @@ export const Unarchive = (p: IconProps) => (
   </Svg>
 );
 
+/** A cogwheel: hub, rim, and eight teeth. */
 export const Gear = (p: IconProps) => (
   <Svg {...p}>
-    <circle cx="8" cy="8" r="2.1" />
-    <path d="M8 1.8v1.7M8 12.5v1.7M14.2 8h-1.7M3.5 8H1.8M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2M12.4 12.4l-1.2-1.2M4.8 4.8 3.6 3.6" />
+    <circle cx="8" cy="8" r="1.9" />
+    <circle cx="8" cy="8" r="4.4" />
+    <path d="M8 1.6v2M8 12.4v2M14.4 8h-2M3.6 8h-2M12.5 3.5 11.1 4.9M4.9 11.1l-1.4 1.4M12.5 12.5l-1.4-1.4M4.9 4.9 3.5 3.5" />
   </Svg>
 );

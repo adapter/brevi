@@ -2,19 +2,19 @@ import type { BreviConfig, HealthResponse, LinearStatus, Run, WorkerView } from 
 import type { ConfigSection } from "../lib/useOrchestrator";
 import { AgentSection } from "./config/AgentSection";
 import { ConnectorsSection } from "./config/ConnectorsSection";
-import { MemorySection } from "./config/MemorySection";
 import { OrchestratorSection } from "./config/OrchestratorSection";
 import { RepositoriesSection } from "./config/RepositoriesSection";
 import { ServerSection } from "./config/ServerSection";
 import { WorkersSection } from "./config/WorkersSection";
 import { ThemeToggle } from "./ThemeToggle";
 
+// Repositories is deliberately unlisted: repo editing lives on the per-repo
+// settings pages, and the section remains routable only for the sidebar's
+// add-repository flow.
 const SECTIONS: { id: ConfigSection; label: string }[] = [
   { id: "connectors", label: "Connectors" },
-  { id: "repositories", label: "Repositories" },
   { id: "agent", label: "Agent" },
   { id: "fleet", label: "Fleet" },
-  { id: "memory", label: "Memory" },
   { id: "orchestrator", label: "Orchestrator" },
   { id: "server", label: "Server" },
 ];
@@ -126,9 +126,6 @@ export function ConfigurationPage({
               onConfig={onConfig}
               onWorkers={onWorkers}
             />
-          </div>
-          <div hidden={section !== "memory"}>
-            <MemorySection config={config} onConfig={onConfig} />
           </div>
           <div hidden={section !== "orchestrator"}>
             <OrchestratorSection config={config} onConfig={onConfig} />

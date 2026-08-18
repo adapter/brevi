@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { api } from "../lib/api";
+import { dayKey, usd } from "../lib/usage";
 import { Plate } from "./Bits";
 import { ChevronRight, Refresh } from "./Icons";
 
@@ -36,16 +37,8 @@ const PROVIDER_LABEL: Record<string, string> = {
   grok: "Grok",
 };
 
-const RANGES = [7, 30, 90] as const;
+const RANGES = [1, 7, 30, 90, 365] as const;
 type Range = (typeof RANGES)[number];
-
-/** "YYYY-MM-DD" in local time, matching how ccusage keys its days. */
-function dayKey(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
 
 /** The last `range` calendar days, ascending, ending today. */
 function windowDays(range: Range): string[] {
@@ -59,8 +52,6 @@ function windowDays(range: Range): string[] {
   return days;
 }
 
-const usd = (value: number) =>
-  value >= 100 ? `$${Math.round(value)}` : `$${value.toFixed(2)}`;
 const compact = new Intl.NumberFormat("en-US", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -296,7 +287,7 @@ export function UsagePage() {
         <>
           <div className="mt-5 grid grid-cols-3 gap-2.5">
             <StatTile
-              label={`Cost, last ${range} days`}
+              label={range === 1 ? "Cost, today" : `Cost, last ${range} days`}
               value={usd(rangeCost)}
             />
             <StatTile

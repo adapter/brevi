@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { BreviConfig, HealthResponse, LinearStatus, Run, Ticket, WorkerView } from "@brevi/shared";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -25,8 +25,10 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { api } from "../lib/api";
 import { duration, relative } from "../lib/format";
 import { queueOnly } from "../lib/fleet";
+import { dayKey, usd } from "../lib/usage";
 import {
   linearConnected as isLinearConnected,
   linearNeedsAttention,
@@ -37,6 +39,44 @@ import type { Connection, Page } from "../lib/useOrchestrator";
 import { Plate, StatusDot } from "./Bits";
 import { PROVIDERS } from "./config/ConnectorsSection";
 import { Archive, ChevronRight, Gear, Graph, Play, Plus, Repo, Unarchive } from "./Icons";
+
+/**
+ * Today's agent spend across every machine, for the footer's Usage row.
+ * Null until the first read lands; a failed read stays null and the row
+ * simply shows no figure. The orchestrator caches collections for a minute,
+ * so the poll here costs one ccusage read at most.
+ */
+function useTodayCost(): number | null {
+  const [cost, setCost] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      api
+        .usage()
+        .then((response) => {
+          if (cancelled) return;
+          const today = dayKey(new Date());
+          setCost(
+            response.machines.reduce(
+              (total, machine) =>
+                total + (machine.days.find((day) => day.date === today)?.costUsd ?? 0),
+              0,
+            ),
+          );
+        })
+        .catch(() => {
+          // The figure is decoration; the Usage page still opens without it.
+        });
+    };
+    load();
+    const id = setInterval(load, 5 * 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+  return cost;
+}
 
 /** Orchestrator connection states, compact enough for the sidebar header. */
 const CONNECTION = {
@@ -82,6 +122,7 @@ export function AppSidebar({
   onOpenUsage,
   onAddRepo,
   onOpenWorkers,
+  onOpenRepoSettings,
 }: {
   conn: Connection;
   tickets: Ticket[];
@@ -108,6 +149,8 @@ export function AppSidebar({
   onAddRepo: () => void;
   /** Opens the Workers config page, for the queue-only notice below. */
   onOpenWorkers: () => void;
+  /** Opens one repository's settings page. */
+  onOpenRepoSettings: (repoKey: string) => void;
 }) {
   // config === null still counts as connected so the connect card doesn't
   // flash before the first config arrives.
@@ -127,6 +170,10 @@ export function AppSidebar({
     if (isMobile) setOpenMobile(false);
     onOpenRun(runId);
   };
+  const openRepoSettings = (repoKey: string) => {
+    if (isMobile) setOpenMobile(false);
+    onOpenRepoSettings(repoKey);
+  };
 
   /**
    * Runs that still need to happen: tickets with no run for their current
@@ -144,6 +191,7 @@ export function AppSidebar({
 
   const hostExecution = health?.hostExecution;
   const showQueueOnly = queueOnly(health, workers);
+  const todayCost = useTodayCost();
 
   return (
     <Sidebar collapsible="offcanvas" className="border-sidebar-border">
@@ -266,6 +314,9 @@ export function AppSidebar({
                     onRun={onRun}
                     onOpenRun={openRun}
                     onArchiveRun={onArchiveRun}
+                    onOpenSettings={
+                      project.key === "" ? undefined : () => openRepoSettings(project.key)
+                    }
                   />
                 ))}
               </div>
@@ -290,6 +341,14 @@ export function AppSidebar({
         >
           <Graph className="size-3.5" />
           Usage
+          {todayCost !== null && (
+            <span
+              className="ml-auto font-mono text-[10.5px] leading-none tabular-nums text-haze-600"
+              title="Agent spend today, across every machine"
+            >
+              {usd(todayCost)}
+            </span>
+          )}
         </button>
         <button
           type="button"
@@ -379,6 +438,7 @@ function ProjectSection({
   onRun,
   onOpenRun,
   onArchiveRun,
+  onOpenSettings,
 }: {
   project: ProjectGroup;
   now: number;
@@ -388,23 +448,43 @@ function ProjectSection({
   onRun: (ticketId: string) => Promise<string | null>;
   onOpenRun: (runId: string) => void;
   onArchiveRun: (runId: string) => void;
+  /** Opens this repo's settings page; absent for the no-project bucket. */
+  onOpenSettings?: () => void;
 }) {
   const count =
     project.active.length + project.queued.length + project.pending.length + project.finished.length;
 
   return (
     <Collapsible defaultOpen>
-      <CollapsibleTrigger
-        className="group/project touch-target flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-ink-800/60"
-        title={project.full}
-      >
-        <ChevronRight className="size-3 shrink-0 text-haze-700 transition-transform group-data-[panel-open]/project:rotate-90" />
-        <Repo className="size-3.5 shrink-0 text-haze-600" />
-        <span className="min-w-0 truncate text-[12.5px] font-medium text-haze-200">
-          {project.name}
+      {/* The trigger is a button, so the settings control lives beside it in a
+          shared row rather than nested inside it. */}
+      <div className="group/projectrow flex w-full items-center rounded-lg pr-2 transition-colors hover:bg-ink-800/60">
+        <CollapsibleTrigger
+          className="group/project touch-target flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 px-2 py-1.5 text-left"
+          title={project.full}
+        >
+          <ChevronRight className="size-3 shrink-0 text-haze-700 transition-transform group-data-[panel-open]/project:rotate-90" />
+          <Repo className="size-3.5 shrink-0 text-haze-600" />
+          <span className="min-w-0 truncate text-[12.5px] font-medium text-haze-200">
+            {project.name}
+          </span>
+        </CollapsibleTrigger>
+        {onOpenSettings && (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Open settings for ${project.name}`}
+            title="Repository settings"
+            onClick={onOpenSettings}
+            className="shrink-0 text-haze-600 opacity-0 transition-opacity group-hover/projectrow:opacity-100 hover:text-haze-200 focus-visible:opacity-100 pointer-coarse:opacity-100"
+          >
+            <Gear className="size-3" />
+          </Button>
+        )}
+        <span className="ml-1.5 shrink-0 font-mono text-[10px] leading-none text-haze-700">
+          {count}
         </span>
-        <span className="ml-auto font-mono text-[10px] leading-none text-haze-700">{count}</span>
-      </CollapsibleTrigger>
+      </div>
       <CollapsibleContent>
         {count === 0 && (
           <p className="py-1.5 pr-2 pl-[26px] text-[11.5px] leading-relaxed text-haze-700">
