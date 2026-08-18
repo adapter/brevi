@@ -91,6 +91,21 @@ describe.if(darwin)("SeatbeltProvider on macOS", () => {
     }
   }, 60_000);
 
+  test("wrap() merges caller env over create-time env and keeps HOME forced", async () => {
+    const provider = new SeatbeltProvider();
+    const id = `seatbelt-wrap-env-${Date.now()}`;
+    const sandbox = await provider.create({ id, env: { CODEX_HOME: "/create-time", KEPT: "yes" } });
+    try {
+      const launch = sandbox.wrap("true", [], undefined, { env: { CODEX_HOME: "/x" } });
+      expect(launch.env.HOME).toBe(sandbox.homePath);
+      expect(launch.env.CODEX_HOME).toBe("/x");
+      expect(launch.env.KEPT).toBe("yes");
+    } finally {
+      await sandbox.destroy();
+      await provider.discard(id);
+    }
+  });
+
   test("reaps a daemonized descendant when the command returns", async () => {
     const provider = new SeatbeltProvider();
     const id = `seatbelt-reap-${Date.now()}`;

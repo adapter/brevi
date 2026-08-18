@@ -167,7 +167,7 @@ The coding agent executed inside the sandbox.
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `command` | string | `"claude"` | The agent CLI brevi runs. It must be on the worker host's `PATH`; bwrap bind-mounts that binary (and its `PATH` directories) into the sandbox. |
-| `args` | string[] | `[]` | Extra arguments appended after brevi's own. |
+| `args` | string[] | `[]` | Extra arguments. For Claude runs these are mapped onto the Agent SDK's extra CLI arguments (`--key value`, `--key=value`, or a bare `--flag` each become one extra argument; positional, non-flag tokens can't be mapped and are skipped with a run log line). For Codex/Grok they're appended after brevi's own, verbatim. |
 | `model` | string | - | When set, the whole run uses this one model with no subagent delegation, overriding `orchestratorModel` and `implementModel`. |
 | `orchestratorModel` | string | `"claude-fable-5"` | Model the main agent loop runs on (planning, review, delegation). Claude agents only. |
 | `implementModel` | string | `"claude-sonnet-5"` | Model for the `implementer` subagent that executes the coding tasks. Claude agents only. |
@@ -182,9 +182,9 @@ The coding agent executed inside the sandbox.
 | `reviewModel` | string | `"gpt-5.6-sol"` | Model the Codex review runs on. |
 | `reviewEffort` | `"minimal"` \| `"low"` \| `"medium"` \| `"high"` | `"high"` | Reasoning effort for Codex review executions, passed as `-c model_reasoning_effort=<value>`. |
 
-brevi always invokes the agent as `<command> -p <prompt> --output-format stream-json --verbose --permission-mode auto`, then `--model <model>`, then `args`. Those are Claude Code's flags, so a different `command` has to accept the same shape. Claude agents additionally get `--effort <orchestratorEffort>`. Auto mode runs without permission prompts while a classifier blocks actions that escalate beyond the ticket (such as exfiltrating data); it needs a model that supports it, which every default brevi model does.
+How brevi invokes the agent depends on `command`. Claude commands run through the Claude Agent SDK: it drives the installed `claude` binary inside the sandbox with the equivalent options, stream-json output, permission mode auto, `--effort <orchestratorEffort>`, and the `implementer` subagent defined programmatically rather than on the command line. Any other `command` (Codex, Grok) keeps the raw CLI invocation brevi has always used: `<command> -p <prompt> --output-format stream-json --verbose --include-partial-messages --permission-mode auto`, then `--model <model>`, then `args`. Those are Claude Code's flags, so a non-Claude `command` has to accept the same shape. Auto mode runs without permission prompts while a classifier blocks actions that escalate beyond the ticket (such as exfiltrating data); it needs a model that supports it, which every default brevi model does.
 
-Claude runs are a single agent session with delegation: the main loop runs on `orchestratorModel` and dispatches the coding work to an `implementer` subagent on `implementModel` (defined via Claude Code's `--agents` flag). Setting `model` disables delegation and runs everything on that one model. Commands containing `codex` always run single-model on `model`.
+Claude runs are a single agent session with delegation: the main loop runs on `orchestratorModel` and dispatches the coding work to an `implementer` subagent on `implementModel` (defined programmatically through the Agent SDK). Setting `model` disables delegation and runs everything on that one model. Commands containing `codex` always run single-model on `model`.
 
 ### Codex review
 

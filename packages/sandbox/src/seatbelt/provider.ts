@@ -153,8 +153,14 @@ class SeatbeltSandbox implements Sandbox {
     this.#groups.clear();
   }
 
-  wrap(command: string, args: string[], cwd?: string): SandboxLaunch {
-    const env = sandboxEnv(this.homePath, this.#env);
+  wrap(
+    command: string,
+    args: string[],
+    cwd?: string,
+    options?: { newSession?: boolean; env?: Record<string, string> },
+  ): SandboxLaunch {
+    // Seatbelt has no newSession concept; the flag exists only for interface parity with bwrap.
+    const env = sandboxEnv(this.homePath, this.#env, options?.env);
     return wrapInSeatbelt(this.#profilePath, command, args, resolveHostPath(this.workspacePath, cwd), env);
   }
 

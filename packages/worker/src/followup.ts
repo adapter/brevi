@@ -312,7 +312,7 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
         mainModel,
         mainEffort,
         "follow-up",
-        delegate ? ["--agents", JSON.stringify(implementerAgent(config.agent.implementModel))] : [],
+        delegate ? { agents: implementerAgent(config.agent.implementModel) } : undefined,
       );
     } else {
       log("system", "no unaddressed feedback and the rebase was clean; skipping the agent session");

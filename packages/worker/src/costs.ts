@@ -302,6 +302,41 @@ function claudeUsageFrom(raw: unknown): Usage | undefined {
 }
 
 /**
+ * Parse a Claude Agent SDK / recent Claude Code CLI `modelUsage` object (from
+ * the terminal "result" event): `Record<modelId, ModelUsage>` covering the
+ * main loop, Task subagents, and sidechains, so it is the authoritative
+ * per-model split whenever it's present. Field names differ from our
+ * internal Usage shape (camelCase, `cacheReadInputTokens` /
+ * `cacheCreationInputTokens`) and from claudeUsageFrom's snake_case. Entries
+ * that aren't dicts are skipped rather than aborting the whole parse, so one
+ * malformed model doesn't drop the others. `costUSD` of exactly 0 means the
+ * model was missing from the SDK's own pricing data, not that it was free;
+ * taking that zero would make it beat buildCostEntry's pricing-table estimate
+ * downstream, so only a positive finite figure counts as known (same guard
+ * parseCcusageSessions applies in ccusage.ts).
+ */
+function claudeModelUsageFrom(raw: unknown): NormalizedSample[] {
+  if (!isDict(raw)) return [];
+  const samples: NormalizedSample[] = [];
+  for (const [model, entry] of Object.entries(raw)) {
+    if (!isDict(entry)) continue;
+    const input = entry.inputTokens;
+    const output = entry.outputTokens;
+    const sample: NormalizedSample = {
+      model,
+      inputTokens: typeof input === "number" ? input : 0,
+      outputTokens: typeof output === "number" ? output : 0,
+    };
+    if (typeof entry.cacheReadInputTokens === "number") sample.cacheReadTokens = entry.cacheReadInputTokens;
+    if (typeof entry.cacheCreationInputTokens === "number") sample.cacheWriteTokens = entry.cacheCreationInputTokens;
+    const costRaw = entry.costUSD;
+    if (typeof costRaw === "number" && Number.isFinite(costRaw) && costRaw > 0) sample.costUsd = costRaw;
+    samples.push(sample);
+  }
+  return samples;
+}
+
+/**
  * Parse a Codex usage object: either the old `token_count` event (`msg`'s own
  * fields, or newer 0.x CLIs' `info.total_token_usage`, cumulative for the
  * session) or the new `turn.completed` event's `usage` object (per-turn, same
@@ -327,25 +362,29 @@ function codexUsageFrom(raw: unknown): Usage | undefined {
 
 /**
  * Claude Code's stream-json events: headline model and session id from the
- * "system"/"init" event, per-message fallback accumulation from every
+ * "system"/"init" event; per-message fallback accumulation from every
  * "assistant" event keyed by that event's own model (so delegated executions
  * keep one contribution per model: orchestrator loop and implementer
- * subagent stay distinct), and the terminal "result" event supplying the
- * authoritative execution-wide totals when it arrives.
+ * subagent stay distinct); and the terminal "result" event supplying the
+ * authoritative execution-wide totals when it arrives, plus (on the Claude
+ * Agent SDK and recent CLIs) a `modelUsage` per-model split that overrides
+ * the assistant-event accumulation whenever it's present.
  */
 function claudeStreamAdapter(): EventAdapter {
   let mainModel: string | undefined;
   let sessionId: string | undefined;
 
   // Per-message accumulation from every "assistant" event, including subagent
-  // messages, keyed by the model on each event. Always the source of the
-  // per-model split; also the total when no "result" event arrives.
+  // messages, keyed by the model on each event. The per-model split fallback,
+  // used only when the terminal "result" event never arrives (crash, usage
+  // limit) or arrives without a usable modelUsage (older CLIs).
   const perModel = new Map<string | undefined, Usage>();
 
   // Terminal "result" event: its execution-wide usage and cost are
-  // authoritative when present, overriding the accumulated totals above (but
-  // never the per-model split, which it doesn't carry).
-  let result: { usage: Usage | undefined; costUsd: number | undefined } | undefined;
+  // authoritative when present, overriding the accumulated totals above.
+  // modelUsage, when it carries at least one row, is likewise authoritative
+  // for the per-model split, overriding the assistant-event accumulation.
+  let result: { usage: Usage | undefined; costUsd: number | undefined; modelUsage: NormalizedSample[] } | undefined;
 
   return {
     observe(event: unknown): void {
@@ -371,6 +410,7 @@ function claudeStreamAdapter(): EventAdapter {
         result = {
           usage: claudeUsageFrom(event.usage),
           costUsd: typeof event.total_cost_usd === "number" ? event.total_cost_usd : undefined,
+          modelUsage: claudeModelUsageFrom(event.modelUsage),
         };
         return;
       }
@@ -380,11 +420,18 @@ function claudeStreamAdapter(): EventAdapter {
     },
     usage(): NormalizedReading | undefined {
       if (!result && perModel.size === 0) return undefined;
-      const samples: NormalizedSample[] = [...perModel.entries()].map(([model, usage]) => {
-        const sample: NormalizedSample = { ...usage };
-        if (model) sample.model = model;
-        return sample;
-      });
+      // The result event's modelUsage, when it carries at least one row, is
+      // the authoritative per-model split (main loop, Task subagents, and
+      // sidechains all covered); otherwise fall back to the assistant-event
+      // accumulation, the only source when a run crashes before "result".
+      const samples: NormalizedSample[] =
+        result && result.modelUsage.length > 0
+          ? result.modelUsage
+          : [...perModel.entries()].map(([model, usage]) => {
+              const sample: NormalizedSample = { ...usage };
+              if (model) sample.model = model;
+              return sample;
+            });
       const reading: NormalizedReading = { samples };
       // A result without a recognized usage object leaves the accumulated
       // samples as the totals instead of zeroing the token counts.

@@ -1,6 +1,8 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
+import { query, type Options, type SpawnOptions, type SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { execa, type Result as ExecaResult } from "execa";
 import {
   BREVI_HOME,
@@ -10,6 +12,7 @@ import {
   type BreviConfig,
   type DispatchPrompts,
   type LimitInfo,
+  type LimitProvider,
   type RepoConfig,
   type RunResult,
   type Ticket,
@@ -110,7 +113,7 @@ export interface AgentSession {
     model: string | undefined,
     effort: string | undefined,
     label: string,
-    extraArgs?: string[],
+    options?: { agents?: Record<string, { description: string; prompt: string; model: string }> },
   ): Promise<void>;
   /** Persist an in-flight execution's usage; safe to call when nothing is pending. */
   recordPendingCost(): Promise<void>;
@@ -145,15 +148,10 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   // exactly this execution. Reset per execution in runAgent since each one
   // is a fresh Claude session.
   let currentSessionId: string | undefined;
-  const stdoutSink = lineSink((line) => {
-    let event: unknown;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      noteLimit(line);
-      log("stdout", line);
-      return;
-    }
+  // Shared by both runAgent paths (the argv/exec path's stdout lines and the
+  // Claude SDK path's async-iterated messages), so event handling behaves
+  // identically regardless of which one produced the event.
+  const handleAgentEvent = (event: unknown, rawLine?: string): void => {
     // Observed before the stream_event/noise filtering below: token_count
     // and result events must reach the collector even though most other
     // event types are dropped from the persisted log.
@@ -173,8 +171,23 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       return;
     }
     if (isDict(event) && event.type === "system" && typeof event.subtype === "string" && NOISE_EVENT_SUBTYPES.has(event.subtype)) return;
-    if (isAgentFailureEvent(event)) noteLimit(line);
+    // Checked before the failure-event scan below: a rejected rate-limit
+    // event is structured (no message text to scan) and always means the
+    // same thing, so it is mapped straight to a LimitInfo.
+    detectedLimit = detectRateLimitEvent(event, limitProvider) ?? detectedLimit;
+    if (isAgentFailureEvent(event)) noteLimit(rawLine ?? JSON.stringify(event));
     store.appendEvent({ runId, ts: new Date().toISOString(), type: "agent", event });
+  };
+  const stdoutSink = lineSink((line) => {
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      noteLimit(line);
+      log("stdout", line);
+      return;
+    }
+    handleAgentEvent(event, line);
   });
   const stderrSink = lineSink((line) => {
     noteLimit(line);
@@ -276,18 +289,8 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     model: string | undefined,
     effort: string | undefined,
     label: string,
-    extraArgs: string[] = [],
+    options?: { agents?: Record<string, { description: string; prompt: string; model: string }> },
   ): Promise<void> => {
-    // --include-partial-messages exists only so the stream carries thinking
-    // block boundaries; the token-level deltas are reduced to thinking events
-    // above and never persisted.
-    // Auto permission mode rather than bypassPermissions: auto's classifier
-    // blocks exfiltration-shaped actions, which matters because agents chew
-    // on untrusted ticket and repo content.
-    const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", "auto"];
-    if (model) args.push("--model", model);
-    if (effort) args.push("--effort", effort);
-    args.push(...extraArgs, ...config.agent.args);
     const timeoutMs = config.sandbox.timeoutMinutes * 60_000;
     log("system", `running ${config.agent.command} (${label}${model ? ` on ${model}` : ""}, timeout ${formatDuration(timeoutMs)})`);
     // Labeled before the racing await so an abort still knows which
@@ -313,25 +316,183 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         },
       });
     }
-    // The signal terminates the agent subprocess on cancellation and exec
-    // resolves once it is gone, so awaiting it (rather than racing past it)
-    // guarantees nothing is still running when the sandbox is destroyed.
-    const exec = await activeSandbox.exec(config.agent.command, args, {
+
+    if (limitProvider !== "claude") {
+      // --include-partial-messages exists only so the stream carries thinking
+      // block boundaries; the token-level deltas are reduced to thinking events
+      // above and never persisted.
+      // Auto permission mode rather than bypassPermissions: auto's classifier
+      // blocks exfiltration-shaped actions, which matters because agents chew
+      // on untrusted ticket and repo content.
+      const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", "auto"];
+      if (model) args.push("--model", model);
+      if (effort) args.push("--effort", effort);
+      // Delegation (the `agents` option) is Claude-only; a non-Claude agent
+      // never receives it.
+      args.push(...config.agent.args);
+      // The signal terminates the agent subprocess on cancellation and exec
+      // resolves once it is gone, so awaiting it (rather than racing past it)
+      // guarantees nothing is still running when the sandbox is destroyed.
+      const exec = await activeSandbox.exec(config.agent.command, args, {
+        cwd: activeSandbox.workspacePath,
+        env: { CODEX_HOME: codexHome, GROK_HOME: grokHome },
+        timeoutMs,
+        signal,
+        onStdout: (chunk) => stdoutSink.write(chunk),
+        onStderr: (chunk) => stderrSink.write(chunk),
+      });
+      // Recorded before the exitCode check so failed, cancelled, and
+      // limit-ended executions still keep whatever usage they burned.
+      await recordPendingCost();
+      throwIfAborted(signal);
+      if (exec.exitCode !== 0) {
+        if (detectedLimit) throw new AgentLimitError(detectedLimit);
+        if (exec.timedOut) throw new Error(`agent timed out after ${formatDuration(timeoutMs)} (${label})`);
+        throw new Error(`agent exited with code ${exec.exitCode} (${label})`);
+      }
+      return;
+    }
+
+    // The Agent SDK replaces the `claude -p ...` subprocess invocation, but
+    // it runs in this worker process; the CLI it drives must still run
+    // inside the sandbox, so spawnClaudeCodeProcess below routes the SDK's
+    // spawn through the same wrap() every other sandboxed exec uses (see the
+    // comment on spawnInSandbox for the security invariant this preserves).
+    let spawnedChild: ChildProcess | undefined;
+    let childExitCode: number | undefined;
+    let childExited: Promise<void> = Promise.resolve();
+    const spawnInSandbox = (opts: SpawnOptions): SpawnedProcess => {
+      // Security invariant: the SDK itself lives in the worker process
+      // (outside the sandbox), but the Claude CLI child it spawns must never
+      // run unsandboxed against untrusted ticket/repo content, so it is
+      // launched through the sandbox provider's wrap, exactly as exec() does.
+      const launch = activeSandbox.wrap(opts.command, opts.args, opts.cwd, { env: definedEnv(opts.env) });
+      // detached: true makes the child its own process-group leader. The
+      // SDK's own signal is deliberately not passed to spawn() (see the fact
+      // sheet this design follows): the SDK kills the child itself via the
+      // returned handle, through its graceful stdin-EOF path.
+      const child = spawn(launch.file, launch.args, { env: launch.env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+      spawnedChild = child;
+      // The SDK only drains stderr for processes it spawns itself (its
+      // `stderr` option never fires for a custom spawner), so this pipe must
+      // be consumed here: limit detection reads these lines, and an
+      // unconsumed pipe would block the CLI once the buffer fills.
+      child.stderr?.setEncoding("utf8");
+      child.stderr?.on("data", (chunk: string) => stderrSink.write(chunk));
+      // Seatbelt has no PID namespace, so a daemonized descendant the child
+      // spawned survives the child's own death unless the whole group is
+      // swept; mirrors runCommand's sweep in packages/sandbox/src/exec.ts.
+      const sweep = (): void => {
+        const pid = child.pid;
+        if (typeof pid !== "number") return;
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          // Group already gone.
+        }
+      };
+      childExited = new Promise((resolve) => {
+        child.once("exit", (code) => {
+          childExitCode = code ?? undefined;
+          sweep();
+          resolve();
+        });
+        child.once("error", () => {
+          sweep();
+          resolve();
+        });
+      });
+      return child;
+    };
+
+    const abortController = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      abortController.abort();
+    }, timeoutMs);
+    const onAbort = (): void => abortController.abort();
+    if (signal.aborted) abortController.abort();
+    else signal.addEventListener("abort", onAbort);
+
+    const extraArgs =
+      config.agent.args.length > 0
+        ? argvToExtraArgs(config.agent.args, (message) => log("system", message))
+        : undefined;
+
+    const sdkOptions: Options = {
+      ...(model ? { model } : {}),
+      ...(effort ? { effort: effort as Options["effort"] } : {}),
+      // Auto permission mode rather than bypassPermissions: auto's classifier
+      // blocks exfiltration-shaped actions, which matters because agents chew
+      // on untrusted ticket and repo content.
+      permissionMode: "auto",
+      // includePartialMessages exists only so the stream carries thinking
+      // block boundaries; the token-level deltas are reduced to thinking
+      // events above and never persisted.
+      includePartialMessages: true,
+      // Required: an omitted systemPrompt sends the CLI an EMPTY system
+      // prompt, unlike `claude -p`, which always uses this preset.
+      systemPrompt: { type: "preset", preset: "claude_code" },
+      // Explicit rather than relying on the SDK default: the pinned SDK
+      // version loads all three sources when this is omitted, but the
+      // published SDK docs specify that an omitted settingSources loads no
+      // filesystem settings at all. Spelling out the CLI's default sources
+      // keeps CLAUDE.md ("project" is required for it) and settings.json
+      // loading stable across SDK upgrades.
+      settingSources: ["user", "project", "local"],
+      agents: options?.agents,
       cwd: activeSandbox.workspacePath,
       env: { CODEX_HOME: codexHome, GROK_HOME: grokHome },
-      timeoutMs,
-      signal,
-      onStdout: (chunk) => stdoutSink.write(chunk),
-      onStderr: (chunk) => stderrSink.write(chunk),
-    });
-    // Recorded before the exitCode check so failed, cancelled, and
-    // limit-ended executions still keep whatever usage they burned.
+      pathToClaudeCodeExecutable: config.agent.command,
+      abortController,
+      ...(extraArgs ? { extraArgs } : {}),
+      // No `stderr` option: it only fires for the SDK's own local spawn;
+      // spawnInSandbox drains the child's stderr into stderrSink instead.
+      spawnClaudeCodeProcess: spawnInSandbox,
+    };
+
+    let failure: unknown;
+    try {
+      for await (const message of query({ prompt, options: sdkOptions })) handleAgentEvent(message);
+    } catch (error) {
+      failure = error;
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      // "Nothing still running when the sandbox is destroyed" invariant:
+      // wait out the child's own exit, bounded, so a spawner that never got
+      // a graceful exit signal (or a hung sandbox wrapper) cannot hang this
+      // await forever.
+      if (spawnedChild) {
+        const settled = await Promise.race([
+          childExited.then(() => true),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), CHILD_REAP_TIMEOUT_MS)),
+        ]);
+        if (!settled) {
+          const pid = spawnedChild.pid;
+          if (typeof pid === "number") {
+            try {
+              process.kill(-pid, "SIGKILL");
+            } catch {
+              // Group already gone.
+            }
+          }
+          await childExited;
+        }
+      }
+    }
+    // Recorded before the failure/timeout checks below so failed, cancelled,
+    // and limit-ended executions still keep whatever usage they burned.
     await recordPendingCost();
     throwIfAborted(signal);
-    if (exec.exitCode !== 0) {
+    if (failure !== undefined || timedOut) {
       if (detectedLimit) throw new AgentLimitError(detectedLimit);
-      if (exec.timedOut) throw new Error(`agent timed out after ${formatDuration(timeoutMs)} (${label})`);
-      throw new Error(`agent exited with code ${exec.exitCode} (${label})`);
+      if (timedOut) throw new Error(`agent timed out after ${formatDuration(timeoutMs)} (${label})`);
+      if (typeof childExitCode === "number" && childExitCode !== 0) {
+        throw new Error(`agent exited with code ${childExitCode} (${label})`);
+      }
+      throw failure instanceof Error ? failure : new Error(String(failure));
     }
   };
 
@@ -499,7 +660,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
       mainModel,
       mainEffort,
       "implementation",
-      delegate ? ["--agents", JSON.stringify(implementerAgent(config.agent.implementModel))] : [],
+      delegate ? { agents: implementerAgent(config.agent.implementModel) } : undefined,
     );
 
     // ---- checkpoint ------------------------------------------------------
@@ -544,7 +705,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
           mainModel,
           mainEffort,
           "review fixes",
-          delegate ? ["--agents", JSON.stringify(implementerAgent(config.agent.implementModel))] : [],
+          delegate ? { agents: implementerAgent(config.agent.implementModel) } : undefined,
         );
       }
     } else if (config.agent.codexReview) {
@@ -734,7 +895,7 @@ export function limitLabel(limit: LimitInfo): string {
 }
 
 /**
- * Definition for the Claude Code `--agents` flag: the subagent the
+ * Definition for the Agent SDK's `agents` option: the subagent the
  * orchestrating model dispatches implementation tasks to.
  */
 export function implementerAgent(model: string): Record<string, { description: string; prompt: string; model: string }> {
@@ -815,6 +976,91 @@ const isDict = (v: unknown): v is Record<string, unknown> =>
  * ticks that would bloat events.jsonl and spam the console if persisted.
  */
 const NOISE_EVENT_SUBTYPES = new Set(["status", "thinking_tokens"]);
+
+/**
+ * How long the Claude SDK path waits for its spawned CLI child to report its
+ * own exit (via spawnInSandbox's childExited) before force-killing its
+ * process group: long enough for the SDK's own graceful stdin-EOF + grace
+ * window to finish, short enough that a run never hangs on a stuck child.
+ */
+const CHILD_REAP_TIMEOUT_MS = 10_000;
+
+/** Human label for a limit provider, e.g. for a rate-limit event's message. */
+function providerLabel(provider: LimitProvider): string {
+  return provider === "claude" ? "Claude" : provider === "grok" ? "Grok" : "Codex";
+}
+
+/**
+ * Maps a Claude stream's rate_limit_event to a LimitInfo when it reports a
+ * rejected (not merely warned) request. Unlike detectLimit, which scans
+ * message text, this event is already structured, so no pattern matching is
+ * needed: the SDK's rate_limit_event carries its own status and reset time.
+ */
+export function detectRateLimitEvent(event: unknown, provider: LimitProvider): LimitInfo | undefined {
+  if (!isDict(event) || event.type !== "rate_limit_event") return undefined;
+  const info = event.rate_limit_info;
+  if (!isDict(info) || info.status !== "rejected") return undefined;
+  const rateLimitType = typeof info.rateLimitType === "string" ? info.rateLimitType : undefined;
+  const kind = rateLimitType === "five_hour" ? "five-hour" : rateLimitType?.startsWith("seven_day") ? "weekly" : "unknown";
+  const resetsAtRaw = typeof info.resetsAt === "number" ? info.resetsAt : undefined;
+  const resetsAt =
+    resetsAtRaw !== undefined && Number.isFinite(resetsAtRaw) && resetsAtRaw > 0
+      ? new Date(resetsAtRaw < 1e12 ? resetsAtRaw * 1000 : resetsAtRaw).toISOString()
+      : undefined;
+  const label = providerLabel(provider);
+  return {
+    provider,
+    kind,
+    resetsAt,
+    message: rateLimitType ? `${label} rate limit rejected (${rateLimitType})` : `${label} rate limit rejected`,
+  };
+}
+
+/**
+ * Maps `config.agent.args` (raw CLI-style tokens, e.g. from an existing
+ * `claude` invocation) onto the Agent SDK's `extraArgs` option, which the SDK
+ * turns into `--key value` (or a bare `--key` for a null value) itself.
+ * Positional tokens have no SDK equivalent; each is warned about once and
+ * then skipped rather than silently dropped.
+ */
+export function argvToExtraArgs(args: string[], warn: (message: string) => void): Record<string, string | null> {
+  const result: Record<string, string | null> = {};
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === undefined) continue;
+    if (!token.startsWith("--")) {
+      warn(`cannot map agent arg "${token}" to an Agent SDK option; skipping`);
+      continue;
+    }
+    const key = token.slice(2);
+    const eq = key.indexOf("=");
+    if (eq !== -1) {
+      result[key.slice(0, eq)] = key.slice(eq + 1);
+      continue;
+    }
+    const next = args[i + 1];
+    if (next !== undefined && !next.startsWith("-")) {
+      result[key] = next;
+      i += 1;
+    } else {
+      result[key] = null;
+    }
+  }
+  return result;
+}
+
+/**
+ * Drops undefined values from an env map: SpawnOptions.env (the Agent SDK's
+ * spawn contract) may hand some through, but Sandbox.wrap()'s env option only
+ * accepts strings.
+ */
+export function definedEnv(env: Record<string, string | undefined>): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) result[key] = value;
+  }
+  return result;
+}
 
 /**
  * Reduces the agent's raw partial-message stream events to thinking-block
