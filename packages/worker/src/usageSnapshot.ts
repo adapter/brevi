@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { WORKER_MAX_USAGE_SNAPSHOT_BYTES } from "@brevi/shared";
-import { readFileWithin } from "@brevi/sandbox";
+import { readdirWithin, readFileWithin } from "@brevi/sandbox";
 import { isSafePathSegment } from "@brevi/orchestrator/internal";
 
 /**
@@ -114,9 +113,13 @@ async function findSessionTranscripts(homePath: string, sessionId?: string): Pro
   const found = new Map<string, string>();
   for (const root of CLAUDE_DATA_ROOTS) {
     const projectsDir = join(homePath, root, "projects");
+    // Both directory levels sit in the agent-writable tree, so they are
+    // enumerated through the sandbox package's no-follow traversal: a
+    // component swapped for a symlink fails the listing instead of pointing
+    // the scan at an arbitrary host directory.
     let projectDirs: string[];
     try {
-      projectDirs = await readdir(projectsDir);
+      projectDirs = await readdirWithin(homePath, projectsDir);
     } catch {
       continue;
     }
@@ -124,7 +127,7 @@ async function findSessionTranscripts(homePath: string, sessionId?: string): Pro
       if (!isSafePathSegment(dir)) continue;
       let files: string[];
       try {
-        files = await readdir(join(projectsDir, dir));
+        files = await readdirWithin(homePath, join(projectsDir, dir));
       } catch {
         continue;
       }
@@ -163,19 +166,15 @@ export async function collectUsageSnapshots(options: CollectUsageSnapshotsOption
   }
   const snapshots: UsageSnapshot[] = [];
   for (const transcript of transcripts) {
-    const info = await stat(transcript.path).catch(() => undefined);
-    if (!info || info.size > MAX_RAW_TRANSCRIPT_BYTES) {
-      log(`usage snapshot: transcript for session ${transcript.sessionId} is unreadable or over ${MAX_RAW_TRANSCRIPT_BYTES} bytes; skipped`);
-      continue;
-    }
     let raw: string;
     try {
       // The transcript sits in an agent-writable tree, and another process
       // (a second attach session, say) can mutate it between any check and
       // the read, so the read itself is the defense: a descriptor-based
-      // O_NOFOLLOW traversal that a racing symlink swap cannot redirect out
-      // of the sandbox home.
-      raw = await readFileWithin(homePath, transcript.path);
+      // no-follow traversal a racing symlink swap cannot redirect out of the
+      // sandbox home, with the size cap enforced on the opened descriptor
+      // and the read bounded to it.
+      raw = await readFileWithin(homePath, transcript.path, MAX_RAW_TRANSCRIPT_BYTES);
     } catch (error) {
       log(`usage snapshot: could not read session ${transcript.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
       continue;

@@ -207,16 +207,19 @@ async function darwinDescendDir(rootDir: string, parts: string[], create: boolea
   return join(rootDir, ...parts);
 }
 
-/** Reads a regular file, refusing any component that escapes rootDir. */
-export async function readFileWithin(rootDir: string, target: string): Promise<string> {
+/**
+ * Reads a regular file, refusing any component that escapes rootDir. With
+ * `maxBytes` set, the size of the already-opened descriptor is checked and
+ * the read itself is bounded, so neither a swapped nor a still-growing file
+ * can read more than the cap into memory.
+ */
+export async function readFileWithin(rootDir: string, target: string, maxBytes?: number): Promise<string> {
   const parts = relativeParts(rootDir, target, "read");
   if (parts.length === 0) throw new Error(`refusing to read ${target}: it is the sandbox root`);
   if (DARWIN) {
     const handle = await darwinOpenWithin(rootDir, parts, O_RDONLY);
     try {
-      const stats = await handle.stat();
-      if (!stats.isFile()) throw new Error(`refusing to read ${target}: not a regular file`);
-      return await handle.readFile("utf8");
+      return await readOpened(handle, target, maxBytes);
     } finally {
       await handle.close();
     }
@@ -225,12 +228,60 @@ export async function readFileWithin(rootDir: string, target: string): Promise<s
   try {
     const handle = await openAt(dir, last(parts), O_RDONLY | O_NOFOLLOW);
     try {
-      const stats = await handle.stat();
-      if (!stats.isFile()) throw new Error(`refusing to read ${target}: not a regular file`);
-      return await handle.readFile("utf8");
+      return await readOpened(handle, target, maxBytes);
     } finally {
       await handle.close();
     }
+  } finally {
+    await dir.close();
+  }
+}
+
+/** Reads a verified descriptor to EOF, or to a hard cap when one is given. */
+async function readOpened(handle: FileHandle, target: string, maxBytes?: number): Promise<string> {
+  const stats = await handle.stat();
+  if (!stats.isFile()) throw new Error(`refusing to read ${target}: not a regular file`);
+  if (maxBytes === undefined) return handle.readFile("utf8");
+  if (stats.size > maxBytes) {
+    throw new Error(`refusing to read ${target}: ${stats.size} bytes is over the ${maxBytes}-byte limit`);
+  }
+  // One spare byte past the descriptor-stat's size detects growth during the
+  // read; allocation stays bounded by maxBytes either way.
+  const buffer = Buffer.alloc(stats.size + 1);
+  let total = 0;
+  while (total < buffer.length) {
+    const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+    if (bytesRead === 0) break;
+    total += bytesRead;
+  }
+  if (total > stats.size) {
+    throw new Error(`refusing to read ${target}: it grew past ${stats.size} bytes while being read`);
+  }
+  return buffer.toString("utf8", 0, total);
+}
+
+/**
+ * Lists a directory's entry names, refusing any component that escapes
+ * rootDir. On Linux the listing itself goes through the verified directory
+ * handle; on macOS the verified handle is held while the listing re-walks
+ * the path, the same one-syscall residual window unlinkVerified accepts.
+ */
+export async function readdirWithin(rootDir: string, target: string): Promise<string[]> {
+  const parts = relativeParts(rootDir, target, "list");
+  if (DARWIN) {
+    const real = await realpath(rootDir);
+    const at = join(real, ...parts);
+    const handle = await open(at, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY);
+    try {
+      return await readdir(at);
+    } finally {
+      await handle.close();
+    }
+  }
+  let dir = await openRoot(rootDir);
+  try {
+    for (const part of parts) dir = await step(dir, part, false);
+    return await readdir(procPath(dir, "."));
   } finally {
     await dir.close();
   }

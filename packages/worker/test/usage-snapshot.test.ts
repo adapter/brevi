@@ -170,6 +170,21 @@ describe("collectUsageSnapshots", () => {
     }
   });
 
+  it("refuses to scan a projects tree reached through a symlinked directory", async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), "brevi-usage-elsewhere-"));
+    try {
+      const realProjects = join(elsewhere, "projects", "some-dir");
+      mkdirSync(realProjects, { recursive: true });
+      writeFileSync(join(realProjects, `${SESSION_ID}.jsonl`), `${assistantLine}\n`);
+      mkdirSync(join(home, ".claude"), { recursive: true });
+      symlinkSync(join(elsewhere, "projects"), join(home, ".claude", "projects"));
+      const snapshots = await collectUsageSnapshots({ homePath: home, projectKey: "brevi-a-b", sessionId: SESSION_ID, log });
+      expect(snapshots).toEqual([]);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
   it("skips a usage-free transcript quietly and a malformed one with a diagnostic", async () => {
     writeTranscript(".claude", SESSION_ID, `${promptLine}\nnot json at all\n`);
     const snapshots = await collectUsageSnapshots({ homePath: home, projectKey: "brevi-a-b", sessionId: SESSION_ID, log });
