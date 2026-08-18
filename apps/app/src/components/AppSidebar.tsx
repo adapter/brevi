@@ -37,7 +37,6 @@ import type { Connection, Page } from "../lib/useOrchestrator";
 import { Plate, StatusDot } from "./Bits";
 import { PROVIDERS } from "./config/ConnectorsSection";
 import { Archive, ChevronRight, Gear, Graph, Play, Plus, Repo, Unarchive } from "./Icons";
-import { ThemeToggle } from "./ThemeToggle";
 
 /** Orchestrator connection states, compact enough for the sidebar header. */
 const CONNECTION = {
@@ -150,28 +149,20 @@ export function AppSidebar({
     <Sidebar collapsible="offcanvas" className="border-sidebar-border">
       <SidebarHeader className="h-12 justify-center px-3">
         <div className="flex items-center gap-2">
-          <SidebarTrigger className="text-haze-500" aria-label="Collapse sidebar" />
-          {health?.version && (
-            <span className="font-mono text-[10.5px] leading-none text-haze-700">
-              v{health.version}
-            </span>
-          )}
-          <span className="ml-auto flex items-center gap-1">
+          <span
+            className={`flex items-center gap-1.5 ${CONNECTION[conn].text}`}
+            title={conn === "offline" ? "Orchestrator offline" : CONNECTION[conn].label}
+          >
             <span
-              className={`mr-1 flex items-center gap-1.5 ${CONNECTION[conn].text}`}
-              title={conn === "offline" ? "Orchestrator offline" : CONNECTION[conn].label}
-            >
-              <span
-                className={`inline-block size-[6px] rounded-full ${CONNECTION[conn].dot} ${
-                  CONNECTION[conn].pulse ? "animate-beacon" : ""
-                }`}
-              />
-              <span className="text-[10.5px] leading-none font-medium">
-                {CONNECTION[conn].label}
-              </span>
+              className={`inline-block size-[6px] rounded-full ${CONNECTION[conn].dot} ${
+                CONNECTION[conn].pulse ? "animate-beacon" : ""
+              }`}
+            />
+            <span className="text-[10.5px] leading-none font-medium">
+              {CONNECTION[conn].label}
             </span>
-            <ThemeToggle />
           </span>
+          <SidebarTrigger className="ml-auto text-haze-500" aria-label="Collapse sidebar" />
         </div>
       </SidebarHeader>
 

@@ -7,6 +7,7 @@ import { OrchestratorSection } from "./config/OrchestratorSection";
 import { RepositoriesSection } from "./config/RepositoriesSection";
 import { ServerSection } from "./config/ServerSection";
 import { WorkersSection } from "./config/WorkersSection";
+import { ThemeToggle } from "./ThemeToggle";
 
 const SECTIONS: { id: ConfigSection; label: string }[] = [
   { id: "connectors", label: "Connectors" },
@@ -49,10 +50,21 @@ export function ConfigurationPage({
 }) {
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-5 sm:py-7 md:px-8">
-      <header className="flex items-baseline gap-2.5">
+      <header className="flex items-center gap-2.5">
         <h2 className="text-[16px] font-semibold text-haze-50">
           Configuration
         </h2>
+        <span className="ml-auto flex items-center gap-2">
+          {health?.version && (
+            <span
+              className="font-mono text-[10.5px] leading-none text-haze-700"
+              title="Mission Control version"
+            >
+              v{health.version}
+            </span>
+          )}
+          <ThemeToggle />
+        </span>
       </header>
       <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
         Everything in <code className="font-mono text-[11px]">~/.brevi/config.json</code>. Changes
