@@ -78,14 +78,33 @@ export function parseCcusageDaily(stdout: string, provider: string): UsageDay[] 
     if (!isDict(raw)) continue;
     const dateRaw = raw.date ?? raw.day;
     if (typeof dateRaw !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) continue;
+    const costUsd = num(raw.totalCost ?? raw.costUSD ?? raw.cost);
     const models = parseModelRows(raw, provider);
+    // The Codex report prices the day, not the model: its model entries are
+    // tokens-only. When no row carries a cost but the day does, prorate the
+    // day's cost by each model's share of its tokens; the common one-model
+    // day gets the exact figure, and a multi-model day gets an estimate
+    // rather than a table full of $0 rows.
+    if (costUsd > 0 && models.length > 0 && models.every((m) => m.costUsd === 0)) {
+      const weights = models.map(
+        (m) => m.inputTokens + m.outputTokens + m.cacheReadTokens + m.cacheWriteTokens,
+      );
+      const total = weights.reduce((a, b) => a + b, 0);
+      if (total > 0) {
+        models.forEach((m, i) => {
+          m.costUsd = Math.round(((costUsd * (weights[i] ?? 0)) / total) * 1e6) / 1e6;
+        });
+      } else if (models.length === 1 && models[0]) {
+        models[0].costUsd = costUsd;
+      }
+    }
     days.push({
       date: dateRaw,
       inputTokens: num(raw.inputTokens),
       outputTokens: num(raw.outputTokens),
       cacheReadTokens: num(raw.cacheReadTokens),
       cacheWriteTokens: num(raw.cacheCreationTokens ?? raw.cacheWriteTokens),
-      costUsd: num(raw.totalCost ?? raw.costUSD ?? raw.cost),
+      costUsd,
       ...(models.length > 0 ? { models } : {}),
     });
   }
