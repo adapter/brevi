@@ -470,11 +470,11 @@ function ProjectSection({
 }
 
 /**
- * One run as a three-line card: the ticket id line, then the title given two
- * reserved lines so every card sits at the same height. The whole card is a
- * stretched link (so copy link and middle-click behave normally) with the
- * archive control floated above it; a finished run archives, an archived one
- * unarchives, and a live run has no archive control at all.
+ * One run as a compact card: the ticket id line, then the title clamped to
+ * two lines. The whole card is a stretched link (so copy link and
+ * middle-click behave normally) with the archive control floated above it; a
+ * finished run archives, an archived one unarchives, and a live run has no
+ * archive control at all.
  */
 function RunRow({
   run,
@@ -500,7 +500,7 @@ function RunRow({
 
   return (
     <div
-      className={`group/run relative rounded-lg px-2.5 py-2 ring-1 transition-colors ${
+      className={`group/run relative rounded-lg px-2.5 py-1.5 ring-1 transition-colors ${
         selected
           ? "bg-ink-750 ring-ink-500"
           : "bg-card ring-foreground/10 hover:bg-ink-800"
@@ -518,7 +518,7 @@ function RunRow({
         title={`${run.ticket.identifier}: ${run.ticket.title} (${STATUS_TONE[run.status].label})`}
         className="absolute inset-0 rounded-lg"
       />
-      <span className="pointer-events-none relative flex h-6 items-center gap-1.5">
+      <span className="pointer-events-none relative flex h-5 items-center gap-1.5">
         <StatusDot status={run.status} size={6} />
         <span className="font-mono text-[10.5px] leading-none text-haze-400">
           {run.ticket.identifier}
@@ -543,7 +543,7 @@ function RunRow({
         </span>
       </span>
       <span
-        className={`pointer-events-none relative mt-1 line-clamp-2 min-h-[34px] text-[12.5px] leading-[17px] ${
+        className={`pointer-events-none relative mt-0.5 line-clamp-2 text-[12px] leading-[16px] ${
           selected ? "text-haze-50" : "text-haze-200"
         }`}
       >
@@ -572,10 +572,10 @@ function TicketRow({
 }) {
   return (
     <div
-      className="group/ticket block rounded-lg bg-card px-2.5 py-2 ring-1 ring-foreground/10 transition-colors hover:bg-ink-800"
+      className="group/ticket block rounded-lg bg-card px-2.5 py-1.5 ring-1 ring-foreground/10 transition-colors hover:bg-ink-800"
       title={`${ticket.identifier}: ${ticket.title}`}
     >
-      <span className="flex h-6 items-center gap-1.5">
+      <span className="flex h-5 items-center gap-1.5">
         {active ? (
           <StatusDot status={active.status} size={6} />
         ) : (
@@ -615,7 +615,7 @@ function TicketRow({
         href={ticket.url}
         target="_blank"
         rel="noreferrer"
-        className="mt-1 line-clamp-2 min-h-[34px] text-[12.5px] leading-[17px] text-haze-200 hover:text-haze-50"
+        className="mt-0.5 line-clamp-2 text-[12px] leading-[16px] text-haze-200 hover:text-haze-50"
       >
         {ticket.title}
       </a>

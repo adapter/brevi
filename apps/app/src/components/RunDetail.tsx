@@ -18,8 +18,8 @@ import { api } from "../lib/api";
 import { clock, duration, elapsed } from "../lib/format";
 import { queueOnly } from "../lib/fleet";
 import { isActive, isTerminal } from "../lib/status";
+import { Activity } from "./Activity";
 import { Artifacts } from "./Artifacts";
-import { AttachTerminal } from "./AttachTerminal";
 import { Plate, PrChip, RepoChip, StatusChip } from "./Bits";
 import { Console } from "./Console";
 import { CostBadge, CostBreakdown } from "./CostBadge";
@@ -72,10 +72,6 @@ export function RunDetail({
   // fresher 30s probe.
   const prChipUrl = run.prUrl;
   const prChipState = prChipUrl ? (run.prState ?? "open") : undefined;
-  const finished = run.status === "completed" || run.status === "failed";
-  const retainedMs = run.sandbox.retainedUntil ? Date.parse(run.sandbox.retainedUntil) : Number.NaN;
-  const sandboxRetained = retainedMs > now;
-  const resumable = finished && sandboxRetained && Boolean(run.agentSessionId);
   // A retry clears run.result, so an active run still carrying its PR result is a follow-up in flight.
   const followUpInFlight = live && Boolean(run.result?.prUrl);
   // Completed runs, plus failed or cancelled follow-ups: those keep their PR
@@ -119,15 +115,13 @@ export function RunDetail({
   // Covers the gap between the click's POST and the active run snapshot
   // arriving, so the slow GitHub preflight still shows a spinner.
   const followUpPending = busy || followUpInFlight;
-  const [tab, setTab] = useState<LeftTab>(hasOutcome ? "result" : "console");
-  const [terminalStarted, setTerminalStarted] = useState(false);
+  const [tab, setTab] = useState<LeftTab>(hasOutcome ? "result" : "activity");
   // Selecting a different run resets the view, and the outcome drives it while
   // a run stays open: the Result tab appears and takes focus the moment the
-  // run finishes, and hands back to the console when a retry clears the
-  // outcome (the strip is Console-only again then, so no other tab is valid).
+  // run finishes, and hands back to the activity feed when a retry clears the
+  // outcome (no other tab is a sensible default then).
   useEffect(() => {
-    setTab(hasOutcome ? "result" : "console");
-    setTerminalStarted(false);
+    setTab(hasOutcome ? "result" : "activity");
   }, [run.id, hasOutcome]);
   const artifacts = run.result?.artifacts ?? collectArtifacts(events);
   const hasResult = Boolean(run.result);
@@ -257,28 +251,16 @@ export function RunDetail({
                     Result
                   </TabButton>
                 )}
-                <TabButton active={tab === "console"} onClick={() => setTab("console")}>
-                  Console
+                <TabButton active={tab === "activity"} onClick={() => setTab("activity")}>
+                  Activity
                 </TabButton>
-                {finished && (
-                  <TabButton
-                    active={tab === "terminal"}
-                    disabled={!resumable}
-                    title={
-                      resumable
-                        ? "Resume the agent conversation in this run's sandbox"
-                        : !sandboxRetained
-                          ? "The run's sandbox is no longer available; it was cleaned up when the retention window ended."
-                          : "No agent session was captured for this run; resume supports Claude runs only."
-                    }
-                    onClick={() => {
-                      setTerminalStarted(true);
-                      setTab("terminal");
-                    }}
-                  >
-                    Terminal
-                  </TabButton>
-                )}
+                <TabButton
+                  active={tab === "raw"}
+                  title="The unfiltered event stream, timestamps and stderr included"
+                  onClick={() => setTab("raw")}
+                >
+                  Raw
+                </TabButton>
               </div>
 
               {/* Inactive panels hide instead of unmounting: the console keeps
@@ -311,22 +293,12 @@ export function RunDetail({
                     </div>
                   </Card>
                 </div>
-                <div className={tab === "console" ? "h-full" : "hidden"}>
+                <div className={tab === "activity" ? "h-full" : "hidden"}>
+                  <Activity runId={run.id} events={events} live={live} />
+                </div>
+                <div className={tab === "raw" ? "h-full" : "hidden"}>
                   <Console runId={run.id} events={events} live={live} fill />
                 </div>
-                {terminalStarted && resumable && (
-                  <div className={tab === "terminal" ? "h-full" : "hidden"}>
-                    <AttachTerminal
-                      runId={run.id}
-                      retainedUntil={run.sandbox.retainedUntil as string}
-                      now={now}
-                      onClose={() => {
-                        setTerminalStarted(false);
-                        setTab("console");
-                      }}
-                    />
-                  </div>
-                )}
               </div>
 
             <aside className="flex min-h-0 min-w-0 flex-col gap-3 xl:col-start-2 xl:row-start-2">
@@ -386,7 +358,7 @@ export function RunDetail({
   );
 }
 
-type LeftTab = "result" | "console" | "terminal";
+type LeftTab = "result" | "activity" | "raw";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
