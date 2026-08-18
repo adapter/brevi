@@ -33,6 +33,11 @@ import {
   type PairingTokenResponse,
   type PrState,
   type PrStatusResponse,
+  type PullDetailResponse,
+  type PullListResponse,
+  type PullMergeMethod,
+  type PullMergeResponse,
+  type PullSummary,
   type ConfigPatch,
   type R2ConnectResponse,
   type R2Status,
@@ -78,7 +83,21 @@ import {
   validateXaiApiKey,
 } from "./credentials.js";
 import { FleetStore, sanitizeWorkerName } from "./fleet.js";
-import { branchNameFor, fetchPrStatus, findPullRequestForBranch, listRepos } from "./github.js";
+import {
+  branchNameFor,
+  commentOnPull,
+  fetchPrStatus,
+  findPullRequestForBranch,
+  gatherPullDetail,
+  listPullRequests,
+  listRepos,
+  markPullRequestReady,
+  mergePullRequest,
+  replyToReviewComment,
+  setPullRequestState,
+  setReviewThreadResolved,
+  submitPullReview,
+} from "./github.js";
 import { agentProvider, probeAgentLimit } from "./limits.js";
 import { isLinearAuthError, LinearService, type LinearAuthHooks } from "./linear.js";
 import { memoryKeyFor, MemoryStore, selectMemories } from "./memory.js";
@@ -1842,6 +1861,157 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         "invalid",
         `could not check the pull request: ${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+  }
+
+  /** The GitHub token, or the 400 every pull route answers without one. */
+  #githubToken(): string {
+    const token = this.config.github.token;
+    if (!token) throw new OrchestratorError("invalid", "GitHub is not connected");
+    return token;
+  }
+
+  /** Resolve a repo key from config.repos to its "owner/name" remote. */
+  #pullRemote(repoKey: string): string {
+    const repo = this.config.repos[repoKey];
+    if (!repo) throw new OrchestratorError("not-found", `no configured repository "${repoKey}"`);
+    return repo.remote;
+  }
+
+  /** Map a GitHub API failure onto an orchestrator error the routes can serve. */
+  static #wrapGithubError(error: unknown): OrchestratorError {
+    const status = (error as { status?: number }).status;
+    const message = `GitHub said: ${error instanceof Error ? error.message : String(error)}`;
+    if (status === 404) return new OrchestratorError("not-found", message);
+    // 405 (not mergeable) and 409 (head moved) are state conflicts, not bad input.
+    if (status === 405 || status === 409) return new OrchestratorError("conflict", message);
+    return new OrchestratorError("invalid", message);
+  }
+
+  /**
+   * Pull requests across every configured repository, newest activity first.
+   * Repos are fetched concurrently, and one failing repo (deleted remote,
+   * token without access) reports its error beside the others' results
+   * instead of failing the whole list.
+   */
+  async listPulls(): Promise<PullListResponse> {
+    const token = this.#githubToken();
+    const repos = Object.entries(this.config.repos);
+    const settled = await Promise.all(
+      repos.map(async ([key, repo]) => {
+        try {
+          const pulls = await listPullRequests(repo.remote, token);
+          return { ok: true as const, key, remote: repo.remote, pulls };
+        } catch (error) {
+          return {
+            ok: false as const,
+            key,
+            remote: repo.remote,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }),
+    );
+    const pulls: PullSummary[] = [];
+    const errors: PullListResponse["errors"] = [];
+    for (const result of settled) {
+      if (result.ok) {
+        for (const pull of result.pulls) pulls.push({ repo: result.key, ...pull });
+      } else {
+        errors.push({ repo: result.key, remote: result.remote, message: result.error });
+      }
+    }
+    pulls.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return { pulls, errors };
+  }
+
+  /** Everything the PR detail view renders, gathered from GitHub on demand. */
+  async pullDetail(repoKey: string, number: number): Promise<PullDetailResponse> {
+    const token = this.#githubToken();
+    const remote = this.#pullRemote(repoKey);
+    try {
+      const detail = await gatherPullDetail(remote, number, token);
+      return { ...detail, pull: { repo: repoKey, ...detail.pull } };
+    } catch (error) {
+      throw Orchestrator.#wrapGithubError(error);
+    }
+  }
+
+  async pullMerge(repoKey: string, number: number, method: PullMergeMethod): Promise<PullMergeResponse> {
+    const token = this.#githubToken();
+    const remote = this.#pullRemote(repoKey);
+    try {
+      return await mergePullRequest({ remote, number, method, token });
+    } catch (error) {
+      throw Orchestrator.#wrapGithubError(error);
+    }
+  }
+
+  async pullSetState(repoKey: string, number: number, state: "open" | "closed"): Promise<void> {
+    const token = this.#githubToken();
+    const remote = this.#pullRemote(repoKey);
+    try {
+      await setPullRequestState({ remote, number, state, token });
+    } catch (error) {
+      throw Orchestrator.#wrapGithubError(error);
+    }
+  }
+
+  /** Take the PR out of draft. */
+  async pullReady(repoKey: string, number: number): Promise<void> {
+    const token = this.#githubToken();
+    const remote = this.#pullRemote(repoKey);
+    try {
+      await markPullRequestReady(`https://github.com/${remote}/pull/${number}`, token);
+    } catch (error) {
+      throw Orchestrator.#wrapGithubError(error);
+    }
+  }
+
+  async pullComment(repoKey: string, number: number, body: string): Promise<void> {
+    const token = this.#githubToken();
+    const remote = this.#pullRemote(repoKey);
+    try {
+      await commentOnPull({ remote, number, body, token });
+    } catch (error) {
+      throw Orchestrator.#wrapGithubError(error);
+    }
+  }
+
+  async pullReview(
+    repoKey: string,
+    number: number,
+    event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT",
+    body: string,
+  ): Promise<void> {
+    const token = this.#githubToken();
+    const remote = this.#pullRemote(repoKey);
+    try {
+      await submitPullReview({ remote, number, event, body, token });
+    } catch (error) {
+      throw Orchestrator.#wrapGithubError(error);
+    }
+  }
+
+  async pullReply(repoKey: string, number: number, commentId: number, body: string): Promise<void> {
+    const token = this.#githubToken();
+    const remote = this.#pullRemote(repoKey);
+    try {
+      await replyToReviewComment({ remote, number, commentId, body, token });
+    } catch (error) {
+      throw Orchestrator.#wrapGithubError(error);
+    }
+  }
+
+  async pullResolveThread(repoKey: string, threadId: string, resolved: boolean): Promise<void> {
+    const token = this.#githubToken();
+    // The thread node id already names the PR; the repo lookup just 404s early
+    // on a key this config does not know.
+    this.#pullRemote(repoKey);
+    try {
+      await setReviewThreadResolved({ threadId, resolved, token });
+    } catch (error) {
+      throw Orchestrator.#wrapGithubError(error);
     }
   }
 

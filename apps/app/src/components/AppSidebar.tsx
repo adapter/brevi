@@ -38,7 +38,7 @@ import { isActive, isTerminal, STATUS_TONE } from "../lib/status";
 import type { Connection, Page } from "../lib/useOrchestrator";
 import { Plate, StatusDot } from "./Bits";
 import { PROVIDERS } from "./config/ConnectorsSection";
-import { Archive, ChevronRight, Gear, Graph, Play, Plus, Repo, Unarchive } from "./Icons";
+import { Archive, ChevronRight, Gear, Graph, Play, Plus, Pull, Repo, Unarchive } from "./Icons";
 
 /**
  * Today's agent spend across every machine, for the footer's Usage row.
@@ -125,6 +125,7 @@ export function AppSidebar({
   onUnarchiveRun,
   onOpenConfig,
   onOpenUsage,
+  onOpenPulls,
   onAddRepo,
   onOpenWorkers,
   onOpenRepoSettings,
@@ -150,6 +151,8 @@ export function AppSidebar({
   onUnarchiveRun: (runId: string) => void;
   onOpenConfig: () => void;
   onOpenUsage: () => void;
+  /** Opens the Pull Requests page. */
+  onOpenPulls: () => void;
   /** Opens the Repositories config page, where a repo is added and mapped to Linear. */
   onAddRepo: () => void;
   /** Opens the Workers config page, for the queue-only notice below. */
@@ -220,6 +223,27 @@ export function AppSidebar({
       </SidebarHeader>
 
       <SidebarContent>
+        {/* The Pull Requests entry sits above the runs: runs produce PRs, and
+            this is where they get reviewed and merged without GitHub. */}
+        <div className="px-2 pt-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              if (isMobile) setOpenMobile(false);
+              onOpenPulls();
+            }}
+            aria-current={page === "pulls" || page.startsWith("pull:") ? "page" : undefined}
+            className={`touch-target flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] font-medium transition-colors ${
+              page === "pulls" || page.startsWith("pull:")
+                ? "bg-ink-750 text-haze-50"
+                : "text-haze-400 hover:bg-ink-800/70 hover:text-haze-100"
+            }`}
+          >
+            <Pull className="size-3.5" />
+            Pull requests
+          </button>
+        </div>
+
         <SidebarGroup>
           <SidebarGroupLabel className="gap-2 pr-1">
             <DropdownMenu>

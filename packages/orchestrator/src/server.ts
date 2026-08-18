@@ -21,6 +21,11 @@ import {
   type HealthResponse,
   type HostExecution,
   type LinearStatus,
+  type PullCommentRequest,
+  type PullMergeRequest,
+  type PullReplyRequest,
+  type PullResolveRequest,
+  type PullReviewRequest,
   type Run,
   type RunEvent,
   type ServerMessage,
@@ -525,6 +530,172 @@ function buildApp(
   app.get("/api/github/repos", async (c) => {
     try {
       return c.json(await orchestrator.listGithubRepos());
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.get("/api/pulls", async (c) => {
+    try {
+      return c.json(await orchestrator.listPulls());
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  /** Shared parse for the /api/pulls/:repo/:number family. */
+  const pullParams = (c: { req: { param(name: string): string | undefined } }) => {
+    const repo = c.req.param("repo") ?? "";
+    const number = Number(c.req.param("number"));
+    if (!repo || !Number.isInteger(number) || number <= 0) return null;
+    return { repo, number };
+  };
+
+  app.get("/api/pulls/:repo/:number", async (c) => {
+    const params = pullParams(c);
+    if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
+    try {
+      return c.json(await orchestrator.pullDetail(params.repo, params.number));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/pulls/:repo/:number/merge", async (c) => {
+    const params = pullParams(c);
+    if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
+    let body: PullMergeRequest;
+    try {
+      body = (await c.req.json()) as PullMergeRequest;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    if (!["merge", "squash", "rebase"].includes(body?.method)) {
+      return c.json({ error: 'method must be "merge", "squash", or "rebase"' }, 400);
+    }
+    try {
+      return c.json(await orchestrator.pullMerge(params.repo, params.number, body.method));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/pulls/:repo/:number/close", async (c) => {
+    const params = pullParams(c);
+    if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
+    try {
+      await orchestrator.pullSetState(params.repo, params.number, "closed");
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/pulls/:repo/:number/reopen", async (c) => {
+    const params = pullParams(c);
+    if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
+    try {
+      await orchestrator.pullSetState(params.repo, params.number, "open");
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/pulls/:repo/:number/ready", async (c) => {
+    const params = pullParams(c);
+    if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
+    try {
+      await orchestrator.pullReady(params.repo, params.number);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/pulls/:repo/:number/comment", async (c) => {
+    const params = pullParams(c);
+    if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
+    let body: PullCommentRequest;
+    try {
+      body = (await c.req.json()) as PullCommentRequest;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    if (typeof body?.body !== "string" || !body.body.trim()) {
+      return c.json({ error: "body must be a non-empty string" }, 400);
+    }
+    try {
+      await orchestrator.pullComment(params.repo, params.number, body.body);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/pulls/:repo/:number/review", async (c) => {
+    const params = pullParams(c);
+    if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
+    let body: PullReviewRequest;
+    try {
+      body = (await c.req.json()) as PullReviewRequest;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    if (!["APPROVE", "REQUEST_CHANGES", "COMMENT"].includes(body?.event)) {
+      return c.json({ error: 'event must be "APPROVE", "REQUEST_CHANGES", or "COMMENT"' }, 400);
+    }
+    const text = typeof body.body === "string" ? body.body : "";
+    // GitHub itself refuses these without a body; failing early keeps the message clear.
+    if ((body.event === "REQUEST_CHANGES" || body.event === "COMMENT") && !text.trim()) {
+      return c.json({ error: "this review event needs a comment body" }, 400);
+    }
+    try {
+      await orchestrator.pullReview(params.repo, params.number, body.event, text);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/pulls/:repo/:number/reply", async (c) => {
+    const params = pullParams(c);
+    if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
+    let body: PullReplyRequest;
+    try {
+      body = (await c.req.json()) as PullReplyRequest;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    if (!Number.isInteger(body?.commentId) || body.commentId <= 0) {
+      return c.json({ error: "commentId must be a comment id" }, 400);
+    }
+    if (typeof body.body !== "string" || !body.body.trim()) {
+      return c.json({ error: "body must be a non-empty string" }, 400);
+    }
+    try {
+      await orchestrator.pullReply(params.repo, params.number, body.commentId, body.body);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+    }
+  });
+
+  app.post("/api/pulls/:repo/:number/resolve-thread", async (c) => {
+    const params = pullParams(c);
+    if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
+    let body: PullResolveRequest;
+    try {
+      body = (await c.req.json()) as PullResolveRequest;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    if (typeof body?.threadId !== "string" || !body.threadId || typeof body.resolved !== "boolean") {
+      return c.json({ error: "threadId and resolved are required" }, 400);
+    }
+    try {
+      await orchestrator.pullResolveThread(params.repo, body.threadId, body.resolved);
+      return c.json({ ok: true });
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }

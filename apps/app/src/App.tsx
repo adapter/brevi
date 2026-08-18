@@ -7,6 +7,8 @@ import { SidebarInset, SidebarProvider, SidebarTrigger, useSidebar } from "@/com
 import { AppSidebar } from "./components/AppSidebar";
 import { ConfigurationPage } from "./components/Configuration";
 import { Overview } from "./components/Overview";
+import { PullRequestDetailPage } from "./components/PullRequestDetail";
+import { PullRequestsPage } from "./components/PullRequests";
 import { RepoSettingsPage } from "./components/RepoSettings";
 import { RunDetail } from "./components/RunDetail";
 import { Setup } from "./components/Setup";
@@ -55,6 +57,8 @@ export default function App() {
     openConfig,
     openRepoSettings,
     openUsage,
+    openPulls,
+    openPull,
     runTicket,
     cancelRun,
     retryRun,
@@ -115,6 +119,7 @@ export default function App() {
         onUnarchiveRun={(id) => void unarchiveRun(id)}
         onOpenConfig={() => openConfig()}
         onOpenUsage={openUsage}
+        onOpenPulls={openPulls}
         onAddRepo={() => openConfig("repositories")}
         onOpenWorkers={() => openConfig("fleet")}
         onOpenRepoSettings={openRepoSettings}
@@ -172,6 +177,27 @@ export default function App() {
             )
           ) : page === "usage" ? (
             <UsagePage />
+          ) : page === "pulls" ? (
+            <PullRequestsPage
+              config={config}
+              onOpenPull={openPull}
+              onOpenConfig={() => openConfig("connectors")}
+            />
+          ) : page.startsWith("pull:") ? (
+            (() => {
+              // "pull:<repoKey>/<number>"; the key may itself contain slashes,
+              // so the number is whatever follows the last one.
+              const raw = page.slice("pull:".length);
+              const cut = raw.lastIndexOf("/");
+              return (
+                <PullRequestDetailPage
+                  key={raw}
+                  repoKey={raw.slice(0, cut)}
+                  number={Number(raw.slice(cut + 1))}
+                  onBack={openPulls}
+                />
+              );
+            })()
           ) : page === "setup" ? (
             <Setup
               config={config}

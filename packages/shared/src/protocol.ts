@@ -109,6 +109,27 @@ import type { PrState, RepoMemory, Run, RunEvent, Ticket } from "./types.js";
  *   GET  /api/github/repos               -> GithubRepo[]   (repos visible to the
  *        connected GitHub token, most recently pushed first; 400 when GitHub
  *        isn't connected)
+ *   GET  /api/pulls                      -> PullListResponse
+ *        Pull requests across every configured repository, newest activity
+ *        first, for the Pull Requests page. Repos whose lookup failed are
+ *        reported per-repo instead of failing the whole list.
+ *   GET  /api/pulls/:repo/:number        -> PullDetailResponse
+ *        Everything the PR detail view renders: description, conversation
+ *        (comments, reviews, review threads), files with patches, commits,
+ *        and CI checks. :repo is the URL-encoded repo key from config.repos.
+ *   POST /api/pulls/:repo/:number/merge  -> PullMergeResponse
+ *        body: PullMergeRequest. Merge via GitHub with the chosen method.
+ *   POST /api/pulls/:repo/:number/close    -> { ok: true }
+ *   POST /api/pulls/:repo/:number/reopen   -> { ok: true }
+ *   POST /api/pulls/:repo/:number/ready    -> { ok: true }   (undraft)
+ *   POST /api/pulls/:repo/:number/comment  -> { ok: true }
+ *        body: PullCommentRequest. Plain comment on the conversation.
+ *   POST /api/pulls/:repo/:number/review   -> { ok: true }
+ *        body: PullReviewRequest. Approve, request changes, or comment.
+ *   POST /api/pulls/:repo/:number/reply    -> { ok: true }
+ *        body: PullReplyRequest. Reply inside one review thread.
+ *   POST /api/pulls/:repo/:number/resolve-thread -> { ok: true }
+ *        body: PullResolveRequest. Resolve or unresolve one review thread.
  *   GET  /ws                             -> WebSocket, messages below
  *
  * Everything else serves the built dashboard (SPA fallback to index.html).
@@ -284,6 +305,143 @@ export interface PrStatusResponse {
   url: string;
   number: number;
   state: PrState;
+}
+
+/** One pull request row on the Pull Requests page. */
+export interface PullSummary {
+  /** Key into config.repos. */
+  repo: string;
+  /** "owner/name". */
+  remote: string;
+  number: number;
+  url: string;
+  title: string;
+  state: PrState;
+  author: string;
+  baseBranch: string;
+  headBranch: string;
+  createdAt: string;
+  updatedAt: string;
+  mergedAt?: string;
+}
+
+/** Pull requests across every configured repository, newest activity first. */
+export interface PullListResponse {
+  pulls: PullSummary[];
+  /** Repos whose lookup failed, so one bad repo never hides the rest. */
+  errors: { repo: string; remote: string; message: string }[];
+}
+
+/** A plain conversation comment, or one comment inside a review thread. */
+export interface PullComment {
+  /** GitHub's numeric id; review-thread comments use it as the reply anchor. */
+  id: number;
+  author: string;
+  body: string;
+  createdAt: string;
+}
+
+/** One review submission: approval, changes requested, or a commented pass. */
+export interface PullReview {
+  author: string;
+  /** GitHub's review state, e.g. "APPROVED", "CHANGES_REQUESTED", "COMMENTED". */
+  state: string;
+  body: string;
+  submittedAt?: string;
+}
+
+/** One review thread anchored to a file, resolved or not. */
+export interface PullThread {
+  /** GraphQL node id, the handle for resolve/unresolve. */
+  id: string;
+  path: string;
+  line?: number;
+  outdated: boolean;
+  resolved: boolean;
+  diffHunk?: string;
+  comments: PullComment[];
+}
+
+/** One changed file, with GitHub's unified patch when it has one. */
+export interface PullFile {
+  path: string;
+  /** Set when the change is a rename. */
+  previousPath?: string;
+  /** GitHub's file status: "added", "modified", "removed", "renamed", ... */
+  status: string;
+  additions: number;
+  deletions: number;
+  /** Absent for binary files and diffs too large for the API to inline. */
+  patch?: string;
+}
+
+export interface PullCommit {
+  sha: string;
+  message: string;
+  author: string;
+  date?: string;
+}
+
+/** A check run or commit status for the head sha. */
+export interface PullCheck {
+  name: string;
+  /** Conclusion when finished ("success", "failure", ...), otherwise the live status. */
+  status: string;
+  url?: string;
+}
+
+/** Everything the PR detail view renders, gathered in one round trip. */
+export interface PullDetailResponse {
+  pull: PullSummary;
+  body: string;
+  draft: boolean;
+  headSha: string;
+  /** GitHub's mergeable_state, e.g. "clean", "dirty" (conflicts), "unstable". */
+  mergeableState?: string;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  comments: PullComment[];
+  reviews: PullReview[];
+  threads: PullThread[];
+  files: PullFile[];
+  commits: PullCommit[];
+  checks: PullCheck[];
+  /** True when a checks lookup failed, so `checks` may be incomplete. */
+  checksLookupFailed: boolean;
+}
+
+export type PullMergeMethod = "merge" | "squash" | "rebase";
+
+export interface PullMergeRequest {
+  method: PullMergeMethod;
+}
+
+export interface PullMergeResponse {
+  merged: boolean;
+  message: string;
+}
+
+export interface PullCommentRequest {
+  body: string;
+}
+
+export interface PullReviewRequest {
+  /** GitHub review event. */
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+  body: string;
+}
+
+export interface PullReplyRequest {
+  /** Numeric id of the thread comment being replied to (PullComment.id). */
+  commentId: number;
+  body: string;
+}
+
+export interface PullResolveRequest {
+  /** Thread node id (PullThread.id). */
+  threadId: string;
+  resolved: boolean;
 }
 
 /**

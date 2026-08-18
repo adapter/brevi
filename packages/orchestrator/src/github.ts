@@ -1,6 +1,19 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Octokit } from "octokit";
-import type { GithubRepo, PrState, Ticket } from "@brevi/shared";
+import type {
+  GithubRepo,
+  PrState,
+  PullComment,
+  PullCommit,
+  PullDetailResponse,
+  PullFile,
+  PullMergeMethod,
+  PullMergeResponse,
+  PullReview,
+  PullSummary,
+  PullThread,
+  Ticket,
+} from "@brevi/shared";
 
 export interface RemoteParts {
   owner: string;
@@ -264,7 +277,7 @@ export interface PrFeedback {
   /** Issue comments posted since the caller-supplied cutoff (the last brevi push). */
   comments: { author: string; body: string; createdAt: string }[];
   /** Check runs and commit statuses for the head sha, name plus outcome. */
-  ci: { name: string; status: string }[];
+  ci: { name: string; status: string; url?: string }[];
   /** True when a CI status lookup failed, so `ci` may be incomplete rather than confirming that no checks exist. */
   ciLookupFailed: boolean;
 }
@@ -340,6 +353,15 @@ export async function findPullRequestForBranch(options: {
   return { url: pr.html_url, state: prStateOf(pr), createdAt: pr.created_at, updatedAt: pr.updated_at };
 }
 
+interface ThreadCommentNode {
+  /** REST id of the comment, the anchor for a threaded reply. */
+  databaseId: number | null;
+  author: { login: string } | null;
+  body: string;
+  diffHunk: string;
+  createdAt: string;
+}
+
 interface ReviewThreadsQueryResponse {
   repository: {
     pullRequest: {
@@ -354,12 +376,7 @@ interface ReviewThreadsQueryResponse {
           originalLine: number | null;
           comments: {
             pageInfo: { hasNextPage: boolean; endCursor: string | null };
-            nodes: {
-              author: { login: string } | null;
-              body: string;
-              diffHunk: string;
-              createdAt: string;
-            }[];
+            nodes: ThreadCommentNode[];
           };
         }[];
       };
@@ -372,23 +389,18 @@ interface ThreadCommentsQueryResponse {
   node: {
     comments: {
       pageInfo: { hasNextPage: boolean; endCursor: string | null };
-      nodes: {
-        author: { login: string } | null;
-        body: string;
-        diffHunk: string;
-        createdAt: string;
-      }[];
+      nodes: ThreadCommentNode[];
     };
   } | null;
 }
 
-/** Unresolved review threads for the PR, via GraphQL (REST has no resolved flag). Both the thread list and each thread's comments are paginated to exhaustion. */
-async function fetchUnresolvedThreads(
+/** Every review thread of the PR, via GraphQL (REST has no resolved flag). Both the thread list and each thread's comments are paginated to exhaustion. */
+async function fetchReviewThreads(
   octokit: Octokit,
   owner: string,
   name: string,
   number: number,
-): Promise<PrReviewThread[]> {
+): Promise<PullThread[]> {
   type ThreadNode = ReviewThreadsQueryResponse["repository"]["pullRequest"]["reviewThreads"]["nodes"][number];
 
   const threadNodes: ThreadNode[] = [];
@@ -411,6 +423,7 @@ async function fetchUnresolvedThreads(
                 comments(first: 100) {
                   pageInfo { hasNextPage endCursor }
                   nodes {
+                    databaseId
                     author { login }
                     body
                     diffHunk
@@ -430,10 +443,8 @@ async function fetchUnresolvedThreads(
     cursor = pageInfo.endCursor;
   }
 
-  const threads: PrReviewThread[] = [];
+  const threads: PullThread[] = [];
   for (const thread of threadNodes) {
-    if (thread.isResolved) continue;
-
     const comments = [...thread.comments.nodes];
     let commentsHasNextPage = thread.comments.pageInfo.hasNextPage;
     let commentsCursor = thread.comments.pageInfo.endCursor;
@@ -445,6 +456,7 @@ async function fetchUnresolvedThreads(
               comments(first: 100, after: $cursor) {
                 pageInfo { hasNextPage endCursor }
                 nodes {
+                  databaseId
                   author { login }
                   body
                   diffHunk
@@ -464,11 +476,14 @@ async function fetchUnresolvedThreads(
     }
 
     threads.push({
+      id: thread.id,
       path: thread.path,
       line: thread.line ?? thread.originalLine ?? undefined,
       outdated: thread.isOutdated,
+      resolved: thread.isResolved,
       diffHunk: comments[0]?.diffHunk,
       comments: comments.map((comment) => ({
+        id: comment.databaseId ?? 0,
         author: comment.author?.login ?? "unknown",
         body: comment.body,
         createdAt: comment.createdAt,
@@ -476,6 +491,25 @@ async function fetchUnresolvedThreads(
     });
   }
   return threads;
+}
+
+/** The unresolved subset, in the shape follow-up prompts consume. */
+async function fetchUnresolvedThreads(
+  octokit: Octokit,
+  owner: string,
+  name: string,
+  number: number,
+): Promise<PrReviewThread[]> {
+  const threads = await fetchReviewThreads(octokit, owner, name, number);
+  return threads
+    .filter((thread) => !thread.resolved)
+    .map((thread) => ({
+      path: thread.path,
+      ...(thread.line !== undefined ? { line: thread.line } : {}),
+      outdated: thread.outdated,
+      ...(thread.diffHunk !== undefined ? { diffHunk: thread.diffHunk } : {}),
+      comments: thread.comments.map(({ author, body, createdAt }) => ({ author, body, createdAt })),
+    }));
 }
 
 /** Review summaries worth surfacing: changes-requested, or any non-empty, non-pending body. */
@@ -533,7 +567,7 @@ async function fetchCiStatus(
   try {
     const checkRuns = await octokit.paginate(octokit.rest.checks.listForRef, { owner, repo: name, ref: headSha, per_page: 100 });
     for (const run of checkRuns) {
-      ci.push({ name: run.name, status: run.conclusion ?? run.status });
+      ci.push({ name: run.name, status: run.conclusion ?? run.status, ...(run.html_url ? { url: run.html_url } : {}) });
     }
   } catch {
     // Repos without checks configured can 404 or return oddities; record the failure rather than fail the run.
@@ -545,7 +579,7 @@ async function fetchCiStatus(
     for (;;) {
       const statuses = await octokit.rest.repos.getCombinedStatusForRef({ owner, repo: name, ref: headSha, per_page: 100, page });
       for (const status of statuses.data.statuses) {
-        ci.push({ name: status.context, status: status.state });
+        ci.push({ name: status.context, status: status.state, ...(status.target_url ? { url: status.target_url } : {}) });
       }
       if (statuses.data.statuses.length < 100) break;
       page += 1;
@@ -648,4 +682,234 @@ export async function postPrComment(options: { prUrl: string; token: string; bod
     issue_number: parsed.number,
     body: options.body,
   });
+}
+
+// ---------------------------------------------------------------------------
+// The Pull Requests page: list, detail, and the write actions GitHub's own
+// PR view offers, so the dashboard can work a PR without leaving the app.
+
+/** A pull request as the github layer knows it: everything but the repo key. */
+export type RepoPullSummary = Omit<PullSummary, "repo">;
+
+/** Detail bundle with the same repo-key gap; the orchestrator fills it in. */
+export type RepoPullDetail = Omit<PullDetailResponse, "pull"> & { pull: RepoPullSummary };
+
+/** Map a pulls.list/pulls.get item onto the wire summary shape. */
+function pullSummaryOf(
+  remote: string,
+  pr: {
+    number: number;
+    html_url: string;
+    title: string;
+    state: string;
+    draft?: boolean | null;
+    merged_at?: string | null;
+    user: { login: string } | null;
+    base: { ref: string };
+    head: { ref: string };
+    created_at: string;
+    updated_at: string;
+  },
+): RepoPullSummary {
+  return {
+    remote,
+    number: pr.number,
+    url: pr.html_url,
+    title: pr.title,
+    state: prStateOf(pr),
+    author: pr.user?.login ?? "unknown",
+    baseBranch: pr.base.ref,
+    headBranch: pr.head.ref,
+    createdAt: pr.created_at,
+    updatedAt: pr.updated_at,
+    ...(pr.merged_at ? { mergedAt: pr.merged_at } : {}),
+  };
+}
+
+/**
+ * The repo's pull requests, newest activity first. One page of 100 covers the
+ * dashboard's purpose (current work, not archaeology); older PRs stay on
+ * GitHub.
+ */
+export async function listPullRequests(remote: string, token: string): Promise<RepoPullSummary[]> {
+  const { owner, name } = parseRemote(remote);
+  const octokit = new Octokit({ auth: token });
+  const pulls = await octokit.rest.pulls.list({
+    owner,
+    repo: name,
+    state: "all",
+    sort: "updated",
+    direction: "desc",
+    per_page: 100,
+  });
+  return pulls.data.map((pr) => pullSummaryOf(remote, pr));
+}
+
+/**
+ * Everything the PR detail view renders, in one bundle: description,
+ * conversation (comments, reviews, review threads), files with patches,
+ * commits, and CI. Only the CI lookup degrades silently (reported via
+ * checksLookupFailed); every other failure propagates.
+ */
+export async function gatherPullDetail(remote: string, number: number, token: string): Promise<RepoPullDetail> {
+  const { owner, name } = parseRemote(remote);
+  const octokit = new Octokit({ auth: token });
+
+  const pr = await octokit.rest.pulls.get({ owner, repo: name, pull_number: number });
+  const headSha = pr.data.head.sha;
+
+  const threads = await fetchReviewThreads(octokit, owner, name, number);
+  const reviews: PullReview[] = (
+    await octokit.paginate(octokit.rest.pulls.listReviews, { owner, repo: name, pull_number: number, per_page: 100 })
+  )
+    .filter((review) => review.state !== "PENDING")
+    .map((review) => ({
+      author: review.user?.login ?? "unknown",
+      state: review.state,
+      body: review.body ?? "",
+      ...(review.submitted_at ? { submittedAt: review.submitted_at } : {}),
+    }));
+  const comments: PullComment[] = (
+    await octokit.paginate(octokit.rest.issues.listComments, { owner, repo: name, issue_number: number, per_page: 100 })
+  ).map((comment) => ({
+    id: comment.id,
+    author: comment.user?.login ?? "unknown",
+    body: comment.body ?? "",
+    createdAt: comment.created_at,
+  }));
+  const files: PullFile[] = (
+    await octokit.paginate(octokit.rest.pulls.listFiles, { owner, repo: name, pull_number: number, per_page: 100 })
+  ).map((file) => ({
+    path: file.filename,
+    ...(file.previous_filename ? { previousPath: file.previous_filename } : {}),
+    status: file.status,
+    additions: file.additions,
+    deletions: file.deletions,
+    ...(file.patch !== undefined ? { patch: file.patch } : {}),
+  }));
+  const commits: PullCommit[] = (
+    await octokit.paginate(octokit.rest.pulls.listCommits, { owner, repo: name, pull_number: number, per_page: 100 })
+  ).map((commit) => ({
+    sha: commit.sha,
+    message: commit.commit.message.split("\n", 1)[0] ?? "",
+    author: commit.author?.login ?? commit.commit.author?.name ?? "unknown",
+    ...(commit.commit.author?.date ? { date: commit.commit.author.date } : {}),
+  }));
+  const { ci, lookupFailed } = await fetchCiStatus(octokit, owner, name, headSha);
+
+  return {
+    pull: pullSummaryOf(remote, pr.data),
+    body: pr.data.body ?? "",
+    draft: pr.data.draft === true,
+    headSha,
+    ...(pr.data.mergeable_state ? { mergeableState: pr.data.mergeable_state } : {}),
+    additions: pr.data.additions,
+    deletions: pr.data.deletions,
+    changedFiles: pr.data.changed_files,
+    comments,
+    reviews,
+    threads,
+    files,
+    commits,
+    checks: ci,
+    checksLookupFailed: lookupFailed,
+  };
+}
+
+/** Merge via GitHub with the chosen method; the message is GitHub's own. */
+export async function mergePullRequest(options: {
+  remote: string;
+  number: number;
+  method: PullMergeMethod;
+  token: string;
+}): Promise<PullMergeResponse> {
+  const { owner, name } = parseRemote(options.remote);
+  const octokit = new Octokit({ auth: options.token });
+  const result = await octokit.rest.pulls.merge({
+    owner,
+    repo: name,
+    pull_number: options.number,
+    merge_method: options.method,
+  });
+  return { merged: result.data.merged, message: result.data.message };
+}
+
+/** Close or reopen a pull request. */
+export async function setPullRequestState(options: {
+  remote: string;
+  number: number;
+  state: "open" | "closed";
+  token: string;
+}): Promise<void> {
+  const { owner, name } = parseRemote(options.remote);
+  const octokit = new Octokit({ auth: options.token });
+  await octokit.rest.pulls.update({ owner, repo: name, pull_number: options.number, state: options.state });
+}
+
+/** Post a plain conversation comment by repo and number. */
+export async function commentOnPull(options: {
+  remote: string;
+  number: number;
+  body: string;
+  token: string;
+}): Promise<void> {
+  const { owner, name } = parseRemote(options.remote);
+  const octokit = new Octokit({ auth: options.token });
+  await octokit.rest.issues.createComment({ owner, repo: name, issue_number: options.number, body: options.body });
+}
+
+/** Submit a review: approve, request changes, or a commented pass. */
+export async function submitPullReview(options: {
+  remote: string;
+  number: number;
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+  body: string;
+  token: string;
+}): Promise<void> {
+  const { owner, name } = parseRemote(options.remote);
+  const octokit = new Octokit({ auth: options.token });
+  await octokit.rest.pulls.createReview({
+    owner,
+    repo: name,
+    pull_number: options.number,
+    event: options.event,
+    ...(options.body ? { body: options.body } : {}),
+  });
+}
+
+/** Reply inside a review thread, anchored to one of its comments. */
+export async function replyToReviewComment(options: {
+  remote: string;
+  number: number;
+  commentId: number;
+  body: string;
+  token: string;
+}): Promise<void> {
+  const { owner, name } = parseRemote(options.remote);
+  const octokit = new Octokit({ auth: options.token });
+  await octokit.rest.pulls.createReplyForReviewComment({
+    owner,
+    repo: name,
+    pull_number: options.number,
+    comment_id: options.commentId,
+    body: options.body,
+  });
+}
+
+/** Resolve or unresolve one review thread; REST has no equivalent, so GraphQL. */
+export async function setReviewThreadResolved(options: {
+  threadId: string;
+  resolved: boolean;
+  token: string;
+}): Promise<void> {
+  const octokit = new Octokit({ auth: options.token });
+  const mutation = options.resolved ? "resolveReviewThread" : "unresolveReviewThread";
+  await octokit.graphql(
+    `mutation ($id: ID!) {
+      ${mutation}(input: { threadId: $id }) {
+        clientMutationId
+      }
+    }`,
+    { id: options.threadId },
+  );
 }
