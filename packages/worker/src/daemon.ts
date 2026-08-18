@@ -78,6 +78,12 @@ export interface WorkerOptions {
    * even a SIGKILLed supervisor never leaves this worker orphaned.
    */
   supervisorPid?: number;
+  /**
+   * Aborting runs the same graceful shutdown as SIGTERM. This is how an
+   * in-process supervisor (Mission Control's local worker) stops the daemon
+   * without sending itself a process signal.
+   */
+  signal?: AbortSignal;
 }
 
 /** How often the supervisor watchdog (see WorkerOptions.supervisorPid) polls whether the process that spawned this worker is still alive. */
@@ -691,6 +697,12 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
 
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
+  if (options.signal) {
+    if (options.signal.aborted) shutdown();
+    else options.signal.addEventListener("abort", () => {
+      if (!shuttingDown) shutdown();
+    }, { once: true });
+  }
 
   console.log(
     identity.enrollment

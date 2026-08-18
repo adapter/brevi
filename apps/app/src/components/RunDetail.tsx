@@ -514,7 +514,7 @@ function QueuedBanner({
       {hostExecution && (
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
           This machine can&apos;t run agents itself.{" "}
-          Set up a Linux machine over SSH from the{" "}
+          Set up a worker machine over SSH from the{" "}
           <Button
             type="button"
             variant="link"

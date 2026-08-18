@@ -629,17 +629,23 @@ function TicketRow({
  * queueReason banner only appears once a run exists to carry it.
  */
 function QueueOnlyNotice({
+  reason,
   onOpenWorkers,
 }: {
-  reason: "bwrap-unavailable" | "unsupported-platform";
+  reason: "bwrap-unavailable" | "seatbelt-unavailable" | "unsupported-platform";
   onOpenWorkers: () => void;
 }) {
+  const explain =
+    reason === "seatbelt-unavailable"
+      ? "This Mac's Seatbelt sandbox failed its readiness check, so runs can't execute here."
+      : reason === "bwrap-unavailable"
+        ? "This machine is missing bubblewrap, so runs can't execute here."
+        : "This machine can't run agents itself.";
   return (
     <div className="mx-1 mb-2 rounded-lg border border-ink-700 bg-ink-850 p-3">
       <p className="text-[12px] leading-relaxed text-haze-400">
-        This machine can&apos;t run agents itself. Queued runs will wait for a Linux worker with
-        bubblewrap.{" "}
-        Set up a Linux machine over SSH from the{" "}
+        {explain} Queued runs will wait for another worker.{" "}
+        Set up a machine over SSH from the{" "}
         <Button
           type="button"
           variant="link"

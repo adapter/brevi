@@ -113,8 +113,8 @@ export function createAttachSessions(deps: AttachSessionsDeps): AttachSessions {
       fail("no agent session id was captured for this run; interactive resume supports Claude runs only");
       return;
     }
-    if (run.sandbox.provider && run.sandbox.provider !== "bwrap") {
-      fail(`this run's sandbox (${run.sandbox.provider}) cannot be reattached; only bwrap sandboxes are supported`);
+    if (run.sandbox.provider && run.sandbox.provider !== provider.name) {
+      fail(`this run's sandbox (${run.sandbox.provider}) cannot be reattached by this machine's ${provider.name} provider`);
       return;
     }
 

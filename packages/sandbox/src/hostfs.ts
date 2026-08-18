@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { lstat, mkdir, open, realpath, rm } from "node:fs/promises";
-import { isAbsolute, relative, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 /**
  * Symlink-safe host-side file access for sandbox contents. The agent controls
@@ -9,20 +9,71 @@ import { isAbsolute, relative, sep } from "node:path";
  * a planted symlink would escape the sandbox: reads could exfiltrate worker
  * secrets, writes could truncate host files like ~/.brevi/worker.json.
  *
- * The defense never re-walks a path string (an attacker can swap a directory
- * for a symlink between a realpath and the open that follows). Instead it opens
- * the run root as a directory handle and descends one component at a time
- * through /proc/self/fd/<dirfd>/<name> with O_NOFOLLOW, so every intermediate
- * and final component is checked against a real, already-opened parent. Linux
- * only, which is the sole platform bwrap runs on.
+ * The defense never re-walks a path string unchecked (an attacker can swap a
+ * directory for a symlink between a realpath and the open that follows). On
+ * Linux it opens the run root as a directory handle and descends one component
+ * at a time through /proc/self/fd/<dirfd>/<name> with O_NOFOLLOW, so every
+ * component is checked against a real, already-opened parent. On macOS (the
+ * Seatbelt provider's platform) the kernel provides the whole property in one
+ * flag: O_NOFOLLOW_ANY refuses a symlink in any component of the path,
+ * atomically, so the final open itself is the check.
  */
 
 const { O_RDONLY, O_WRONLY, O_CREAT, O_TRUNC, O_DIRECTORY, O_NOFOLLOW } = constants;
+
+const DARWIN = process.platform === "darwin";
+/** macOS-only open(2) flag: fail with ELOOP if any path component is a symlink. */
+const O_NOFOLLOW_ANY = 0x20000000;
+
+/**
+ * macOS resolution: realpath the host-created root (its ancestors may hold
+ * benign symlinks like /var -> /private/var), then open root/parts in one call
+ * that refuses agent-planted symlinks anywhere below the root.
+ */
+async function darwinOpenWithin(
+  rootDir: string,
+  parts: string[],
+  flags: number,
+  mode?: number,
+): Promise<FileHandle> {
+  const real = await realpath(rootDir);
+  return open(join(real, ...parts), flags | O_NOFOLLOW_ANY, mode);
+}
+
+/** macOS descent: create/verify each directory level, refusing symlinks at every step. */
+async function darwinDescendDir(rootDir: string, parts: string[], create: boolean): Promise<string> {
+  const real = await realpath(rootDir);
+  let current = real;
+  for (const part of parts) {
+    current = join(current, part);
+    if (create) {
+      try {
+        await mkdir(current);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        // EEXIST covers a symlink at this component too; the open below rejects it.
+      }
+    }
+    const handle = await open(current, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY);
+    await handle.close();
+  }
+  return join(rootDir, ...parts);
+}
 
 /** Reads a regular file, refusing any component that escapes rootDir. */
 export async function readFileWithin(rootDir: string, target: string): Promise<string> {
   const parts = relativeParts(rootDir, target, "read");
   if (parts.length === 0) throw new Error(`refusing to read ${target}: it is the sandbox root`);
+  if (DARWIN) {
+    const handle = await darwinOpenWithin(rootDir, parts, O_RDONLY);
+    try {
+      const stats = await handle.stat();
+      if (!stats.isFile()) throw new Error(`refusing to read ${target}: not a regular file`);
+      return await handle.readFile("utf8");
+    } finally {
+      await handle.close();
+    }
+  }
   const dir = await openParent(rootDir, parts, false);
   try {
     const handle = await openAt(dir, last(parts), O_RDONLY | O_NOFOLLOW);
@@ -50,6 +101,22 @@ export async function writeFileWithin(
 ): Promise<void> {
   const parts = relativeParts(rootDir, target, "write");
   if (parts.length === 0) throw new Error(`refusing to write ${target}: it is the sandbox root`);
+  if (DARWIN) {
+    await darwinDescendDir(rootDir, parts.slice(0, -1), true);
+    const real = await realpath(rootDir);
+    const at = join(real, ...parts);
+    // lstat never follows the final component, and darwinDescendDir just
+    // refused symlinks above it; a racing swap is caught by O_NOFOLLOW_ANY.
+    const existing = await lstatType(at);
+    if (existing === "other") await rm(at, { recursive: true, force: true });
+    const handle = await open(at, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, mode);
+    try {
+      await handle.writeFile(contents, "utf8");
+    } finally {
+      await handle.close();
+    }
+    return;
+  }
   const dir = await openParent(rootDir, parts, true);
   try {
     const at = procPath(dir, last(parts));
@@ -84,6 +151,7 @@ export async function ensureDirWithin(rootDir: string, target: string): Promise<
  */
 async function descendDir(rootDir: string, target: string, create: boolean, action: string): Promise<string> {
   const parts = relativeParts(rootDir, target, action);
+  if (DARWIN) return darwinDescendDir(rootDir, parts, create);
   let dir = await openRoot(rootDir);
   try {
     for (const part of parts) dir = await step(dir, part, create);

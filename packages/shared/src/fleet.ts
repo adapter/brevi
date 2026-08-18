@@ -110,7 +110,7 @@ export interface FleetResponse {
  */
 export type HostExecution =
   | { kind: "local-worker" }
-  | { kind: "none"; reason: "bwrap-unavailable" | "unsupported-platform" };
+  | { kind: "none"; reason: "bwrap-unavailable" | "seatbelt-unavailable" | "unsupported-platform" };
 
 /** Body of POST /api/workers/:id/rename. */
 export interface WorkerRenameRequest {

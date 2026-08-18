@@ -58,6 +58,8 @@ export interface StartOptions {
 export interface OrchestratorHandle {
   port: number;
   url: string;
+  /** Port of the worker-channel listener, or null when fleet.host is unset. */
+  fleetPort: number | null;
   /**
    * Mint or refresh the local worker's credential, in plaintext, for the
    * caller to inject into the child it is about to spawn. Every call
@@ -833,6 +835,7 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
   return {
     port,
     url: `http://${urlHost(config.server.host)}:${port}`,
+    fleetPort: fleetListener ? config.fleet.port : null,
     ensureLocalWorker: (name: string) => orchestrator.ensureLocalWorker(name),
     async stop(): Promise<void> {
       sockets.close();
