@@ -85,48 +85,20 @@ export function fleetLine(counts: FleetCounts): string {
   return parts.length > 0 ? parts.join(", ") : "Idle";
 }
 
-/** One-line orchestrator health, e.g. "Orchestrator: running (pid 4021)", "Orchestrator: attached to CLI (pid 918)", "Orchestrator: restarting in 4s (attempt 2)". */
+/** One-line status for the orchestrator owned by Mission Control. */
 export function workerLine(state: SupervisorState): string {
   switch (state.kind) {
     case "starting":
       return "Orchestrator: starting...";
     case "running":
       return `Orchestrator: running (pid ${state.pid})`;
-    case "attached":
-      return state.pid !== null
-        ? `Orchestrator: attached to CLI (pid ${state.pid})`
-        : "Orchestrator: attached to CLI";
-    case "restarting":
-      return `Orchestrator: restarting in ${Math.ceil(state.delayMs / 1000)}s (attempt ${state.attempt})`;
     case "failed":
       return `Orchestrator: failed (${state.reason})`;
     case "stopped":
       return "Orchestrator: stopped";
-    case "idle":
-      return `Orchestrator: stopped (${state.reason})`;
     default:
       return "Orchestrator: unknown";
   }
-}
-
-/**
- * "Version: app 1.2.0, attached orchestrator 1.1.4", or null when there's
- * nothing worth showing. The app ships (and normally supervises) its own
- * copy of the orchestrator, so in the common case the two versions are
- * identical and this line would just be noise. They only diverge when the
- * app attached to an orchestrator some other install started (see
- * SupervisorState's "attached" kind), and that mismatch is worth surfacing
- * rather than hiding, since it means the two are on different code.
- */
-export function orchestratorVersionLine(
-  appVersion: string,
-  attached: boolean,
-  orchestratorVersion: string | undefined,
-): string | null {
-  if (!attached) return null;
-  if (!orchestratorVersion) return null;
-  if (orchestratorVersion === appVersion) return null;
-  return `Version: app ${appVersion}, attached orchestrator ${orchestratorVersion}`;
 }
 
 function runTimestamp(run: Run): number {

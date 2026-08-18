@@ -1,10 +1,9 @@
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, type Server as HttpServer, type IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { createRequire } from "node:module";
 import { totalmem } from "node:os";
-import { dirname, extname, join, resolve, sep } from "node:path";
+import { extname } from "node:path";
 import { serve, type HttpBindings } from "@hono/node-server";
 import { Hono } from "hono";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -28,6 +27,8 @@ import {
   type SettingsUpdateRequest,
   type Ticket,
   type WorkerRenameRequest,
+  type WorkerProvisionRequest,
+  type WorkerProvisionResponse,
   type WorkerView,
 } from "@brevi/shared";
 import { loadConfig } from "./config.js";
@@ -40,15 +41,15 @@ export interface StartOptions {
   /** Pre-loaded config; when omitted, loaded from configPath. */
   config?: BreviConfig;
   configPath?: string;
-  /**
-   * Directory of the built dashboard to serve. When omitted, resolved from
-   * the @brevi/app workspace package (the in-repo dev setup). The published
-   * CLI bundles the dashboard and passes its own path here.
-   */
-  appDist?: string;
+  /** Random, per-launch credential required by the desktop management API. */
+  managementToken?: string;
+  /** Desktop-owned SSH provisioner. Omitted outside the desktop runtime. */
+  provisionWorker?: (
+    request: WorkerProvisionRequest & { pairingToken: string; workerHost: string },
+  ) => Promise<WorkerProvisionResponse>;
   /**
    * Whether this machine can execute runs, and through what. Computed by
-   * the booting process (CLI or desktop app), never by the orchestrator,
+   * the booting desktop process, never by the orchestrator,
    * and surfaced verbatim on /api/health.
    */
   hostExecution?: HostExecution;
@@ -105,26 +106,6 @@ function contentTypeFor(path: string): string {
   return CONTENT_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
 }
 
-const PLACEHOLDER_HTML = `<!doctype html>
-<html><head><meta charset="utf-8"><title>brevi</title></head>
-<body style="font-family: system-ui; padding: 4rem; color: #333">
-<h1>brevi</h1>
-<p>The orchestrator is running, but the dashboard isn't built yet.</p>
-<p>Run <code>bun run build</code> in <code>apps/app</code>, then restart.</p>
-<p>The API is live at <a href="/api/health">/api/health</a>.</p>
-</body></html>`;
-
-/** Locate the built dashboard, or null when @brevi/app hasn't been built. */
-function resolveAppDist(): string | null {
-  try {
-    const pkgPath = require.resolve("@brevi/app/package.json");
-    const dist = join(dirname(pkgPath), "dist");
-    return existsSync(join(dist, "index.html")) ? dist : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Tiny page shown in the popup after the Linear OAuth redirect. */
 function connectResultPage(ok: boolean, detail: string): string {
   const title = ok ? "Linear connected" : "Connection failed";
@@ -151,6 +132,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function managementAuthorized(
+  managementToken: string | undefined,
+  authorization: string | undefined,
+  queryToken: string | null,
+): boolean {
+  if (!managementToken) return true;
+  const bearer = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
+  return bearer === managementToken || queryToken === managementToken;
+}
+
 interface WorkerApiResult {
   status: 200 | 400 | 403 | 404;
   body: unknown;
@@ -158,10 +149,10 @@ interface WorkerApiResult {
 
 /**
  * The worker-supervisor API, written once and served from both listeners: the
- * dashboard's (which covers a supervisor on this same machine, the default
- * loopback setup) and the fleet listener's (which is what a supervisor on
+ * dashboard's (which covers a worker on this same machine, the default
+ * loopback setup) and the fleet listener's (which is what a worker on
  * another machine can reach). Every other route on the dashboard listener is
- * unauthenticated and relies on that listener's bind address; these two
+ * protected by the desktop launch token; these two
  * cannot, since the caller runs wherever its worker does, so they
  * authenticate with that worker's own durable credential and reveal nothing
  * without it.
@@ -215,7 +206,6 @@ async function workerApi(
 function buildApp(
   orchestrator: Orchestrator,
   config: BreviConfig,
-  appDist: string | undefined,
   /**
    * The port actually listening, not `config.server.port`: the port is
    * editable from the dashboard and takes effect on restart, so the live
@@ -225,8 +215,39 @@ function buildApp(
   boundPort: () => number,
   /** See StartOptions.hostExecution; reported on /api/health verbatim when the booter supplied it. */
   hostExecution: HostExecution | undefined,
+  managementToken: string | undefined,
+  provisionWorker: StartOptions["provisionWorker"],
 ): Hono<{ Bindings: HttpBindings }> {
   const app = new Hono<{ Bindings: HttpBindings }>();
+
+  app.use("/api/*", async (c, next) => {
+    c.header("Access-Control-Allow-Origin", "brevi://app");
+    c.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    c.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    if (c.req.method === "OPTIONS") return c.body(null, 204);
+    await next();
+  });
+
+  // The HTTP listener exists only as an implementation detail between the
+  // Electron renderer and the orchestrator. A random launch token prevents a
+  // normal browser process on the same machine from reaching management APIs.
+  app.use("/api/*", async (c, next) => {
+    const { pathname, searchParams } = new URL(c.req.url);
+    if (
+      !managementToken ||
+      pathname === "/api/health" ||
+      pathname === WORKER_DEMAND_PATH ||
+      pathname === WORKER_SELF_STATE_PATH ||
+      pathname === "/api/connect/linear/callback"
+    ) {
+      await next();
+      return;
+    }
+    if (!managementAuthorized(managementToken, c.req.header("Authorization"), searchParams.get("token"))) {
+      return c.json({ error: "desktop authorization required" }, 403);
+    }
+    await next();
+  });
 
   app.get("/api/health", (c) => {
     const health: HealthResponse = {
@@ -245,14 +266,24 @@ function buildApp(
 
   app.get("/api/workers", (c) => c.json({ workers: orchestrator.listWorkers() }));
 
-  app.post("/api/workers/pair", (c) => {
-    // Nothing about the request's own origin is used: the command printed
-    // here is meant to be pasted on another machine, so the orchestrator
-    // names it from whichever listener actually bound (see #pairingEndpoint).
+  app.post("/api/workers/provision", async (c) => {
+    if (!provisionWorker) return c.json({ error: "SSH provisioning is available only in the desktop app" }, 404);
+    let request: WorkerProvisionRequest;
     try {
-      return c.json(orchestrator.mintPairingToken());
+      request = (await c.req.json()) as WorkerProvisionRequest;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    try {
+      const pairing = orchestrator.mintPairingToken();
+      if (!pairing.remote) {
+        throw new Error("the worker channel is not reachable remotely; configure its bind address and restart Mission Control");
+      }
+      return c.json(
+        await provisionWorker({ ...request, pairingToken: pairing.token, workerHost: pairing.host }),
+      );
     } catch (error) {
-      return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
+      return c.json({ error: errorMessage(error) }, 400);
     }
   });
 
@@ -527,38 +558,7 @@ function buildApp(
     }
   });
 
-  app.notFound(async (c) => {
-    // Everything outside /api serves the dashboard SPA.
-    const { pathname } = new URL(c.req.url);
-    if (c.req.method !== "GET" || pathname.startsWith("/api/")) {
-      return c.json({ error: "not found" }, 404);
-    }
-    const dist = appDist ?? resolveAppDist();
-    if (!dist) return c.html(PLACEHOLDER_HTML);
-
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(pathname);
-    } catch {
-      return c.json({ error: "not found" }, 404);
-    }
-    // The sep suffix rejects both traversal out of dist and a sibling
-    // directory that merely shares dist as a string prefix.
-    const distRoot = resolve(dist);
-    const requested = resolve(distRoot, `.${decoded}`);
-    const candidates =
-      requested.startsWith(distRoot + sep) && pathname !== "/" ? [requested] : [];
-    candidates.push(join(dist, "index.html"));
-    for (const candidate of candidates) {
-      try {
-        const bytes = await readFile(candidate);
-        return c.body(new Uint8Array(bytes), 200, { "content-type": contentTypeFor(candidate) });
-      } catch {
-        // fall through to the next candidate
-      }
-    }
-    return c.html(PLACEHOLDER_HTML);
-  });
+  app.notFound((c) => c.json({ error: "not found" }, 404));
 
   return app;
 }
@@ -573,6 +573,7 @@ function attachWebSockets(
   server: HttpServer,
   orchestrator: Orchestrator,
   config: BreviConfig,
+  managementToken: string | undefined,
 ): { close(): void } {
   const wss = new WebSocketServer({ noServer: true });
   const clients = new Set<WsClient>();
@@ -585,14 +586,8 @@ function attachWebSockets(
   };
 
   const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
-    const { pathname } = new URL(request.url ?? "/", "http://localhost");
-    // Interactive web-terminal sockets for a run's retained sandbox.
-    const attachMatch = /^\/ws\/runs\/([^/]+)\/attach$/.exec(pathname);
-    if (attachMatch) {
-      const runId = decodeURIComponent(attachMatch[1] ?? "");
-      wss.handleUpgrade(request, socket, head, (ws) => handleAttachSocket(ws, orchestrator, runId));
-      return;
-    }
+    const url = new URL(request.url ?? "/", "http://localhost");
+    const { pathname } = url;
     // Worker daemons dial in here; handed straight to the registry rather
     // than through the "connection" event, so it never reaches the dashboard
     // broadcast loop below (a worker socket speaks a different protocol
@@ -601,6 +596,18 @@ function attachWebSockets(
       wss.handleUpgrade(request, socket, head, (ws) =>
         orchestrator.acceptWorkerSocket(ws, request.socket.remoteAddress),
       );
+      return;
+    }
+    if (!managementAuthorized(managementToken, undefined, url.searchParams.get("token"))) {
+      socket.destroy();
+      return;
+    }
+    // Interactive terminal sockets are part of the desktop management
+    // surface, so authorization happens before a sandbox is opened.
+    const attachMatch = /^\/ws\/runs\/([^/]+)\/attach$/.exec(pathname);
+    if (attachMatch) {
+      const runId = decodeURIComponent(attachMatch[1] ?? "");
+      wss.handleUpgrade(request, socket, head, (ws) => handleAttachSocket(ws, orchestrator, runId));
       return;
     }
     if (pathname !== "/ws") {
@@ -762,14 +769,24 @@ async function startFleetListener(
 
 export async function startOrchestrator(options: StartOptions = {}): Promise<OrchestratorHandle> {
   attachOrchestratorLogFile();
-  const config = options.config ?? (await loadConfig(options.configPath));
+  const loaded = options.config ?? (await loadConfig(options.configPath));
+  // Mission Control is the only management client. Never honor an older
+  // config that exposed the dashboard listener to a LAN.
+  const config: BreviConfig = { ...loaded, server: { ...loaded.server, host: "127.0.0.1" } };
   const orchestrator = new Orchestrator(config, undefined, options.configPath);
   await orchestrator.start();
 
   // Filled in once the listener binds; the OAuth flows read it through the
   // getter rather than capturing a number that a settings save can outdate.
   let boundPort = config.server.port;
-  const app = buildApp(orchestrator, config, options.appDist, () => boundPort, options.hostExecution);
+  const app = buildApp(
+    orchestrator,
+    config,
+    () => boundPort,
+    options.hostExecution,
+    options.managementToken,
+    options.provisionWorker,
+  );
   const server = await new Promise<HttpServer>((resolvePromise, rejectPromise) => {
     const instance = serve(
       { fetch: app.fetch, port: config.server.port, hostname: config.server.host },
@@ -786,7 +803,7 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
   // restart-required, so a saved change reaches the live config while this
   // socket stays where it is (see Orchestrator#dashboardEndpoint).
   orchestrator.setDashboardEndpoint({ host: config.server.host, port });
-  const sockets = attachWebSockets(server, orchestrator, config);
+  const sockets = attachWebSockets(server, orchestrator, config, options.managementToken);
   const fleetListener = await startFleetListener(orchestrator, config);
 
   return {

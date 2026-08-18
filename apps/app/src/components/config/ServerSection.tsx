@@ -1,12 +1,6 @@
-import { useState } from "react";
-import { DEFAULT_HOST, type BreviConfig } from "@brevi/shared/config";
-import { Input } from "@/components/ui/input";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { useSettingsDraft, type SettingsDraft } from "../../lib/settings";
-import { Warn } from "../Icons";
-import { FieldRow, NumberField, SecretField, SectionIntro, SettingsCard, TextField } from "./Fields";
-
-const ALL_INTERFACES = "0.0.0.0";
+import type { BreviConfig } from "@brevi/shared/config";
+import { useSettingsDraft } from "../../lib/settings";
+import { NumberField, SecretField, SectionIntro, SettingsCard, TextField } from "./Fields";
 
 /**
  * The dashboard's own listener and the OAuth apps behind the one-click
@@ -26,7 +20,7 @@ export function ServerSection({
   return (
     <>
       <SectionIntro title="Server">
-        Where the dashboard and API listen, and the OAuth apps the Connect flows go through.
+        Mission Control&apos;s private loopback API and the OAuth apps behind the Connect flows.
       </SectionIntro>
 
       <div className="mt-3 flex flex-col gap-2.5">
@@ -37,9 +31,8 @@ export function ServerSection({
             draft={server}
             min={1}
             max={65535}
-            help="Port the dashboard and API are served on."
+            help="Port used by Mission Control's loopback-only API. It is never exposed to the LAN."
           />
-          <BindAddressField draft={server} />
         </SettingsCard>
 
         <SettingsCard
@@ -78,82 +71,5 @@ export function ServerSection({
         </SettingsCard>
       </div>
     </>
-  );
-}
-
-/**
- * The bind address, as the choice it actually is. Anything that is neither
- * loopback nor all-interfaces (a specific LAN address, say) opens the free
- * text box on load, so a hand-edited value is editable rather than silently
- * rewritten to one of the two presets.
- */
-function BindAddressField({ draft }: { draft: SettingsDraft }) {
-  const value = draft.value("server.host");
-  const host = typeof value === "string" ? value : DEFAULT_HOST;
-  const preset = host === DEFAULT_HOST || host === ALL_INTERFACES;
-  const [choseOther, setChoseOther] = useState(false);
-  // Discarding the card puts the value back without telling this control, so
-  // a stale "Other" would leave the radio pointing at a box the saved config
-  // does not use. Derived-state reset: once nothing is edited and the value is
-  // a preset again, the preset is what's selected.
-  if (choseOther && preset && !draft.dirty) setChoseOther(false);
-  const choice = choseOther || !preset ? "other" : host;
-
-  return (
-    <FieldRow
-      label="Bind address"
-      path="server.host"
-      draft={draft}
-      wide
-      help="The dashboard and API have no authentication of their own; the address they bind to is what limits who can reach them."
-    >
-      <RadioGroup
-        value={choice}
-        onValueChange={(next) => {
-          if (next === "other") {
-            setChoseOther(true);
-            return;
-          }
-          setChoseOther(false);
-          draft.set("server.host", next);
-        }}
-        className="gap-2"
-      >
-        <label className="flex cursor-pointer items-start gap-2 text-[12px] text-haze-200">
-          <RadioGroupItem value={DEFAULT_HOST} className="mt-px shrink-0" />
-          <span>
-            This machine only
-            <span className="ml-1.5 font-mono text-[11px] text-haze-700">{DEFAULT_HOST}</span>
-          </span>
-        </label>
-        <label className="flex cursor-pointer items-start gap-2 text-[12px] text-haze-200">
-          <RadioGroupItem value={ALL_INTERFACES} className="mt-px shrink-0" />
-          <span className="min-w-0">
-            All interfaces
-            <span className="ml-1.5 font-mono text-[11px] text-haze-700">{ALL_INTERFACES}</span>
-            <span className="flex items-start gap-1.5 text-[11.5px] leading-relaxed text-rust-400">
-              <Warn className="mt-px size-3 shrink-0" />
-              Exposes the unauthenticated dashboard and API to the whole network.
-            </span>
-          </span>
-        </label>
-        <label className="flex cursor-pointer items-start gap-2 text-[12px] text-haze-200">
-          <RadioGroupItem value="other" className="mt-px shrink-0" />
-          <span>Other</span>
-        </label>
-      </RadioGroup>
-      {choice === "other" && (
-        <Input
-          type="text"
-          value={preset && !choseOther ? "" : host}
-          onChange={(event) => draft.set("server.host", event.target.value)}
-          placeholder="192.168.1.10"
-          spellCheck={false}
-          autoComplete="off"
-          aria-label="Custom bind address"
-          className="mt-2 h-7 rounded-[4px] border-ink-600 bg-ink-950/70 px-2 font-mono text-[12px] text-haze-100 placeholder:text-haze-700 md:text-[12px]"
-        />
-      )}
-    </FieldRow>
   );
 }

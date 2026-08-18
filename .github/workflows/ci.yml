@@ -128,16 +128,8 @@ jobs:
 
   desktop-package-smoke:
     name: Desktop packaging smoke check
-    # Guards against a regression of "packaged builds cannot load the
-    # embedded CLI": packages/cli's build externalizes `open` and the
-    # native `@lydell/node-pty`, so apps/desktop/scripts/stage-cli.ts has to
-    # copy their resolved node_modules alongside the built CLI before
-    # electron-builder bundles it as extraResources, or the packaged app
-    # dies with ERR_MODULE_NOT_FOUND before it runs a single line. This job
-    # stages the CLI and produces an unpacked (no installer, no publish)
-    # Linux build, then asserts the result really is self-contained. Its
-    # own job, separate from `checks`, so it doesn't slow that feedback
-    # loop down with an electron-builder run.
+    # Produces an unpacked Linux app and proves the in-process orchestrator,
+    # local renderer, and native terminal dependency are all packaged.
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read # checkout
@@ -169,40 +161,23 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build
 
-      - name: Stage the CLI
-        working-directory: apps/desktop
-        run: bun run scripts/stage-cli.ts
-
       - name: Package (unpacked Linux dir target, no publish)
         working-directory: apps/desktop
         run: bunx electron-builder --linux dir --publish never
 
-      - name: Verify the staged CLI is self-contained
+      - name: Verify the desktop runtime is self-contained
         run: |
-          cli_dir=$(find apps/desktop/release -maxdepth 4 -type d -path '*/resources/cli' | head -1)
-          if [ -z "$cli_dir" ]; then
-            echo "Could not find a resources/cli directory in the packaged output." >&2
+          resources=$(find apps/desktop/release -maxdepth 4 -type d -name resources | head -1)
+          if [ -z "$resources" ]; then
+            echo "Could not find packaged resources." >&2
             exit 1
           fi
-          cli_dir=$(cd "$cli_dir" && pwd)
-          echo "Checking $cli_dir"
-          test -f "$cli_dir/dist/index.js" || { echo "missing $cli_dir/dist/index.js" >&2; exit 1; }
-          test -f "$cli_dir/package.json" || { echo "missing $cli_dir/package.json" >&2; exit 1; }
-          test -d "$cli_dir/node_modules/@lydell/node-pty" || { echo "missing $cli_dir/node_modules/@lydell/node-pty" >&2; exit 1; }
-          # The staged entry has to load standalone. Copying it out of the
-          # checkout first is what makes that real: run in place, a bare
-          # `import "@lydell/node-pty"` that only resolves against the
-          # workspace's own node_modules further up the tree would still
-          # pass, which is exactly the bug this job exists to catch.
-          isolated=$(mktemp -d)
-          cp -R "$cli_dir/." "$isolated/"
-          version=$(cd "$isolated" && node dist/index.js --version)
-          echo "isolated CLI reports version $version"
-          case "$version" in
-            0.0.0|"") echo "staged CLI could not read its own package.json" >&2; exit 1 ;;
-          esac
-          rm -rf "$isolated"
-          echo "desktop packaging smoke check passed"
+          asar="$resources/app.asar"
+          test -f "$asar" || { echo "missing $asar" >&2; exit 1; }
+          bunx asar list "$asar" | grep -q '/dist/main.js' || { echo "desktop main bundle missing" >&2; exit 1; }
+          bunx asar list "$asar" | grep -q '/dist/app/index.html' || { echo "desktop renderer missing" >&2; exit 1; }
+          find "$resources" -path '*node-pty*' -print -quit | grep -q . || { echo "node-pty native dependency missing" >&2; exit 1; }
+          echo "desktop runtime packaging smoke check passed"
 
       - name: Verify the update feed is baked in
         run: |

@@ -38,7 +38,6 @@ export default defineConfig({
 				{
 					label: 'Reference',
 					items: [
-						{ label: 'CLI', slug: 'reference/cli' },
 						{ label: 'Configuration', slug: 'reference/configuration' },
 						{ label: 'API', slug: 'reference/api' },
 						{ label: 'Changelog', slug: 'reference/changelog' },

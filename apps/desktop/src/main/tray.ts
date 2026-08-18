@@ -2,7 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "electron";
 import type { HealthResponse, Run } from "@brevi/shared";
-import { fleetLine, orchestratorVersionLine, runLabel, trayTitle, workerLine, type FleetCounts } from "./summary.js";
+import { fleetLine, runLabel, trayTitle, workerLine, type FleetCounts } from "./summary.js";
 import type { SupervisorState } from "./supervisor.js";
 import { updateLine, updateMenuItem, type UpdaterState } from "./update-policy.js";
 
@@ -31,8 +31,6 @@ export interface TrayView {
 
 export interface FleetTrayOptions {
   onOpen: (path?: string) => void;
-  /** Open the dashboard in the system browser. */
-  onOpenExternal: () => void;
   onRestartOrchestrator: () => void;
   onToggleLaunchAtLogin: (enabled: boolean) => void;
   onOpenLogs: () => void;
@@ -77,18 +75,11 @@ export class FleetTray {
     if (!view.connected) header.push({ label: "Dashboard: offline", enabled: false });
     const update = updateLine(view.update);
     if (update) header.push({ label: update, enabled: false });
-    const versionLine = orchestratorVersionLine(
-      view.appVersion,
-      view.supervisor.kind === "attached",
-      view.health?.version,
-    );
-    if (versionLine) header.push({ label: versionLine, enabled: false });
 
     // "Restart" implies something is already running; when it isn't (stopped
     // from outside the app, or never came up), the same click handler should
     // read as starting it instead.
-    const orchestratorStopped =
-      view.supervisor.kind === "idle" || view.supervisor.kind === "stopped" || view.supervisor.kind === "failed";
+    const orchestratorStopped = view.supervisor.kind === "stopped" || view.supervisor.kind === "failed";
 
     const runItems: MenuItemConstructorOptions[] =
       view.runs.length > 0
@@ -106,7 +97,6 @@ export class FleetTray {
       ...runItems,
       { type: "separator" },
       { label: "Open Mission Control", click: () => this.#options.onOpen() },
-      { label: "Open in Browser", click: () => this.#options.onOpenExternal() },
       {
         label: orchestratorStopped ? "Start Orchestrator" : "Restart Orchestrator",
         click: () => this.#options.onRestartOrchestrator(),

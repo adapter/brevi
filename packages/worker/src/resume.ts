@@ -1,5 +1,5 @@
 /**
- * Shell-quoting plus the two POSIX sh fragments `brevi attach` installs
+ * Shell-quoting plus the two POSIX sh fragments the desktop terminal installs
  * inside a rehydrated sandbox: a credential profile (sandbox-wide state, so
  * every shell is authenticated, not just the resumed conversation) and the
  * resume script that sources it before reattaching the agent conversation.
@@ -97,7 +97,7 @@ export interface BuildResumeScriptOptions {
 }
 
 /**
- * Builds the POSIX sh script `brevi attach` runs inside a rehydrated sandbox
+ * Builds the POSIX sh script the desktop terminal runs inside a rehydrated sandbox
  * to reattach the agent conversation. It sources the credential profile
  * rather than exporting credentials itself, so the resumed process picks up
  * the same sandbox-wide state any other shell in the sandbox gets. The

@@ -11,7 +11,7 @@ import { configSchema, type BreviConfig } from "./config.js";
 export type ConfigPatch = { [key: string]: unknown };
 
 /**
- * The fully-defaulted config: what `brevi init` writes and what every form
+ * The fully-defaulted config: what first launch writes and what every form
  * field shows as its placeholder or reset-to-default value. Derived from the
  * schema so the two can never drift.
  */

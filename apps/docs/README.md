@@ -14,7 +14,6 @@ src/content/docs/
 │   ├── sandboxes.md          bwrap isolation on Linux workers
 │   └── workers.md            Linux installer, local worker, fleet
 └── reference/
-    ├── cli.md                brevi init / setup / start / status / worker
     ├── configuration.md      ~/.brevi/config.json schema
     └── api.md                orchestrator HTTP + WS protocol, api.brevi.dev
 ```
@@ -28,4 +27,4 @@ src/content/docs/
 | `bun run preview` | Preview the build locally |
 | `bun run lint` | oxlint |
 
-Ground truth for the reference pages is the source: `packages/shared/src/config.ts` (configuration), `packages/shared/src/protocol.ts` (API), `packages/cli/src/commands/` (CLI). Update these docs when those change.
+Ground truth for the reference pages is the source: `packages/shared/src/config.ts` (configuration and protocol) and `packages/worker` (worker setup). Update these docs when those change.

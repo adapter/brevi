@@ -2,13 +2,10 @@
 # distributable macOS/Linux builds under apps/desktop/release. Windows is out
 # of scope for this project. Wired into CI: .github/workflows/desktop-release.yml
 # runs this once per target (a universal macOS build, an x64 Linux build) when
-# @brevi/cli's version bumps, and uploads the results to that release; ci.yml
+# the desktop version bumps, and uploads the results to that release; ci.yml
 # also runs a Linux-only `--linux dir` packaging smoke check on every PR.
 #
-# The shipped version is not this file's or apps/desktop/package.json's own:
-# both packaging scripts inject it at package time from packages/cli/package.json
-# (`-c.extraMetadata.version=$(bun scripts/cli-version.ts)`), so the app and the
-# embedded orchestrator it supervises can never disagree on version.
+# apps/desktop/package.json is the authoritative shipped version.
 #
 # Packaging never publishes by itself (`--publish never` in every package
 # script). Uploading is the workflow's job, with wrangler pushing the update
@@ -25,37 +22,15 @@ files:
   - dist/**
   - assets/**
   - package.json
-extraResources:
-  # The orchestrator this app supervises (see src/main/paths.ts), staged as
-  # a self-contained install (bundled entry + its own node_modules) by
-  # scripts/stage-cli.ts, which both packaging scripts run first. Requires
-  # `bun run build` at the repo root to have produced packages/cli/dist.
-  - from: build/cli
-    to: cli
-  # Staged in a second mapping on purpose. electron-builder's file matcher
-  # drops a `node_modules` segment from anything it copies, since it normally
-  # collects an app's own dependencies itself, and no filter re-includes it.
-  # This tree is not the app's, it is a staged production install of the CLI,
-  # and without its dependencies the packaged app dies with
-  # ERR_MODULE_NOT_FOUND on the bundle's bare `open` and `@lydell/node-pty`
-  # imports, which is the whole reason scripts/stage-cli.ts builds it. Rooting
-  # `from` at node_modules itself keeps that segment out of the paths being
-  # matched, so its contents copy normally.
-  - from: build/cli/node_modules
-    to: cli/node_modules
+asarUnpack:
+  - node_modules/@lydell/node-pty*/**
 mac:
   category: public.app-category.developer-tools
   icon: assets/icon.png
   target:
     # A single universal artifact rather than one dmg/zip per arch: `arch:
     # [universal]` tells electron-builder to build both an x64 and an arm64
-    # app bundle and merge them with `lipo` into one binary. That merge
-    # requires the staged CLI's extraResources to be *identical* between the
-    # two intermediate builds (electron-builder diffs them and fails the
-    # merge otherwise) and to work on both architectures once merged, which
-    # is why stage-cli.ts's `--darwin-universal` flag stages both
-    # @lydell/node-pty-darwin-arm64 and @lydell/node-pty-darwin-x64 into the
-    # one tree both intermediate builds copy from.
+    # app bundle and merge them with `lipo` into one binary.
     - target: dmg
       arch: [universal]
     - target: zip
@@ -85,10 +60,8 @@ linux:
 # only the staging host's own build of the native @lydell/node-pty is ever
 # installed (see stage-cli.ts), so packaging still happens on a runner
 # matching the target arch (desktop-release.yml has an x64 Linux leg; there is
-# deliberately no arm64 one yet). macOS is the exception now that it packages
-# as a single `universal` artifact above: that target builds and merges both
-# arches itself in one run, which is exactly why it needs the
-# `--darwin-universal` staged tree rather than the host's own node-pty build.
+# deliberately no arm64 one yet). macOS is the exception: electron-builder
+# installs and merges both native architectures for the universal target.
 artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
 # The update feed electron-updater checks against. Declaring `publish:` makes
 # electron-builder write `app-update.yml` into the packaged app itself (this

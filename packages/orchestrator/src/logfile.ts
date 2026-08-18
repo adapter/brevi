@@ -25,7 +25,7 @@ function appendLine(level: string, args: unknown[]): void {
 }
 
 /**
- * Tee console output to `~/.brevi/logs/orchestrator.log`, so `brevi doctor`
+ * Tee console output to `~/.brevi/logs/orchestrator.log`, so diagnostics
  * has a log tail to bundle as diagnosis evidence. Idempotent, best-effort,
  * and silent on any failure: a broken log file must never break or slow the
  * server.

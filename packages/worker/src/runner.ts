@@ -410,7 +410,7 @@ export async function executeRun(ctx: RunContext): Promise<void> {
     // the Codex/Grok auth.json files at stable CODEX_HOME / GROK_HOME, both
     // outside the workspace so the run's tree stays clean): the agent execs
     // below get them via the sandbox env, and any interactive shell opened
-    // beside or after the run (brevi attach) is authenticated the same way.
+    // beside or after the run (the desktop terminal) is authenticated the same way.
     const { codexHome, grokHome } = await provisionCredentials({
       sandbox,
       runId: run.id,
@@ -676,7 +676,7 @@ export async function finishRunSandbox(options: {
       // the field that actually changed, so provider/id (already reported
       // when the sandbox was created) are left exactly as the host holds them.
       await store.update(runId, { sandbox: { retainedUntil } });
-      log("system", `sandbox retained until ${retainedUntil}; resume with \`brevi attach ${runId}\``);
+      log("system", `sandbox retained until ${retainedUntil}; resume from Mission Control`);
       // Only the host-side scratch goes; the retained disk lives inside
       // tempRoot (the per-run directory under ~/.brevi/workspaces).
       await rm(checkoutDir, { recursive: true, force: true }).catch(() => undefined);
@@ -1080,4 +1080,3 @@ export function buildPrBody(options: { summary: string; ticket: Ticket; evidence
   parts.push(`Fixes ${ticket.identifier}`, `---\n${BREVI_FOOTER}`);
   return parts.join("\n\n");
 }
-

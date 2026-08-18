@@ -84,7 +84,7 @@ function firstErrorLine(result: { stdout: string; stderr: string; exitCode?: num
 
 /**
  * Read-only probe that the configured evidence bucket exists and answers,
- * for `brevi doctor`: asks wrangler for the bucket's dev URL without
+ * for diagnostics: asks wrangler for the bucket's dev URL without
  * creating or changing anything.
  */
 export async function checkBucketAccessible(
@@ -145,7 +145,7 @@ export async function provisionBucket(bucket: string = DEFAULT_EVIDENCE_BUCKET):
     // bucket this function just created: a pre-existing one may predate
     // brevi and hold objects the user never meant to publish, so its dev
     // URL is read back and reused only if it is already public (a previous
-    // brevi setup); otherwise provisioning fails with instructions instead
+    // a previous installation); otherwise provisioning fails with instructions instead
     // of silently exposing it.
     const getResult = await execa("wrangler", ["r2", "bucket", "dev-url", "get", bucket], {
       timeout: 60_000,

@@ -77,7 +77,7 @@ export function AgentSection({
             path="agent.orchestratorEffort"
             draft={models}
             options={EFFORTS}
-            help="Reasoning effort for the main agent loop. The implementer subagent keeps the CLI's default effort."
+            help="Reasoning effort for the main agent loop. The implementer subagent keeps the agent's default effort."
           />
           <Advanced>
             <TextField

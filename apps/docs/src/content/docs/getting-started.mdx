@@ -1,117 +1,52 @@
 ---
 title: Getting started
-description: Install brevi from npm, connect Linear, GitHub and a coding agent, and run your first ticket.
+description: Install Mission Control, connect providers, add a Linux worker over SSH, and run your first ticket.
 ---
 
-import { Steps, Aside } from '@astrojs/starlight/components';
+import { Steps } from '@astrojs/starlight/components';
 
-brevi runs on your machine: a CLI, an orchestrator that polls Linear, and a dashboard served from the same process. This page takes you from install to a first pull request.
+brevi runs as Mission Control on macOS or Linux. The desktop app owns the scheduler and config; isolated runs execute on Linux workers it provisions over SSH.
 
 ## Prerequisites
 
-- **Node.js 18+**.
-- **git**, and a GitHub account with access to the repositories you want brevi to work on.
-- A **Linear** account, with issues you can assign to yourself.
-- A coding agent credential brevi can find or that you can paste: a Claude Code login / Anthropic API key, a Codex (ChatGPT or OpenAI) login, or a Grok CLI login / xAI API key.
-- Optional: **Linux with bubblewrap and passt** (`apt install bubblewrap passt`, or `brevi setup`) so this machine can execute isolated runs. See [Sandboxes](/guides/sandboxes/). A Mac is a scheduler only until you enroll a Linux worker.
-
-## Install
-
-The CLI is published as [`@brevi/cli`](https://www.npmjs.com/package/@brevi/cli); run it with `npx`:
-
-```sh
-npx @brevi/cli
-```
-
-…or install it globally to get the `brevi` binary:
-
-```sh
-npm install -g @brevi/cli
-brevi
-```
-
-<Aside type="note">
-Working on brevi itself? Clone [adapter/brevi](https://github.com/adapter/brevi), then `bun install && bun run build` and use `bun run brevi -- <command>` from the repo root.
-</Aside>
-
-## Desktop app
-
-Prefer a GUI to a terminal? Mission Control is the same brevi as a downloadable, self-updating desktop app for macOS and Linux: it starts and supervises the same orchestrator and shows the same dashboard in its own window. It shares `~/.brevi` with the CLI, so the two are interchangeable: whichever one starts the orchestrator, the other attaches to it instead of starting a second one. See [Download](/download/) for builds and install steps.
+- A GitHub account and `git` access to the repositories brevi may change.
+- A Linear account with issues you can assign to yourself.
+- A Claude, Codex, or Grok credential.
+- A reachable Linux worker with systemd, OpenSSH, and passwordless sudo for its SSH user.
 
 ## First run
 
 <Steps>
 
-1. **Run `brevi`**
+1. **Install Mission Control**
 
-   The first launch (no `~/.brevi/config.json` yet) starts with the init flow, then the orchestrator binds `http://localhost:4400`, serves the dashboard, and opens it in your browser. Use `brevi start` for the same thing without a browser, and `brevi status` from another shell to check whether it's up. On Linux, init offers to install bubblewrap and passt so this machine can execute runs.
+   Download the macOS or Linux build from [Download](/download/) and launch it. First launch creates `~/.brevi/config.json` and opens setup inside the app.
 
-2. **Open the Configuration page**
+2. **Connect providers**
 
-   Click the gear button in the dashboard's nav bar (or go to `/config`). The **Configuration** page is where every credential is set. Each provider has a **Connect** button that tries automatic strategies first and only falls back to a manual key input:
+   Open Configuration and connect Linear, GitHub, and an agent. Credentials are verified before they are saved.
 
-   - **GitHub**: your `gh` CLI login, otherwise an OAuth device code (a code to type on github.com).
-   - **Claude**: a Claude Code login discovered on this machine (macOS Keychain or `~/.claude`), or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` in the orchestrator's environment.
-   - **Codex**: `OPENAI_API_KEY`, or the Codex CLI login at `~/.codex/auth.json` (including ChatGPT logins).
-   - **Grok**: `XAI_API_KEY` / `GROK_CODE_XAI_API_KEY` / `GROK_AUTH`, or the Grok CLI login at `~/.grok/auth.json`, or a pasted key from console.x.ai.
-   - **Linear**: a browser OAuth round trip, otherwise a pasted personal API key.
+3. **Expose the worker channel**
 
-   Every credential is verified against its provider before it is saved, so "Connected" means the agent can actually run. Details in [Connections](/guides/connections/).
+   Under Configuration → Workers, bind the authenticated worker channel to an address your Linux machine can reach. The management API remains loopback-only and cannot be exposed.
 
-3. **Pick repositories**
+4. **Set up a worker over SSH**
 
-   Once GitHub is connected, the **Repositories** section lists the repos your token can see, most recently pushed first. Add the ones brevi may work on. Each becomes a repo *key* (the repo name) mapped to `owner/name` and its default branch. Tickets pick a repo with a `repo:<key>` label or a matching Linear project.
+   Enter the Linux hostname or IP, SSH user, port, and optionally an absolute private-key path. Mission Control verifies the host key, installs `brevi-worker.service`, enrolls it with a single-use token, and waits for it to connect. SSH keys and pairing credentials stay in Electron's main process.
 
-4. **Label a Linear ticket**
+5. **Pick repositories and run a ticket**
 
-   Assign an issue to yourself, leave it in an unstarted/backlog state, and add the `brevi` label.
-
-5. **Watch the run**
-
-   brevi polls Linear every 60 seconds, queues eligible tickets, and runs them one at a time. The dashboard streams the agent's output live. For Claude runs, an adversarial Codex review and fix pass can run before the branch is pushed (see [Configuration](/reference/configuration/#codex-review)); when the run finishes you get a pull request, with the agent's demo kept on the run's page.
+   Add repositories under Configuration → Repositories. Assign a Linear issue to yourself, add the `brevi` label, then run it from Mission Control or let the scheduler pick it up.
 
 </Steps>
 
-## Adding a worker
+## State and updates
 
-Everything above runs a single machine that both schedules and executes. To hand execution to another Linux box instead, so runs happen there while the dashboard stays here, install brevi as a worker on it:
-
-```sh
-curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- --host https://your-host:4400 --token <pairing token>
-```
-
-The pairing token comes from "Add a worker" under Configuration > Workers on this machine. See [Workers](/guides/workers/) for what the installer sets up, and how to update or remove a worker later.
-
-## What just happened
-
-```
-Linear (issues assigned to you with the brevi label)
-   │  poll every pollIntervalSeconds
-   ▼
-orchestrator ──► queue eligible tickets
-   │
-   ▼
-sandbox (bwrap on Linux)
-   │  clone of the mapped repo + the coding agent, headless
-   ▼
-branch + PR with demo artifacts
-```
-
-State lives under `~/.brevi/`:
-
-| Path | Contents |
-| --- | --- |
-| `~/.brevi/config.json` | Everything brevi knows: credentials, repos, sandbox, triggers |
-| `~/.brevi/runs/` | Run history, event logs, and collected artifacts |
-| `~/.brevi/workspaces/` | Per-run scratch space (removed when a run ends) |
-
-<Aside type="tip">
-brevi reads no environment variables of its own for configuration: everything is in `~/.brevi/config.json`. Env vars like `ANTHROPIC_API_KEY` are only ever *discovered* by a Connect button and then stored.
-</Aside>
+Mission Control keeps configuration, run history, artifacts, and memories under `~/.brevi`. Desktop updates include the scheduler. Worker updates are applied by running SSH setup again; enrollment survives upgrades.
 
 ## Next steps
 
-- [Connections](/guides/connections/): the full strategy chain per provider.
-- [Tickets and runs](/guides/tickets/): eligibility, repo routing, rerun semantics.
-- [Sandboxes](/guides/sandboxes/): bubblewrap isolation on Linux workers.
-- [Configuration](/reference/configuration/): every config field.
+- [Connections](/guides/connections/)
+- [Workers](/guides/workers/)
+- [Tickets and runs](/guides/tickets/)
+- [Configuration](/reference/configuration/)

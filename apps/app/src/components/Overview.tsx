@@ -1,4 +1,4 @@
-import { Command, Plate } from "./Bits";
+import { Plate } from "./Bits";
 
 /**
  * The main pane when no run is open. Runs themselves live in the sidebar and
@@ -23,14 +23,10 @@ export function Overview({
           <span className="inline-block size-[7px] rounded-full bg-rust-500" />
           <Plate>Orchestrator offline</Plate>
         </span>
-        <h2 className="mt-2.5 text-[15px] text-haze-50">Nothing is listening on this port</h2>
+        <h2 className="mt-2.5 text-[15px] text-haze-50">Mission Control lost its runtime</h2>
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-haze-400">
-          The dashboard talks to a brevi orchestrator running on your machine. Start one and this
-          page reconnects on its own.
+          Restart the orchestrator from the menu bar. This page reconnects on its own.
         </p>
-        <div className="mt-3.5">
-          <Command text="npx @brevi/cli" />
-        </div>
       </Centered>
     );
   }

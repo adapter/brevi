@@ -3,9 +3,9 @@ title: API
 description: The orchestrator's local HTTP and WebSocket protocol, plus the hosted OAuth endpoints on api.brevi.dev.
 ---
 
-The orchestrator serves both the dashboard and its API from one process, bound to `server.host` (`127.0.0.1` by default) on `server.port` (4400 by default). The protocol is defined in `packages/shared/src/protocol.ts` and shared verbatim with the dashboard.
+Mission Control's orchestrator exposes a private implementation API on `127.0.0.1` and `server.port` (4400 by default). It does not serve the renderer: Electron loads that from `brevi://app`.
 
-There is no authentication: by default the server is loopback-only and anything reaching it already runs as you. Setting `server.host` to `0.0.0.0` exposes the same unauthenticated API to the network, so anyone who can reach the port has full control; only do that on networks you trust. Everything outside `/api` serves the dashboard as a single-page app.
+Every management request and dashboard WebSocket requires a random per-launch token known to the Electron renderer. The listener cannot be exposed through `server.host`; ordinary browsers on the same machine cannot access the management surface. `/api/health`, OAuth callbacks, and worker-authenticated routes are the narrow exceptions described below.
 
 ## Orchestrator HTTP API
 
@@ -26,9 +26,9 @@ There is no authentication: by default the server is loopback-only and anything 
 | `POST` | `/api/runs/:id/resume` | `ResumeRunResponse` |
 | `POST` | `/api/runs/:id/release` | `Run` |
 | `WS` | `/ws/runs/:id/attach` | Web-terminal bridge into the retained sandbox |
-| `WS` | `/ws/worker` | The worker channel: where `brevi worker` daemons enroll, register, and receive dispatches |
+| `WS` | `/ws/worker` | The worker channel: where `brevi-worker` daemons enroll, register, and receive dispatches |
 | `GET` | `/api/workers` | `FleetResponse`: every enrolled worker |
-| `POST` | `/api/workers/pair` | `PairingTokenResponse` |
+| `POST` | `/api/workers/provision` | `WorkerProvisionResponse`: set up a Linux worker over SSH |
 | `POST` | `/api/workers/:id/rename` | `FleetResponse` |
 | `POST` | `/api/workers/:id/drain` | `FleetResponse` |
 | `POST` | `/api/workers/:id/enable` | `FleetResponse` |
@@ -118,11 +118,11 @@ interface ResumeRunResponse {
 type RunAttachInfo = { kind: "worker"; workerId: string; workerName: string };
 ```
 
-`attach` names the worker that holds the retained sandbox. The session itself is never opened on the scheduling host: `brevi attach` and the dashboard web terminal both connect to `WS /ws/runs/:id/attach`, which the host relays to that worker's PTY.
+`attach` names the worker that holds the retained sandbox. The session itself is never opened on the scheduling host: the desktop terminal connects to `WS /ws/runs/:id/attach`, which the host relays to that worker's PTY.
 
 Errors: `404` when the run doesn't exist, `409` when the run hasn't finished yet, another follow-up is starting, or its worker is disconnected, `410` once the retention window has passed and the disk was reclaimed, and `400` when the run has no captured agent session id (resume is Claude-only for now; Codex runs don't report one).
 
-`POST /api/runs/:id/release` stops a resumed sandbox's compute again, keeping its disk until the retention window ends, and returns the updated `Run`. `brevi attach` calls it on detach; it's a no-op when nothing is booted.
+`POST /api/runs/:id/release` stops a resumed sandbox's compute again, keeping its disk until the retention window ends, and returns the updated `Run`. The desktop terminal calls it on detach; it's a no-op when nothing is booted.
 
 ### Follow-ups
 
@@ -134,7 +134,7 @@ Errors: `404` unknown run, `409` when the run is not completed, another executio
 
 ### Web terminal
 
-`WS /ws/runs/:id/attach` is what the run detail page's "Open terminal" button connects to. A finished run's retained sandbox lives on the worker that executed it, never on the scheduling host, so the host relays: it asks that worker to open the resume session and passes its PTY bytes through to this socket. The browser needs no ssh access, and `brevi attach` uses the same socket for the same reason. Messages are JSON in both directions:
+`WS /ws/runs/:id/attach` is what the run detail page's "Open terminal" button connects to. A finished run's retained sandbox lives on the worker that executed it, never on the scheduling host, so the host relays: it asks that worker to open the resume session and passes its PTY bytes through to this socket. The renderer needs no SSH access. Messages are JSON in both directions:
 
 ```ts
 // server -> client
@@ -149,13 +149,11 @@ type AttachClientMessage =
   | { type: "resize"; cols: number; rows: number };
 ```
 
-Multiple clients (web terminals, `brevi attach` sessions) share one booted sandbox; it stops again when the last one disconnects.
+Multiple terminal views share one booted sandbox; it stops again when the last one disconnects.
 
 ### Workers
 
-Runs execute on `brevi worker` daemons, not on the host: the orchestrator is a pure scheduler and never boots a sandbox itself. A machine becomes one of this host's workers by redeeming a single-use pairing token, which buys it a durable per-worker credential; these endpoints are that fleet's management surface, and the dashboard's Workers page (Configuration > Workers, `/config/workers`) is built on them.
-
-One worker can exist without any of that ceremony: on a machine that can execute runs (Linux), the host spawns and supervises a local worker itself, minting and injecting its credential in-process, rotated on every start. It appears here with `local: true`, presents as "This machine" on the Workers page, and lives and dies with the orchestrator (`brevi stop` stops both). It can be drained like any other worker, but rename and revoke answer `400`: its identity is the machine's own, and its credential dies with the process anyway.
+Runs execute on dedicated `brevi-worker` daemons. Mission Control provisions a Linux machine over SSH, mints a single-use pairing token inside the main process, and exchanges it for a durable worker credential.
 
 `GET /api/workers` returns every enrolled worker, connected or not, oldest enrollment first:
 
@@ -190,21 +188,13 @@ interface WorkerCapabilities {
 
 No credential material ever appears here: the host stores only the sha256 of each worker's credential (in `~/.brevi/fleet.json`, mode `0600`), and even that never leaves the process.
 
-`POST /api/workers/pair` mints a single-use pairing token and the ready-to-copy command that redeems it, good for `PAIRING_TOKEN_TTL_MINUTES` (15) minutes unless redeemed first:
+`POST /api/workers/provision` accepts non-secret SSH connection settings:
 
 ```json
-{
-  "token": "bwp_…",
-  "expiresAt": "2026-08-11T15:15:00.000Z",
-  "command": "brevi worker --host http://192.168.1.5:4410 --token bwp_…",
-  "host": "http://192.168.1.5:4410",
-  "remote": true
-}
+{ "host": "worker.example.com", "port": 22, "user": "deploy", "identityFile": "/Users/me/.ssh/id_ed25519", "name": "build-1", "concurrency": 2 }
 ```
 
-`token` is returned exactly once, by this call; the host keeps only what it needs to redeem it, so a token not copied out of this response is unrecoverable. Nothing shows up in `GET /api/workers` until a machine runs the command and registers over `/ws/worker` (below). The address in `command` is the listener a worker should dial: the dedicated fleet listener when `fleet.host` is set, otherwise the dashboard's own.
-
-`remote` says whether `host` is genuinely reachable from another machine: a wildcard bind (`fleet.host` or `server.host` set to `"0.0.0.0"`) resolves to a guessed LAN address and reports `true`; a loopback-only bind prints `"http://localhost:<port>"` and reports `false` rather than inventing a LAN address nothing answers on. The dashboard uses it to warn when the printed command will only ever work on this machine.
+The response is `{ "ok": true, "output": "..." }`. The endpoint fails if the worker channel is not remotely reachable. The pairing token is never returned to the renderer: it is written over SSH stdin to a short-lived mode-0600 file and consumed by the installer through `--token-file`.
 
 `POST /api/workers/:id/rename` with `{ "name": "..." }` (trimmed, control characters stripped, capped at 60 characters; empty is `400`), `POST /api/workers/:id/drain` (finish in-flight runs, accept nothing new; the state is persisted and survives reconnects), `POST /api/workers/:id/enable` (put a drained worker back in rotation), and `DELETE /api/workers/:id` (revoke: the credential dies and the worker is disconnected at once, unable to reconnect with what it holds) all return the updated `FleetResponse`, or `404` for an id that is not enrolled. Rename and revoke answer `400` for the local worker: drain it instead.
 
@@ -228,7 +218,7 @@ No credential material ever appears here: the host stores only the sha256 of eac
 
 ### Worker channel
 
-`WS /ws/worker` is the channel `brevi worker` (see [CLI](/reference/cli/#brevi-worker)) connects to. Each worker dials it outbound and never accepts inbound connections, so a worker behind NAT needs no port open. The wire protocol is defined as zod schemas in `packages/shared/src/worker.ts` and is versioned (`WORKER_PROTOCOL_VERSION`, currently `3`); a worker on a different version is rejected on registration.
+`WS /ws/worker` is the channel the dedicated `brevi-worker` daemon connects to. Each worker dials it outbound and never accepts inbound connections, so a worker behind NAT needs no port open. The wire protocol is defined as zod schemas in `packages/shared/src/worker.ts` and is versioned; an incompatible worker is rejected on registration.
 
 It is served in two places: always by the dashboard's own listener (`server.host` / `server.port`), so a worker on this same machine can always enroll, and additionally by a dedicated listener bound to `fleet.host` / `fleet.port` (see [Configuration](/reference/configuration/#fleet)) when `fleet.host` is set. That second listener exists so a worker on another machine can reach `/ws/worker` without exposing the unauthenticated management API above, which stays on `server.host` regardless; the dedicated listener serves nothing else beyond the credential-authenticated `GET /api/worker/demand` above, and every other request on it gets a `404`.
 

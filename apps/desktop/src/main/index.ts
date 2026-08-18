@@ -1,13 +1,15 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomBytes } from "node:crypto";
 import { app, dialog, nativeImage, shell } from "electron";
 import type { HealthResponse } from "@brevi/shared";
+import { startOrchestrator } from "@brevi/orchestrator";
 import { loadConfig } from "@brevi/orchestrator/config";
 import { ensureConfig } from "./config.js";
 import { FleetMonitor } from "./fleet.js";
 import { orchestratorUrl, probeHealth } from "./health.js";
 import { notifyRunFinished, notifyUpdateFailed, notifyUpdateReady } from "./notifications.js";
-import { ORCHESTRATOR_LOG_PATH, resolveCliEntry } from "./paths.js";
+import { ORCHESTRATOR_LOG_PATH } from "./paths.js";
 import { countRuns, menuRuns, updateBlockingRuns } from "./summary.js";
 import { launchAtLoginEnabled, openedAtLogin, setLaunchAtLogin } from "./autostart.js";
 import { OrchestratorSupervisor, type SupervisorState } from "./supervisor.js";
@@ -15,6 +17,8 @@ import { FleetTray, type TrayView } from "./tray.js";
 import { updateAction } from "./update-policy.js";
 import { DesktopUpdater } from "./updater.js";
 import { MissionControl } from "./window.js";
+import { registerDashboardProtocol, registerDashboardScheme } from "./protocol.js";
+import { provisionWorkerOverSsh } from "./ssh.js";
 
 /** How many recent runs the tray menu lists (see summary.ts's menuRuns). */
 const MENU_RUN_LIMIT = 6;
@@ -30,6 +34,9 @@ let supervisor: OrchestratorSupervisor | undefined;
 let fleet: FleetMonitor | undefined;
 let updater: DesktopUpdater | undefined;
 let quitting = false;
+const managementToken = randomBytes(32).toString("base64url");
+
+registerDashboardScheme();
 
 // Must run before ready. Sets About/Quit labels and the Linux WM name.
 // The macOS menu bar and dock read the .app bundle instead; source
@@ -78,6 +85,7 @@ async function teardownForQuit(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  registerDashboardProtocol(join(here, "app"));
   const iconPath = join(here, "..", "assets", "icon.png");
   const icon = nativeImage.createFromPath(iconPath);
   if (process.platform === "darwin" && !icon.isEmpty()) {
@@ -98,17 +106,21 @@ async function main(): Promise<void> {
   if (!result) return;
   const { config, firstLaunch } = result;
 
-  // Mutable: server.host and server.port are editable from the dashboard and
-  // apply on restart, so every component holding an address has to be moved
-  // with them (see restartOrchestrator).
-  let baseUrl = orchestratorUrl(config.server);
+  // The management listener is always loopback-only. Its port remains
+  // configurable and is picked up on restart.
+  let baseUrl = orchestratorUrl({ host: "127.0.0.1", port: config.server.port });
   const statusPage = join(here, "status.html");
 
   // A login launch belongs in the menu bar. The window is still created and
   // pointed at the status page so a later tray click reveals a ready one,
   // it just never puts itself on screen.
   const hiddenLaunch = openedAtLogin();
-  missionControl = new MissionControl({ baseUrl, statusPage, startHidden: hiddenLaunch });
+  missionControl = new MissionControl({
+    baseUrl,
+    apiToken: managementToken,
+    statusPage,
+    startHidden: hiddenLaunch,
+  });
   missionControl.showStatus("loading");
   if (!hiddenLaunch) missionControl.show();
 
@@ -121,7 +133,6 @@ async function main(): Promise<void> {
 
   tray = new FleetTray({
     onOpen: (path) => openWindow(path),
-    onOpenExternal: () => void shell.openExternal(baseUrl),
     onRestartOrchestrator: () => void restartOrchestrator(),
     onToggleLaunchAtLogin: (enabled) => {
       setLaunchAtLogin(enabled);
@@ -134,14 +145,18 @@ async function main(): Promise<void> {
   });
 
   supervisor = new OrchestratorSupervisor({
-    cliEntry: resolveCliEntry({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, here }),
-    runtime: process.execPath,
-    url: baseUrl,
+    startOrchestrator: async () =>
+      startOrchestrator({
+        config: await loadConfig(),
+        managementToken,
+        provisionWorker: provisionWorkerOverSsh,
+      }),
     onState: (state) => handleSupervisorState(state),
   });
 
   fleet = new FleetMonitor({
     url: baseUrl,
+    token: managementToken,
     onChange: () => {
       refreshTray();
       updater?.runsChanged();
@@ -149,10 +164,8 @@ async function main(): Promise<void> {
     onRunFinished: (run) => notifyRunFinished(run, (path) => openWindow(path)),
   });
 
-  // An app update carries the embedded orchestrator with it (the CLI is
-  // staged inside the app bundle, see stage-cli.ts), so there is no separate
-  // "update the orchestrator" path here: updating the desktop app IS how the
-  // orchestrator gets updated on a desktop-supervised install.
+  // The orchestrator is bundled into Mission Control, so a desktop update is
+  // also a host-runtime update.
   updater = new DesktopUpdater({
     currentVersion: app.getVersion(),
     busyRuns: () => updateBlockingRuns(countRuns(fleet?.state.runs ?? [])),
@@ -163,19 +176,15 @@ async function main(): Promise<void> {
   });
 
   /**
-   * Restart the orchestrator, picking up an edited server.host/server.port on
-   * the way. The child re-reads the config when it boots, so a supervisor
-   * still probing the old address would health-check a socket nothing is
-   * bound to and kill the healthy child as unhealthy, over and over. Re-read
-   * the config here and move every component holding an address before the
-   * restart, not after.
+   * Restart the in-process orchestrator and pick up an edited server port.
    */
   async function restartOrchestrator(): Promise<void> {
     const current = await loadConfig().catch(() => null);
-    const nextUrl = current ? orchestratorUrl(current.server) : baseUrl;
+    const nextUrl = current
+      ? orchestratorUrl({ host: "127.0.0.1", port: current.server.port })
+      : baseUrl;
     if (nextUrl !== baseUrl) {
       baseUrl = nextUrl;
-      supervisor?.setUrl(baseUrl);
       fleet?.setUrl(baseUrl);
       missionControl?.setBaseUrl(baseUrl);
       // The window is pointed at the old address; put it back on the status
@@ -204,7 +213,7 @@ async function main(): Promise<void> {
   }
 
   function handleSupervisorState(state: SupervisorState): void {
-    if (state.kind === "running" || state.kind === "attached") {
+    if (state.kind === "running") {
       if (!dashboardLoaded) {
         dashboardLoaded = true;
         // Only a genuinely first launch (no config file yet) lands on the
@@ -220,13 +229,6 @@ async function main(): Promise<void> {
       dashboardLoaded = false;
       health = null;
       missionControl?.showStatus("error", state.reason);
-    } else if (state.kind === "idle") {
-      dashboardLoaded = false;
-      health = null;
-      missionControl?.showStatus(
-        "error",
-        "The orchestrator was stopped from outside the app. Start it again from the menu bar.",
-      );
     }
     refreshTray();
   }

@@ -8,7 +8,7 @@ import type { Orchestrator } from "./scheduler.js";
  * host never runs a PTY itself any more: a run's retained sandbox lives on
  * whichever worker executed it, so this is purely a byte relay over
  * `orchestrator.openRunAttach`, which reaches that worker's session over its
- * own `/ws/worker` socket. Lifetime still mirrors `brevi attach`: resumeRun's
+ * own `/ws/worker` socket. Lifetime mirrors the desktop terminal: resumeRun's
  * eligibility checks on connect, releaseRun on disconnect, so the scheduler's
  * client refcount treats web and CLI sessions alike even though the worker
  * itself now owns the actual teardown (see Orchestrator.releaseRun).
@@ -41,7 +41,7 @@ export function handleAttachSocket(socket: WebSocket, orchestrator: Orchestrator
     }
 
     // No resize has arrived yet on a brand-new socket; 80x24 matches the
-    // PTY default `brevi attach` used to spawn locally, so the first frame
+    // PTY default the old local terminal used to spawn, so the first frame
     // isn't garbled before the client's real terminal size lands.
     const opened = orchestrator.openRunAttach(runId, {
       cols: 80,

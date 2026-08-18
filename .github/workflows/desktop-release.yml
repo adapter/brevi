@@ -2,27 +2,14 @@
 # auto-update feed on Cloudflare R2, plus a GitHub release: dmg + zip for
 # macOS (one universal binary, arm64 and x64 merged with `lipo`), AppImage +
 # deb + rpm for Linux (x64). Each leg is staged and packaged on a runner
-# matching its own target OS/arch, not cross-built: the staged CLI
-# (apps/desktop/build/cli, see apps/desktop/scripts/stage-cli.ts) embeds
-# whichever platform/arch build of the native @lydell/node-pty addon the
-# *staging host* has installed via optionalDependencies, so packaging a
-# different arch's artifact on this host would silently ship the wrong
-# native binary.
+# matching its own target OS/arch, not cross-built, because node-pty carries a
+# native addon for the packaging host's platform and architecture.
 #
-# The desktop app has no version of its own: it ships whatever
-# packages/cli/package.json says (injected at package time, see
-# apps/desktop/electron-builder.yml and scripts/cli-version.ts), so a
-# release here always carries an app and an embedded orchestrator on the
-# same version. That is also what drives everything below: there is no
-# desktop-specific version to bump or tag.
+# apps/desktop/package.json is the authoritative release version.
 #
 # Triggers:
-#   - push to main touching packages/cli/package.json: the changesets
-#     "Release packages" PR merge (release.yml) lands as a human-initiated
-#     push, which triggers workflows; tags the changesets action pushes with
-#     GITHUB_TOKEN cannot trigger workflows, so this version-bump commit on
-#     main is the reliable release signal.
-#   - push of an "@brevi/cli@*" tag, which covers a manually pushed tag.
+#   - push to main touching apps/desktop/package.json.
+#   - push of a "desktop-v*" tag.
 #   - workflow_dispatch, for a packaging dry run (the default) or, with
 #     `publish: true`, a manually triggered real release. A dry run always
 #     builds and packages, even for a version that is already published,
@@ -64,9 +51,9 @@ on:
   push:
     branches: [main]
     paths:
-      - packages/cli/package.json
+      - apps/desktop/package.json
     tags:
-      - "@brevi/cli@*"
+      - "desktop-v*"
   workflow_dispatch:
     inputs:
       publish:
@@ -142,20 +129,18 @@ jobs:
             bun-turbo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-
             bun-turbo-${{ runner.os }}-${{ runner.arch }}-
 
-      # The desktop app has no version of its own: it ships whatever
-      # packages/cli/package.json says, so an app update always carries a
-      # matching embedded orchestrator (see the header comment). "tag" here
+      # The desktop manifest owns the release version. "tag" here
       # is the GitHub release tag this run cuts or attaches to, not a git
       # tag that has to already exist.
       - name: Read the version
         id: version
         run: |
-          version=$(jq -r .version packages/cli/package.json)
+          version=$(jq -r .version apps/desktop/package.json)
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=desktop-v$version" >> "$GITHUB_OUTPUT"
           echo "building desktop v$version"
 
-      # A push to main touching packages/cli/package.json is not always a
+      # A push to main touching apps/desktop/package.json is the release signal.
       # release (a plain dependency edit touches it too), so the published
       # feed, not the trigger, is the source of truth for "already shipped".
       # A manifest.json-style probe: the channel file is uploaded last (see
@@ -198,9 +183,7 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         run: bun install --frozen-lockfile
 
-      # The whole dependency graph: packages/cli/dist must exist before
-      # apps/desktop/scripts/stage-cli.ts can stage it, and packages/cli's
-      # own build needs apps/app/dist (the dashboard) to already exist too.
+      # Build the whole dependency graph before packaging Mission Control.
       - name: Build
         if: steps.check.outputs.skip != 'true'
         run: bun run build
@@ -247,7 +230,7 @@ jobs:
       # that isn't there) instead of taking the unsigned fallback the step
       # above chose. The Linux leg never runs that step, so `signed` is empty
       # there and every value below is empty too, which is what it wants.
-      - name: Stage the CLI and package
+      - name: Package Mission Control
         if: steps.check.outputs.skip != 'true'
         working-directory: apps/desktop
         env:
@@ -336,7 +319,7 @@ jobs:
           # --target pins the release tag to the commit this artifact was
           # built from. Without it the tag is cut at the default branch tip,
           # which is the wrong commit whenever this run came from an
-          # "@brevi/cli@*" tag push that main has already moved past.
+          # desktop tag push that main has already moved past.
           gh release view "$TAG" >/dev/null 2>&1 ||
             gh release create "$TAG" --target "$GITHUB_SHA" --title "brevi desktop v$VERSION" --generate-notes ||
             gh release view "$TAG" >/dev/null

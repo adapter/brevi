@@ -8,7 +8,7 @@ import type { WorkerCapabilities } from "./worker.js";
  * of node builtins and can be imported from the browser bundle.
  *
  * Two secrets exist, with deliberately different lifetimes. A pairing token is
- * minted by Mission Control, printed inside the `brevi worker` command a human
+ * minted by Mission Control and redeemed by the dedicated worker
  * copies to the new machine, and dies the moment it is redeemed or its short
  * expiry passes. What it buys is a durable per-worker credential, which is the
  * only thing the worker keeps on disk and the only thing that authenticates it
@@ -68,7 +68,7 @@ export interface PairingTokenResponse {
   /** The secret itself. Single-use, and dead at `expiresAt` if never redeemed. */
   token: string;
   expiresAt: string;
-  /** Ready to copy: `brevi worker --host <url> --token <token>`. */
+  /** Low-level enrollment command for the dedicated worker binary. */
   command: string;
   /** Host URL baked into the command, so the dashboard can explain a wrong guess. */
   host: string;
@@ -79,6 +79,21 @@ export interface PairingTokenResponse {
    * printed command will only ever work on this machine.
    */
   remote: boolean;
+}
+
+/** Connection details the desktop app needs to provision a Linux worker over SSH. */
+export interface WorkerProvisionRequest {
+  host: string;
+  port?: number;
+  user: string;
+  identityFile?: string;
+  name?: string;
+  concurrency?: number;
+}
+
+export interface WorkerProvisionResponse {
+  ok: true;
+  output: string;
 }
 
 /** Fleet snapshot: every enrolled worker, oldest enrollment first. */

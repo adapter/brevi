@@ -2,14 +2,13 @@
   "name": "brevi",
   "private": true,
   "scripts": {
-    "brevi": "node packages/cli/dist/index.js",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "check-types": "turbo run check-types",
     "changeset": "changeset",
-    "release": "turbo run build && bun scripts/stage-publish.ts"
+    "release": "bun run --filter=@brevi/desktop package"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",

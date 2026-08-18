@@ -197,7 +197,7 @@ export const configSchema = z.object({
       timeoutMinutes: z.number().int().min(1).default(240),
       /**
        * How many hours a finished (completed or failed) run's sandbox disk is
-       * kept for interactive resume via `brevi attach`. While retained the
+       * kept for interactive resume via the desktop terminal. While retained the
        * sandbox consumes only disk, no memory or CPU. 0 disables retention.
        */
       retentionHours: z.number().min(0).default(24),

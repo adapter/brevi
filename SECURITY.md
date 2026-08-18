@@ -16,7 +16,7 @@ Things we especially care about:
 
 - The hosted OAuth backend (`apps/api`, api.brevi.dev): token handling for
   the Linear and GitHub connect flows.
-- Credential handling in the CLI/orchestrator: everything is stored locally
+- Credential handling in Mission Control and the orchestrator: everything is stored locally
   in `~/.brevi/config.json` and must never leave the machine except to the
   provider it authenticates to.
 - Sandbox isolation (`packages/sandbox`): escapes from the bwrap sandbox into the host.

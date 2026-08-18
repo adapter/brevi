@@ -5,8 +5,9 @@ import { BrowserWindow, dialog, shell } from "electron";
 const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "assets");
 
 export interface MissionControlOptions {
-  /** Orchestrator http base url, e.g. http://localhost:4400. */
+  /** Private orchestrator base URL used by the local renderer. */
   baseUrl: string;
+  apiToken: string;
   /** Absolute path of the local status page (src/renderer/status.html, resolved by the caller). */
   statusPage: string;
   /** True for a launch the login item started, which belongs in the menu bar rather than on screen. */
@@ -77,7 +78,11 @@ export class MissionControl {
    */
   loadDashboard(path?: string): void {
     const window = this.#ensureWindow();
-    const url = `${this.#options.baseUrl}${path ?? "/"}`;
+    const query = new URLSearchParams({
+      apiBase: this.#options.baseUrl,
+      token: this.#options.apiToken,
+    });
+    const url = `brevi://app${path ?? "/"}?${query}`;
     window.loadURL(url).catch((err: unknown) => this.#reportLoadFailure(`the dashboard at ${url}`, err));
   }
 
@@ -115,9 +120,8 @@ export class MissionControl {
       // for the taskbar / window list.
       icon: join(ASSETS_DIR, "icon.png"),
       webPreferences: {
-        // No preload script and no privileged API on purpose: the window
-        // shows the ordinary dashboard the browser shows, so the desktop
-        // app adds no new attack surface beyond running Chromium at all.
+        // SSH credentials and provisioning stay in the main process. The
+        // renderer receives only a random per-launch API token.
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -152,7 +156,8 @@ export class MissionControl {
 
   #isOwnOrigin(url: string): boolean {
     try {
-      return new URL(url).origin === new URL(this.#options.baseUrl).origin;
+      const parsed = new URL(url);
+      return parsed.protocol === "brevi:" && parsed.host === "app";
     } catch {
       return false;
     }

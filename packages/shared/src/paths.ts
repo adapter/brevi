@@ -29,13 +29,9 @@ export const FLEET_PATH = join(BREVI_HOME, "fleet.json");
 export const WORKER_STATE_PATH = join(BREVI_HOME, "worker.json");
 /** Directory for log files, e.g. the orchestrator's tee target. */
 export const LOGS_DIR = join(BREVI_HOME, "logs");
-/** Persistent orchestrator log, tailed by `brevi doctor` as diagnosis evidence. */
+/** Persistent orchestrator log used as diagnosis evidence. */
 export const ORCHESTRATOR_LOG_PATH = join(LOGS_DIR, "orchestrator.log");
-/** Written by whichever process runs the server, so the CLI and the desktop app find each other. */
-export const SERVER_PID_PATH = join(BREVI_HOME, "server.pid");
 /** Fleet state the host keeps across restarts (see the orchestrator's LeaseStore). */
 export const FLEET_DIR = join(BREVI_HOME, "fleet");
 /** Outstanding run leases, reloaded on boot so a host restart does not lose in-flight runs. */
 export const LEASES_PATH = join(FLEET_DIR, "leases.json");
-
-

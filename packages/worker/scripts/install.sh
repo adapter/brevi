@@ -1,16 +1,16 @@
 #!/bin/sh
 #
 # Hosted installer: turns a stock Ubuntu/Debian server into a connected
-# `brevi worker`. Published at https://brevi.dev/install.sh.
+# `brevi-worker`. Published at https://brevi.dev/install.sh.
 #
-# Installs the `brevi` single-file executable, installs bubblewrap for the
+# Installs the `brevi-worker` single-file executable, installs bubblewrap for the
 # dedicated `brevi` system user, and runs the daemon as brevi-worker.service.
 #
 # Usage:
 #   curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- \
 #     --host https://your-host:4400 --token <pairing token>
 #
-# Idempotent: re-run the same command (or `sudo brevi worker update`) to upgrade the
+# Idempotent: re-run the same command from Mission Control to upgrade the
 # binary in place without losing enrollment or settings. A re-run restarts the
 # worker unit at the end, so the upgraded binary and settings are what is actually
 # running when it reports success. See --help for every option, --check to
@@ -25,6 +25,7 @@ set -eu
 
 HOST=""
 TOKEN=""
+TOKEN_FILE=""
 NAME=""
 CONCURRENCY=""
 VERSION=""
@@ -44,7 +45,7 @@ MAX_CONCURRENCY=16
 SERVICE_USER="brevi"
 SERVICE_GROUP="brevi"
 SERVICE_HOME="/var/lib/brevi"
-BIN_PATH="/usr/local/bin/brevi"
+BIN_PATH="/usr/local/bin/brevi-worker"
 LIB_DIR="/usr/local/lib/brevi"
 ETC_DIR="/etc/brevi"
 ENV_FILE="/etc/brevi/worker.env"
@@ -224,7 +225,7 @@ check_arch() {
       pass "architecture: $arch."
       ;;
     *)
-      fail "unsupported architecture '$arch'; brevi worker needs x86_64 or aarch64."
+      fail "unsupported architecture '$arch'; brevi-worker needs x86_64 or aarch64."
       ;;
   esac
 }
@@ -233,7 +234,7 @@ check_systemd() {
   if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     pass "systemd is the running init system."
   else
-    fail "systemd was not found (no systemctl on PATH, or /run/systemd/system is missing); this installer manages brevi worker as a systemd service. The daemon can still be run by hand with 'brevi worker --host <url>' if you manage it yourself."
+    fail "systemd was not found (no systemctl on PATH, or /run/systemd/system is missing); this installer manages brevi-worker as a systemd service."
   fi
 }
 
@@ -429,10 +430,10 @@ check_egress() {
     need_npm=1
   fi
   if [ "$need_npm" -eq 1 ]; then
-    if reachable "https://registry.npmjs.org/@brevi/cli/latest"; then
-      pass "npm registry is reachable."
+    if reachable "$IMAGES_URL/worker/latest/manifest.json"; then
+      pass "worker release manifest is reachable."
     else
-      fail "could not reach the npm registry (https://registry.npmjs.org); needed to resolve the @brevi/cli version and to install the agent CLIs (claude, codex)."
+      fail "could not reach the worker release manifest at $IMAGES_URL; needed to install brevi-worker."
     fi
   fi
 
@@ -631,17 +632,17 @@ resolve_version() {
     RESOLVED_VERSION="$VERSION"
     return 0
   fi
-  info "Resolving latest @brevi/cli version from npm"
-  json=$(curl -fsS --max-time 15 "https://registry.npmjs.org/@brevi/cli/latest") || die "could not resolve the latest @brevi/cli version from the npm registry; pass --version or --binary."
-  RESOLVED_VERSION=$(json_field_string "$json" version)
-  [ -n "$RESOLVED_VERSION" ] || die "could not parse a version from the npm registry response; pass --version or --binary explicitly."
-  info "Latest @brevi/cli version: $RESOLVED_VERSION"
+  info "Resolving the latest brevi-worker release"
+  json=$(curl -fsS --max-time 15 "$IMAGES_URL/worker/latest/manifest.json") || die "could not resolve the latest worker release; pass --version or --binary."
+  RESOLVED_VERSION=$(json_field_string "$json" workerVersion)
+  [ -n "$RESOLVED_VERSION" ] || die "could not parse a worker version from the release manifest; pass --version or --binary explicitly."
+  info "Latest brevi-worker version: $RESOLVED_VERSION"
 }
 
 # Points SERVICE_HOME at the account's real home when the account already exists. The
 # default here is only what this installer would create; an account that predates it can
-# live anywhere, and the daemon reads its ~/.brevi from passwd (as does `brevi worker
-# update`, via getent), so anything this script does under an assumed /var/lib/brevi
+# live anywhere, and the daemon reads its ~/.brevi from passwd, so anything
+# this script does under an assumed /var/lib/brevi
 # would be looking at a directory nothing else uses.
 resolve_service_home() {
   existing_home=$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6)
@@ -719,11 +720,11 @@ install_binary() {
     # of either: a mispublished directory, or a cache or proxy answering with a stale
     # object, hands back an entirely self-consistent manifest for some other build, and
     # the digests below would then authenticate that other build into /usr/local/bin.
-    # Mirrors the same check in packages/cli/src/lib/worker-binary.ts.
-    manifest_version=$(json_field_string "$manifest" cliVersion)
+    # The manifest identity is checked before any artifact is installed.
+    manifest_version=$(json_field_string "$manifest" workerVersion)
     manifest_arch=$(json_field_string "$manifest" arch)
     [ "$manifest_version" = "$RESOLVED_VERSION" ] ||
-      die "$manifest_url is for @brevi/cli '$manifest_version', expected '$RESOLVED_VERSION'"
+      die "$manifest_url is for brevi-worker '$manifest_version', expected '$RESOLVED_VERSION'"
     [ "$manifest_arch" = "$BREVI_ARCH" ] ||
       die "$manifest_url is for '$manifest_arch', expected '$BREVI_ARCH'"
 
@@ -820,8 +821,7 @@ set -eu
 set -- --host "$BREVI_HOST"
 [ -z "${BREVI_WORKER_NAME:-}" ] || set -- "$@" --name "$BREVI_WORKER_NAME"
 [ -z "${BREVI_CONCURRENCY:-}" ] || set -- "$@" --concurrency "$BREVI_CONCURRENCY"
-[ -z "${BREVI_TOKEN:-}" ] || set -- "$@" --token "$BREVI_TOKEN"
-exec /usr/local/bin/brevi worker "$@"
+exec /usr/local/bin/brevi-worker "$@"
 EOF
   chmod 0755 "$LIB_DIR/worker-start.sh"
 }
@@ -1130,14 +1130,14 @@ print_summary() {
   step 8 "Done"
   cat <<EOF
 
-brevi worker is installed and connected to $HOST.
+brevi-worker is installed and connected to $HOST.
 
 Service commands:
   systemctl status brevi-worker
   journalctl -u brevi-worker -f
 
 Upgrade:
-  sudo brevi worker update
+  Re-run setup from Mission Control to update this worker.
   (or re-run the installer: curl -fsSL $BASE_URL/install.sh | sudo sh -s -- --host $HOST)
 
 Uninstall:
@@ -1191,21 +1191,22 @@ usage() {
   cat <<EOF
 Usage: install.sh [options]
 
-Turns a stock Ubuntu/Debian server into a connected brevi worker (bwrap sandboxes).
+Turns a stock Ubuntu/Debian server into a connected brevi-worker (bwrap sandboxes).
 
   curl -fsSL https://brevi.dev/install.sh | sudo sh -s -- --host https://your-host:4400 --token <pairing token>
 
 Pairing:
   --host <url>          brevi host to connect to (prompted for if omitted)
   --token <token>        pairing token (prompted for if omitted)
+  --token-file <path>    read and remove the pairing token from this file
 
 Worker settings:
   --name <name>          name shown on the host's dashboard (default: this machine's hostname)
   --concurrency <n>      dispatched runs to execute at once (1 to $MAX_CONCURRENCY)
 
 Install source:
-  --version <v>           exact @brevi/cli version to install (default: latest on npm)
-  --binary <path>         install this local brevi executable instead of downloading one
+  --version <v>           exact brevi-worker version to install (default: latest release)
+  --binary <path>         install this local worker executable instead of downloading one
   --base-url <url>        used in printed install/uninstall commands (default https://brevi.dev)
   --images-url <url>      where the worker binary is published (default https://images.brevi.dev)
 
@@ -1233,6 +1234,14 @@ parse_args() {
       --token)
         [ $# -ge 2 ] || die "--token requires a value"
         TOKEN="$2"
+        shift 2
+        ;;
+      --token-file)
+        [ $# -ge 2 ] || die "--token-file requires a value"
+        TOKEN_FILE="$2"
+        [ -f "$TOKEN_FILE" ] || die "--token-file does not exist: $TOKEN_FILE"
+        TOKEN=$(cat "$TOKEN_FILE")
+        rm -f "$TOKEN_FILE"
         shift 2
         ;;
       --name)

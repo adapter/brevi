@@ -140,9 +140,8 @@ export class DesktopUpdater {
     // disk already to know the install did not take (see reconcile).
     writeUpdateState(markInstallStarted(readUpdateState(), this.#options.currentVersion, version));
 
-    // The app is about to be replaced and relaunched. The orchestrator child
-    // this process spawned has to be stopped before the new version starts
-    // its own, or the two fight over ~/.brevi/server.pid and the port. Never
+    // The app is about to be replaced and relaunched. Stop its in-process
+    // orchestrator before the new version takes the loopback port. Never
     // let a teardown failure stop the install: an orchestrator that won't
     // shut down cleanly shouldn't trap the app on the old version forever.
     await this.#options.beforeInstall().catch((error: unknown) => {

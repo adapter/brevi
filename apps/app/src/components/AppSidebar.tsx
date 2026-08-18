@@ -231,7 +231,6 @@ export function AppSidebar({
  * queueReason strip only appears once a run exists to carry it.
  */
 function QueueOnlyNotice({
-  reason,
   onOpenWorkers,
 }: {
   reason: "bwrap-unavailable" | "unsupported-platform";
@@ -242,9 +241,7 @@ function QueueOnlyNotice({
       <p className="text-[12px] leading-relaxed text-haze-400">
         This machine can&apos;t run agents itself. Queued runs will wait for a Linux worker with
         bubblewrap.{" "}
-        {reason === "bwrap-unavailable"
-          ? "Install bubblewrap (brevi setup) or enroll another machine from the "
-          : "Enroll another machine from the "}
+        Set up a Linux machine over SSH from the{" "}
         <Button
           type="button"
           variant="link"
