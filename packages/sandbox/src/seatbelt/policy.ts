@@ -12,7 +12,12 @@ import { BREVI_HOME } from "@brevi/shared";
  * exfiltration-shaped prompt would go for.
  */
 
-/** Home-relative trees an agent must never read: keys, tokens, cookies. */
+/**
+ * Home-relative trees an agent must never read: keys, tokens, cookies. A
+ * deny list on top of a broad read-allow is only as good as its coverage, so
+ * this errs toward walling off whole credential/secret homes rather than
+ * individual files.
+ */
 const SENSITIVE_HOME_SUBPATHS = [
   // The operator's own agent CLI logins; runs get per-run copies under the
   // sandbox root, never these.
@@ -20,20 +25,48 @@ const SENSITIVE_HOME_SUBPATHS = [
   ".claude.json",
   ".codex",
   ".grok",
+  // SSH, GPG, cloud, and package-registry credentials.
   ".ssh",
   ".aws",
+  ".azure",
   ".gnupg",
   ".kube",
+  ".oci",
   ".netrc",
+  ".vault-token",
   ".git-credentials",
   ".config/git",
   ".npmrc",
+  ".pypirc",
+  ".cargo/credentials.toml",
+  ".gem/credentials",
+  ".terraform.d",
   ".config/gh",
   ".config/gcloud",
+  ".config/op",
+  ".config/doctl",
+  ".config/configstore",
   ".docker",
+  ".wrangler",
+  // Shell history routinely contains pasted secrets and tokens.
+  ".zsh_history",
+  ".bash_history",
+  ".sh_history",
+  ".local/share/fish",
+  // macOS credential and personal data stores. Modern Safari cookies live
+  // under Containers, not the legacy Library/Cookies path.
   "Library/Keychains",
   "Library/Cookies",
+  "Library/HTTPStorages",
   "Library/Application Support/com.apple.TCC",
+  "Library/Application Support/Firefox",
+  "Library/Application Support/Google/Chrome",
+  "Library/Application Support/Chromium",
+  "Library/Application Support/BraveSoftware",
+  "Library/Containers/com.apple.Safari",
+  "Library/Containers/com.apple.mail",
+  "Library/Mail",
+  "Library/Messages",
 ];
 
 /** SBPL string literal: double quotes with backslash escaping. */
@@ -94,11 +127,20 @@ export function seatbeltPolicy(options: SeatbeltPolicyOptions): string {
 (allow file-ioctl (literal "/dev/dtracehelper") (regex #"^/dev/ttys[0-9]*$"))
 (allow pseudo-tty)
 
-; System plumbing common toolchains touch.
+; System plumbing common toolchains touch. mach-lookup is broad, so the
+; services that read the operator's session (pasteboard, TCC, keychain
+; agent, LaunchServices registration) are denied back out; later rules win.
 (allow sysctl-read)
 (allow mach-lookup)
+(deny mach-lookup
+  (global-name "com.apple.pboard")
+  (global-name "com.apple.pasteboard.1")
+  (global-name "com.apple.tccd")
+  (global-name "com.apple.tccd.system")
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.security.agent")
+  (global-name "com.apple.coreservices.launchservicesd"))
 (allow ipc-posix*)
-(allow iokit-open)
 
 ; Network: outbound open (agents call their APIs); inbound binds allowed on
 ; loopback only, for dev servers the run starts itself.

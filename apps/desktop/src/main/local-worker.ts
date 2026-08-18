@@ -40,14 +40,25 @@ export function ensureUsablePath(): Promise<void> {
   return pathEnsured;
 }
 
+const PATH_MARKER = "__BREVI_PATH__";
+
 function loginShellPath(): Promise<string | undefined> {
   const shell = process.env.SHELL || "/bin/zsh";
   return new Promise((resolve) => {
     execFile(
       shell,
-      ["-l", "-c", 'printf "%s" "$PATH"'],
+      ["-l", "-c", `printf "%s%s" "${PATH_MARKER}" "$PATH"`],
       { timeout: 8_000 },
-      (error, stdout) => resolve(error ? undefined : stdout.trim() || undefined),
+      (error, stdout) => {
+        // An rc file can print banners before our marker; take only what
+        // follows the last marker and up to the next newline, so shell noise
+        // never contaminates PATH.
+        if (error) return resolve(undefined);
+        const at = stdout.lastIndexOf(PATH_MARKER);
+        if (at === -1) return resolve(undefined);
+        const value = stdout.slice(at + PATH_MARKER.length).split("\n", 1)[0]?.trim();
+        resolve(value || undefined);
+      },
     );
   });
 }
@@ -111,7 +122,6 @@ export function startLocalWorker(
         enrollment,
         name: "This machine",
         signal: abort.signal,
-        supervisorPid: process.pid,
       });
       if (!stopping) log("daemon stopped on its own");
     } catch (error) {

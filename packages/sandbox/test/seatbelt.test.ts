@@ -20,6 +20,15 @@ describe("seatbeltPolicy", () => {
     expect(policy).toContain('/Users/op/.ssh');
     expect(policy).toContain('/Users/op/.claude');
     expect(policy).toContain('/Users/op/.codex');
+    expect(policy).toContain('/Users/op/.azure');
+    expect(policy).toContain('/Users/op/.vault-token');
+    expect(policy).toContain('/Users/op/.zsh_history');
+    expect(policy).toContain('/Users/op/Library/Application Support/Firefox');
+    expect(policy).toContain('/Users/op/Library/Application Support/Google/Chrome');
+    expect(policy).toContain('/Users/op/Library/Containers/com.apple.Safari');
+    // The pasteboard service is denied back out of the broad mach-lookup allow.
+    expect(policy).toContain('com.apple.pboard');
+    expect(policy.indexOf('(allow mach-lookup)')).toBeLessThan(policy.indexOf('(deny mach-lookup'));
     expect(policy).toContain('/Users/op/Library/Keychains');
     // The deny rules land after the broad read allow, so they win in SBPL.
     expect(policy.indexOf("(allow file-read*)")).toBeLessThan(policy.indexOf('(deny file-read* (subpath'));

@@ -20,7 +20,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
  * atomically, so the final open itself is the check.
  */
 
-const { O_RDONLY, O_WRONLY, O_CREAT, O_TRUNC, O_DIRECTORY, O_NOFOLLOW } = constants;
+const { O_RDONLY, O_WRONLY, O_CREAT, O_TRUNC, O_DIRECTORY, O_NOFOLLOW, O_NONBLOCK } = constants;
 
 const DARWIN = process.platform === "darwin";
 /** macOS-only open(2) flag: fail with ELOOP if any path component is a symlink. */
@@ -74,7 +74,10 @@ async function copyOut(rootReal: string, parts: string[], destDir: string): Prom
       await rm(childDest, { recursive: true, force: true });
       await symlink(target, childDest);
     } else if (entry.isFile()) {
-      const src = await open(childSrc, O_RDONLY | O_NOFOLLOW_ANY);
+      // O_NONBLOCK so a regular file swapped for a fifo between readdir and
+      // open cannot block this host-side read waiting for a writer that never
+      // comes; the fstat below then rejects the non-regular file.
+      const src = await open(childSrc, O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK);
       try {
         const stats = await src.stat();
         if (!stats.isFile()) continue;
@@ -249,10 +252,18 @@ export async function writeFileWithin(
     await darwinDescendDir(rootDir, parts.slice(0, -1), true);
     const real = await realpath(rootDir);
     const at = join(real, ...parts);
-    // lstat never follows the final component, and darwinDescendDir just
-    // refused symlinks above it; a racing swap is caught by O_NOFOLLOW_ANY.
-    const existing = await lstatType(at);
-    if (existing === "other") await rm(at, { recursive: true, force: true });
+    const existing = await lstat(at).catch(() => undefined);
+    // A directory here is a conflict, never a target: a recursive delete at a
+    // pathname whose ancestor a racing sandbox process could have swapped is
+    // exactly the escape this module exists to prevent, and no write
+    // legitimately replaces a directory with a file.
+    if (existing?.isDirectory()) {
+      throw new Error(`refusing to write ${target}: a directory exists there`);
+    }
+    // A non-directory (regular file or symlink) is removed with a single
+    // non-recursive unlink, its parent chain re-verified through
+    // O_NOFOLLOW_ANY immediately before the removal.
+    if (existing) await unlinkVerified(real, parts);
     const handle = await open(at, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, mode);
     try {
       await handle.writeFile(contents, "utf8");

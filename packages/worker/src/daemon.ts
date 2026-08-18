@@ -695,13 +695,17 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     }
   });
 
-  process.on("SIGINT", onSigint);
-  process.on("SIGTERM", onSigterm);
   if (options.signal) {
+    // An in-process supervisor stops the daemon through this signal, and it
+    // owns the real SIGINT/SIGTERM (e.g. Electron main), so this daemon must
+    // not install process-wide handlers that would fight it.
     if (options.signal.aborted) shutdown();
     else options.signal.addEventListener("abort", () => {
       if (!shuttingDown) shutdown();
     }, { once: true });
+  } else {
+    process.on("SIGINT", onSigint);
+    process.on("SIGTERM", onSigterm);
   }
 
   console.log(
