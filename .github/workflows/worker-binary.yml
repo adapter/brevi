@@ -188,7 +188,7 @@ jobs:
           # resolve as latest. Bump it deliberately, in step with apps/api.
           # bunx, not npx: npm trips over the repo's bun packageManager
           # (EBADDEVENGINES) and never puts the wrangler bin on PATH.
-          wrangler="bunx wrangler@4.118.0"
+          wrangler="bunx wrangler@4.123.0"
 
           # Binary first, manifest last: the manifest's presence at this path
           # is what clients treat as "this worker version/arch is published"
