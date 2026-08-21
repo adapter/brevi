@@ -1,15 +1,19 @@
 # Deploys apps/docs (brevi.dev) to production on release, not on every push
 # to main. Docs describing a new feature merge alongside the feature, so a
 # continuous deploy would publish them before users can install the release.
-# The release signal is the changesets release PR merge bumping
-# apps/desktop/package.json, the same path worker-binary.yml and
-# desktop-release.yml key their publishes off. A dependency edit touching
-# that file also triggers this; the deploy is idempotent, so that is fine.
-# CHANGELOG-only pushes do not trigger it. PR preview deploys of the docs
-# stay in ci.yml.
+#
+# The trigger is the "Desktop release" workflow completing, and the job
+# below gates on it having succeeded on a push (the release-PR merge or a
+# desktop-v* tag): deploying off the same push that starts the release
+# would race it, publishing docs for installers that do not exist yet, and
+# would leave them live even if the release failed. Runs for failed or
+# dry-run (workflow_dispatch) releases are skipped. PR preview deploys of
+# the docs stay in ci.yml.
 #
 # workflow_dispatch is the escape hatch for out-of-band docs fixes (typos,
-# notices) that should go live without waiting for a release.
+# notices) that should go live without waiting for a release, and for a
+# release published via a manual desktop-release dispatch (which the push
+# gate above deliberately ignores).
 #
 # Required repository secrets (same names ci.yml documents):
 #   CLOUDFLARE_API_TOKEN:  API token with Workers Scripts:Edit (deploys)
@@ -21,10 +25,9 @@
 name: Docs deploy
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - apps/desktop/package.json
+  workflow_run:
+    workflows: [Desktop release]
+    types: [completed]
   workflow_dispatch:
 
 # Default to no permissions; the job declares exactly what it needs.
@@ -32,12 +35,19 @@ permissions: {}
 
 # One docs deploy at a time; a newer run supersedes an in-flight one.
 concurrency:
-  group: docs-deploy-${{ github.ref }}
+  group: docs-deploy
   cancel-in-progress: true
 
 jobs:
   deploy-production:
     name: Deploy production (docs)
+    # workflow_run fires for every completion; only a successful publishing
+    # release (a push event: release-PR merge to main or a desktop-v* tag)
+    # deploys docs. Manual dispatch skips the gate entirely.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read # checkout

@@ -1,6 +1,6 @@
 # @brevi/docs
 
-The documentation site at brevi.dev, built with Astro + Starlight, deployed to Cloudflare Workers by CI. Production deploys are release-coupled: docs-deploy.yml fires when a release bumps `apps/desktop/package.json` (with workflow_dispatch as the escape hatch for out-of-band fixes), not on every push to main. PR preview deploys stay in ci.yml.
+The documentation site at brevi.dev, built with Astro + Starlight, deployed to Cloudflare Workers by CI. Production deploys are release-coupled: docs-deploy.yml fires after the Desktop release workflow publishes successfully (with workflow_dispatch as the escape hatch for out-of-band fixes), not on every push to main. PR preview deploys stay in ci.yml.
 
 ## Layout
 
