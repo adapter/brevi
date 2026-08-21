@@ -1,5 +1,7 @@
-# CI: checks on every push/PR, then Cloudflare deploys. PRs go to the
-# preview environment, main goes to production.
+# CI: checks on every push/PR, then Cloudflare deploys. PRs get preview
+# versions of docs + api; main deploys api to production. Docs production
+# deploys are release-coupled and live in docs-deploy.yml, so docs for a
+# feature go live when the feature ships, not when its PR merges.
 #
 # Required repository secrets:
 #   CLOUDFLARE_API_TOKEN:  API token with Workers Scripts:Edit (deploys)
@@ -286,7 +288,9 @@ jobs:
           fi
 
   deploy-production:
-    name: Deploy production (docs + api)
+    name: Deploy production (api)
+    # Docs are not deployed here: their production deploy is release-coupled
+    # (see docs-deploy.yml), so main can carry docs for unreleased features.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: checks
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -294,7 +298,7 @@ jobs:
       contents: read # checkout
     environment:
       name: production
-      url: https://brevi.dev
+      url: https://api.brevi.dev
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -323,13 +327,6 @@ jobs:
             bun-turbo-${{ runner.os }}-
 
       - run: bun install --frozen-lockfile
-      - run: bun run build --filter=@brevi/docs
-        env:
-          PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
-
-      - name: Deploy docs to production
-        working-directory: apps/docs
-        run: bun run deploy
 
       - name: Deploy api to production
         working-directory: apps/api
