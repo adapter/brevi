@@ -215,6 +215,8 @@ async function copyIntoAt(dir: FileHandle, srcDir: string): Promise<void> {
           dest = await open(destPath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, stats.mode & 0o777);
         }
         try {
+          // open()'s mode only applies at creation; fchmod covers overwrites.
+          await dest.chmod(stats.mode & 0o777);
           await pipeline(src.createReadStream(), dest.createWriteStream());
         } finally {
           await dest.close();
@@ -296,6 +298,8 @@ async function copyInto(rootReal: string, parts: string[], srcDir: string): Prom
           dest = await open(destPath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, stats.mode & 0o777);
         }
         try {
+          // open()'s mode only applies at creation; fchmod covers overwrites.
+          await dest.chmod(stats.mode & 0o777);
           await pipeline(src.createReadStream(), dest.createWriteStream());
         } finally {
           await dest.close();
