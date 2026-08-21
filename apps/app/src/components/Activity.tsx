@@ -23,7 +23,7 @@ import { Check, ChevronRight, Doc, Pin, Terminal as TerminalIcon } from "./Icons
  * The run's activity feed: what the agent said, thought, edited, and ran,
  * drawn the way a coding agent's own desktop app draws it. File edits render
  * as real diffs; commands carry their output behind a disclosure; everything
- * else is one quiet row. The raw stream stays available in the Raw tab.
+ * else is one quiet row.
  */
 export function Activity({
   runId,

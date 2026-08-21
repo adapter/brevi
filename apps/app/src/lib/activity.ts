@@ -568,8 +568,8 @@ function fromAgentEvent(feed: Feed, ts: string, event: unknown): void {
 
 /**
  * The whole feed. Consecutive thinking events coalesce into one thought row,
- * exactly like the raw console does, so a spell that streams as several
- * start/stop pairs reads as a single duration.
+ * so a spell that streams as several start/stop pairs reads as a single
+ * duration.
  */
 export function toActivity(events: RunEvent[]): ActivityItem[] {
   const feed = new Feed();
@@ -613,7 +613,7 @@ export function toActivity(events: RunEvent[]): ActivityItem[] {
           type: event.artifact.type,
         });
         break;
-      // Raw stdout/stderr/system lines stay in the Raw tab; costs surface in
+      // Raw stdout/stderr/system lines have no feed row; costs surface in
       // the run's cost badge.
       default:
         break;
