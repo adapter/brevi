@@ -1,0 +1,60 @@
+# Opens and keeps up to date the "Release: version packages" PR from the
+# pending changesets on main. Merging that PR is how a release happens: it
+# runs `changeset version` (bumping apps/desktop/package.json and
+# packages/worker/package.json together, they are a fixed group in
+# .changeset/config.json), and those two files changing on main is exactly
+# what triggers desktop-release.yml and worker-binary.yml to build and
+# publish. Nothing is published to npm, so there is no publish script here.
+#
+# `bun run version-packages` (root package.json) wraps `changeset version`
+# with `bun install --no-frozen-lockfile` so bun.lock picks up the new
+# workspace versions inside the release PR instead of drifting.
+#
+# Known caveat: the release PR is created with the default GITHUB_TOKEN, and
+# GitHub never triggers workflows (so no CI) for events caused by that token.
+# Close and reopen the release PR to run CI on it, or switch the
+# `github-token` input to a PAT / GitHub App token later.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+# Default to no permissions; the job declares exactly what it needs.
+permissions: {}
+
+# One release-PR update at a time, in order: two runs racing to force-push
+# the changeset-release/main branch would clobber each other.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-pr:
+    name: Open or update the release PR
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: write # push the changeset-release/main branch
+      pull-requests: write # open/update the release PR
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      # No git tags and no GitHub releases from here: desktop-release.yml
+      # already owns the desktop-v* tag and the GitHub release, and worker
+      # binaries are versioned by R2 path, so tagging here would collide.
+      - name: Open or update the release PR
+        uses: changesets/action@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
+        with:
+          version-script: bun run version-packages
+          pr-title: "Release: version packages"
+          commit-message: "Release: version packages"
+          create-github-releases: false
+          push-git-tags: false

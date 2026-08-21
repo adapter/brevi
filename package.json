@@ -8,6 +8,7 @@
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "check-types": "turbo run check-types",
     "changeset": "changeset",
+    "version-packages": "changeset version && bun install --no-frozen-lockfile",
     "release": "bun run --filter=@brevi/desktop package"
   },
   "devDependencies": {

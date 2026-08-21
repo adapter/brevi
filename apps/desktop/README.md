@@ -10,4 +10,4 @@ bun run package
 
 Remote Linux workers are provisioned from the Workers page over system SSH. Pairing tokens remain in the main process and are transferred through stdin to a short-lived remote file; they never enter renderer state or process arguments.
 
-The version in this package is the authoritative desktop release version.
+The version in this package is the authoritative desktop release version. It is bumped by merging the changesets "Release: version packages" PR, not by hand.

@@ -5,6 +5,17 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
+  "fixed": [
+    [
+      "@brevi/desktop",
+      "@brevi/worker",
+      "@brevi/app",
+      "@brevi/shared",
+      "@brevi/orchestrator",
+      "@brevi/sandbox",
+      "@brevi/integrations"
+    ]
+  ],
   "ignore": [],
-  "privatePackages": false
+  "privatePackages": { "version": true, "tag": false }
 }

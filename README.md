@@ -26,7 +26,7 @@ Workspaces:
 - `apps/api`: hosted OAuth helper at `api.brevi.dev`.
 - `apps/docs`: documentation at `brevi.dev`.
 
-Mission Control releases are versioned by `apps/desktop/package.json`. Worker artifacts are versioned by `packages/worker/package.json` and published with the desktop release; nothing is published to npm.
+Mission Control releases are versioned by `apps/desktop/package.json`. Worker artifacts are versioned by `packages/worker/package.json` and published with the desktop release; nothing is published to npm. Versions are cut by changesets: PRs land changesets on main, the Release workflow collects them into a "Release: version packages" PR, and merging that PR bumps the versions, which triggers the publish workflows.
 
 ## License
 
