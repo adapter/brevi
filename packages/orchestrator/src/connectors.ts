@@ -27,15 +27,16 @@ import {
 } from "@brevi/shared";
 
 /**
- * The narrow slice of the Orchestrator a connect flow needs: the live config
- * to read and mutate, one persist-and-emit callback for credential writes,
- * and somewhere to stash the in-flight OAuth/device session for the poll and
- * callback endpoints to finish later.
+ * The narrow slice of the Orchestrator a connect flow needs: an accessor for
+ * the current config snapshot, one persist-and-emit callback for credential
+ * writes, and somewhere to stash the in-flight OAuth/device session for the
+ * poll and callback endpoints to finish later.
  */
 export interface ConnectorHost {
-  readonly config: BreviConfig;
-  /** Persist a credential mutation and hot-apply it (emits the config event). */
-  saveCredential(set: () => void): Promise<void>;
+  /** The current (immutable) config snapshot; re-read after saveCredential to see the change. */
+  config(): BreviConfig;
+  /** Persist a credential mutation, applied to a snapshot draft, and hot-apply it (emits the config event). */
+  saveCredential(set: (draft: BreviConfig) => void): Promise<void>;
   setGithubDevice(session: GithubDeviceSession): void;
   setLinearOauth(session: LinearOauthSession): void;
 }
@@ -117,22 +118,22 @@ async function connectGithub(host: ConnectorHost): Promise<ConnectResponse> {
   if (discovered) {
     const result = await validateGithubToken(discovered.value);
     if (result.ok) {
-      await host.saveCredential(() => {
-        host.config.github.token = discovered.value;
+      await host.saveCredential((draft) => {
+        draft.github.token = discovered.value;
       });
       return {
         status: "connected",
         provider,
         detail: `${result.detail} (via ${discovered.source})`,
-        config: redactConfig(host.config),
+        config: redactConfig(host.config()),
       };
     }
   }
-  const clientId = githubClientId(host.config);
+  const clientId = githubClientId(host.config());
   const deviceSource = clientId
     ? { clientId }
-    : (await hostedApiReachable(host.config.connect.apiBase))
-      ? { apiBase: host.config.connect.apiBase }
+    : (await hostedApiReachable(host.config().connect.apiBase))
+      ? { apiBase: host.config().connect.apiBase }
       : null;
   if (deviceSource) {
     const session = await startGithubDeviceFlow(deviceSource);
@@ -157,20 +158,20 @@ async function connectGithub(host: ConnectorHost): Promise<ConnectResponse> {
 /** Linear: always an OAuth redirect (personal app or hosted helper), never discovery. */
 async function connectLinear(host: ConnectorHost, serverUrl: string): Promise<ConnectResponse> {
   const provider = "linear" as const;
-  const app = linearOauthApp(host.config);
+  const app = linearOauthApp(host.config());
   if (app) {
     const { session, url } = startLinearOauth({ app, serverUrl });
     host.setLinearOauth(session);
     return { status: "redirect", provider, url };
   }
-  if (await hostedApiReachable(host.config.connect.apiBase)) {
+  if (await hostedApiReachable(host.config().connect.apiBase)) {
     const { session, url } = startLinearOauth({
-      apiBase: host.config.connect.apiBase,
+      apiBase: host.config().connect.apiBase,
       // From the URL the caller bound, not config.server.port: the port
       // is editable from the dashboard and only takes effect on restart,
       // so the config can name a port nothing is listening on. The
       // hosted backend redirects the callback to whatever it is told.
-      port: Number(new URL(serverUrl).port) || host.config.server.port,
+      port: Number(new URL(serverUrl).port) || host.config().server.port,
     });
     host.setLinearOauth(session);
     return { status: "redirect", provider, url };
@@ -201,11 +202,11 @@ async function connectAgent(
       reason: `Found a credential from ${found.source}, but it failed: ${result.detail}`,
     };
   }
-  await host.saveCredential(() => connector.apply(host.config, found));
+  await host.saveCredential((draft) => connector.apply(draft, found));
   return {
     status: "connected",
     provider,
     detail: `${result.detail} (from ${found.source})`,
-    config: redactConfig(host.config),
+    config: redactConfig(host.config()),
   };
 }

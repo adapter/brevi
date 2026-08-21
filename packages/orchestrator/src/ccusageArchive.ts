@@ -1,7 +1,4 @@
-import { randomBytes } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-import { CCUSAGE_DIR, isSafePathSegment, resolveWithin } from "@brevi/shared";
+import { atomicWriteFile, CCUSAGE_DIR, isSafePathSegment, resolveWithin, WriteQueue } from "@brevi/shared";
 
 /**
  * Host-side usage accounting archive: minimized Claude session snapshots
@@ -27,8 +24,8 @@ import { CCUSAGE_DIR, isSafePathSegment, resolveWithin } from "@brevi/shared";
  */
 export class CcusageArchive {
   readonly #dir: string;
-  /** All writes chain here so two snapshots for one session can never interleave their temp/rename pairs. */
-  #io: Promise<void> = Promise.resolve();
+  /** All writes chain here so two snapshots for one session can never interleave their temp/rename pairs. Unlabeled: the caller owns error reporting. */
+  #io = new WriteQueue();
 
   constructor(dir: string = CCUSAGE_DIR) {
     this.#dir = dir;
@@ -74,10 +71,9 @@ export class CcusageArchive {
 
   /**
    * Atomically replace one session's snapshot, or one subagent's snapshot
-   * when `subagentId` is given: written to a sibling temp file and renamed
-   * into place (same idiom as config.ts). Replacement, never append, is
-   * what keeps replayed frames and re-exported grown sessions or subagent
-   * transcripts from double-counting usage. Throws on an unsafe path or a
+   * when `subagentId` is given (see atomicWriteFile). Replacement, never
+   * append, is what keeps replayed frames and re-exported grown sessions or
+   * subagent transcripts from double-counting usage. Throws on an unsafe path or a
    * filesystem failure; the caller decides whether that drops the frame or
    * stalls its lease's watermark for a retry.
    */
@@ -95,18 +91,6 @@ export class CcusageArchive {
           (subagentId === undefined ? "" : `/subagents/${JSON.stringify(subagentId)}`),
       );
     }
-    const next = this.#io.then(async () => {
-      await mkdir(dirname(path), { recursive: true });
-      const temp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-      try {
-        await writeFile(temp, jsonl, "utf8");
-        await rename(temp, path);
-      } catch (error) {
-        await rm(temp, { force: true }).catch(() => undefined);
-        throw error;
-      }
-    });
-    this.#io = next.catch(() => undefined);
-    return next;
+    return this.#io.enqueue(() => atomicWriteFile(path, jsonl));
   }
 }

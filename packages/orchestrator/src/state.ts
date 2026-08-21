@@ -5,6 +5,7 @@ import {
   isSafePathSegment,
   RUNS_DIR,
   summarizeCosts,
+  WriteQueue,
   type ArtifactRef,
   type CostEntry,
   type Run,
@@ -51,7 +52,7 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
   readonly runsDir: string;
   #runs = new Map<string, Run>();
   /** Serializes all disk writes so snapshots and event lines never interleave. */
-  #io: Promise<void> = Promise.resolve();
+  #io = new WriteQueue("run store");
 
   constructor(runsDir: string = RUNS_DIR) {
     super();
@@ -173,10 +174,11 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
     const line = `${JSON.stringify(event)}\n`;
     const dir = this.#runDir(event.runId);
     const file = join(dir, "events.jsonl");
-    this.#enqueue(async () => {
+    // The queue's own error handling logs a failed write; nothing to await here.
+    void this.#io.enqueue(async () => {
       await mkdir(dir, { recursive: true });
       await appendFile(file, line);
-    });
+    }).catch(() => undefined);
     this.emit("run-event", event);
   }
 
@@ -273,24 +275,15 @@ export class RunStore extends EventEmitter<RunStoreEvents> {
 
   /** Wait for all queued disk writes to land. */
   async flush(): Promise<void> {
-    await this.#io;
+    await this.#io.flush();
   }
 
   #persist(run: Run): Promise<void> {
     const dir = this.#runDir(run.id);
     const body = `${JSON.stringify(run, null, 2)}\n`;
-    return this.#enqueue(async () => {
+    return this.#io.enqueue(async () => {
       await mkdir(dir, { recursive: true });
       await writeFile(join(dir, "run.json"), body);
     });
-  }
-
-  #enqueue(task: () => Promise<void>): Promise<void> {
-    const next = this.#io.then(task, task);
-    // Keep the chain alive even when a write fails; surface it on stderr.
-    this.#io = next.catch((error: unknown) => {
-      console.error(`[brevi] run store write failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
-    return next;
   }
 }

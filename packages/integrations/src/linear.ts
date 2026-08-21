@@ -54,23 +54,27 @@ export class LinearService {
   #clientInstance?: LinearClient;
   /** apiKey the current #clientInstance was built from, to detect a token refresh. */
   #clientKey?: string;
-  #config: BreviConfig;
+  #config: () => BreviConfig;
   #auth?: LinearAuthHooks;
 
-  constructor(config: BreviConfig, auth?: LinearAuthHooks) {
-    this.#config = config;
+  /**
+   * `config` may be the orchestrator's snapshot accessor (so a token refresh
+   * swapping the snapshot is picked up on the next call) or a plain config
+   * for one-shot use, e.g. a worker's per-run config.
+   */
+  constructor(config: BreviConfig | (() => BreviConfig), auth?: LinearAuthHooks) {
+    this.#config = typeof config === "function" ? config : () => config;
     this.#auth = auth;
   }
 
   /**
    * Rebuilds the client whenever config.linear.apiKey has moved on from what
-   * it was built with. config is shared by reference and mutated in place
-   * when scheduler.ts refreshes an OAuth token, so a run already in flight
-   * must pick up the fresh token to post its final comment rather than fail
-   * against the stale one.
+   * it was built with: when scheduler.ts refreshes an OAuth token, a run
+   * already in flight must pick up the fresh token to post its final comment
+   * rather than fail against the stale one.
    */
   get #client(): LinearClient {
-    const key = this.#config.linear.apiKey;
+    const key = this.#config().linear.apiKey;
     if (!this.#clientInstance || this.#clientKey !== key) {
       // Personal API keys are sent raw; OAuth tokens (from the Connect flow) as Bearer.
       this.#clientInstance = key.startsWith("lin_api_")
@@ -89,7 +93,7 @@ export class LinearService {
    * disconnection), not just the poll loop.
    */
   async #withAuthRecovery<T>(operation: () => Promise<T>): Promise<T> {
-    const keyAtStart = this.#config.linear.apiKey;
+    const keyAtStart = this.#config().linear.apiKey;
     try {
       return await operation();
     } catch (error) {
@@ -97,7 +101,7 @@ export class LinearService {
       // The credential may have been replaced while the call was in flight
       // (a reconnect from the dashboard); retry against the current one
       // instead of asking to refresh a grant that no longer exists.
-      const keyChanged = this.#config.linear.apiKey !== keyAtStart;
+      const keyChanged = this.#config().linear.apiKey !== keyAtStart;
       if (!keyChanged && !(await this.#auth.recover())) throw error;
       try {
         return await operation();
@@ -128,8 +132,8 @@ export class LinearService {
       assignee: { isMe: { eq: true } },
       state: { type: { in: ["unstarted", "backlog"] } },
     };
-    if (this.#config.linear.teamKeys.length > 0) {
-      filter.team = { key: { in: this.#config.linear.teamKeys } };
+    if (this.#config().linear.teamKeys.length > 0) {
+      filter.team = { key: { in: this.#config().linear.teamKeys } };
     }
     // Filter on the trigger label server side. The poll runs every
     // pollIntervalSeconds (default 15s, 240 cycles/hour), and #toTicket costs
@@ -137,7 +141,7 @@ export class LinearService {
     // backlog issue would add ~240 requests/hour against Linear's budget
     // (2,500/hour for personal API keys, 5,000/hour for OAuth). With it, a
     // cycle with no eligible tickets is a single request.
-    filter.labels = { some: { name: { eqIgnoreCase: this.#config.trigger.label } } };
+    filter.labels = { some: { name: { eqIgnoreCase: this.#config().trigger.label } } };
     const connection = await this.#client.issues({ filter, first: 100 });
     const tickets: Ticket[] = [];
     for (const issue of connection.nodes) {
@@ -270,7 +274,7 @@ export class LinearService {
   }
 
   async #toTicket(issue: Issue): Promise<Ticket | undefined> {
-    const { trigger } = this.#config;
+    const { trigger } = this.#config();
     const labels = (await issue.labels()).nodes.map((label) => label.name);
     const title = issue.title;
     const description = issue.description ?? "";
@@ -303,8 +307,8 @@ export class LinearService {
    * every ticket before the issue's project was ever consulted.
    */
   async #resolveRepo(issue: Issue, labels: string[]): Promise<string | undefined> {
-    const repoKeys = Object.keys(this.#config.repos);
-    const triggerLabel = this.#config.trigger.label.toLowerCase();
+    const repoKeys = Object.keys(this.#config().repos);
+    const triggerLabel = this.#config().trigger.label.toLowerCase();
     const byKey = (candidate: string): string | undefined =>
       repoKeys.find((key) => key.toLowerCase() === candidate.toLowerCase());
 
@@ -323,7 +327,7 @@ export class LinearService {
       const project = await issue.project;
       if (project) {
         const name = project.name.toLowerCase();
-        for (const [key, repo] of Object.entries(this.#config.repos)) {
+        for (const [key, repo] of Object.entries(this.#config().repos)) {
           if (repo.projects.some((p) => p.toLowerCase() === name)) return key;
         }
         const key = byKey(project.name);

@@ -1,11 +1,12 @@
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import {
+  atomicWriteFile,
   FLEET_PATH,
   PAIRING_TOKEN_TTL_MINUTES,
   isPlainObject,
   workerCapabilitiesSchema,
+  WriteQueue,
   type WorkerCapabilities,
   type WorkerState,
 } from "@brevi/shared";
@@ -117,7 +118,7 @@ export class FleetStore {
   /** Unredeemed pairing tokens, keyed by sha256(token): the token itself is never kept. */
   #pairingTokens = new Map<string, PairingEntry>();
   /** Serializes all disk writes so two redemptions finishing together cannot interleave. */
-  #io: Promise<void> = Promise.resolve();
+  #io = new WriteQueue("fleet store");
 
   constructor(path: string = FLEET_PATH, ttlMinutes: number = PAIRING_TOKEN_TTL_MINUTES) {
     this.#path = path;
@@ -391,39 +392,18 @@ export class FleetStore {
   }
 
   /**
-   * Atomic write (temp file + rename), mode 0600 because the file holds
+   * Atomic write (see atomicWriteJson), mode 0600 because the file holds
    * credential hashes: even though a hash can't be turned back into a
    * credential, there's no reason to leave it world-readable at the process
-   * umask's default.
+   * umask's default. Unlike MemoryStore's writes, the returned promise
+   * rejects on failure (see the class doc comment): callers that must know a
+   * write landed, like redeemPairing, await it directly.
    */
   #persist(): Promise<void> {
+    // Serialized now, not at write time: records are mutated in place, and a
+    // queued write must capture the state it was asked to persist.
     const body: FleetFile = { version: 1, workers: [...this.#workers.values()] };
     const text = `${JSON.stringify(body, null, 2)}\n`;
-    return this.#enqueue(async () => {
-      await mkdir(dirname(this.#path), { recursive: true });
-      const temp = `${this.#path}.${randomBytes(6).toString("hex")}.tmp`;
-      try {
-        await writeFile(temp, text, { mode: 0o600 });
-        await rename(temp, this.#path);
-      } catch (error) {
-        await rm(temp, { force: true }).catch(() => undefined);
-        throw error;
-      }
-    });
-  }
-
-  /**
-   * Unlike MemoryStore's equivalent, this rejects the promise it returns
-   * when the write fails (see the class doc comment): callers that must know
-   * a write landed, like redeemPairing, await it directly. The internal
-   * chain still recovers so a later write isn't blocked by an earlier
-   * failure.
-   */
-  #enqueue(task: () => Promise<void>): Promise<void> {
-    const next = this.#io.then(task, task);
-    this.#io = next.catch((error: unknown) => {
-      console.error(`[brevi] fleet store write failed: ${message(error)}`);
-    });
-    return next;
+    return this.#io.enqueue(() => atomicWriteFile(this.#path, text, { mode: 0o600 }));
   }
 }

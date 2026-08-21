@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { isContainedRegularFile, MEMORIES_DIR, type RepoMemory } from "@brevi/shared";
+import { isContainedRegularFile, MEMORIES_DIR, WriteQueue, type RepoMemory } from "@brevi/shared";
 
 /**
  * Per-repository memories: the durable half of what a run learns. Every run
@@ -133,8 +133,8 @@ function reviveMemory(raw: RepoMemory): RepoMemory | null {
 export class MemoryStore {
   readonly dir: string;
   #repos = new Map<string, RepoMemory[]>();
-  /** Serializes all disk writes so two runs finishing together cannot interleave. */
-  #io: Promise<void> = Promise.resolve();
+  /** Serializes all disk writes so two runs finishing together cannot interleave. Unlabeled: #persist maps failures to values and logs them itself. */
+  #io = new WriteQueue();
 
   constructor(dir: string = MEMORIES_DIR) {
     this.dir = dir;
@@ -248,7 +248,7 @@ export class MemoryStore {
 
   /** Wait for all queued disk writes to land. */
   async flush(): Promise<void> {
-    await this.#io;
+    await this.#io.flush();
   }
 
   /**
@@ -268,36 +268,30 @@ export class MemoryStore {
     throw error;
   }
 
-  /** Resolves to the write's error rather than rejecting; see #enqueue. */
+  /**
+   * Resolves to the write's error rather than rejecting, unlike RunStore's
+   * writes. A run awaits `record` on its way out, after the agent has done
+   * all its work but before the branch is pushed, so a full disk or an
+   * unwritable ~/.brevi must cost the run its memories, never its pull
+   * request. Callers that do need to fail (the delete commands) check it.
+   */
   #persist(repo: string): Promise<Error | null> {
     const memories = this.#repos.get(repo);
     const body = memories?.length ? `${JSON.stringify(memories, null, 2)}\n` : undefined;
-    return this.#enqueue(async () => {
-      const path = join(this.dir, fileNameFor(repo));
-      if (body) await writeFile(path, body);
-      else await rm(path, { force: true });
-    });
-  }
-
-  /**
-   * Unlike RunStore's equivalent, this never rejects: it reports the failure
-   * as a value instead. A run awaits `record` on its way out, after the agent
-   * has done all its work but before the branch is pushed, so a full disk or
-   * an unwritable ~/.brevi must cost the run its memories, never its pull
-   * request. Callers that do need to fail (the delete commands) check it.
-   */
-  #enqueue(task: () => Promise<void>): Promise<Error | null> {
-    const next = this.#io.then(task, task).then(
-      () => null,
-      (raw: unknown): Error => {
-        const error = raw instanceof Error ? raw : new Error(String(raw));
-        console.error(`[brevi] memory store write failed: ${error.message}`);
-        return error;
-      },
-    );
-    // Keep the chain itself clean so one failed write cannot reject the next.
-    this.#io = next.then(() => undefined);
-    return next;
+    return this.#io
+      .enqueue(async () => {
+        const path = join(this.dir, fileNameFor(repo));
+        if (body) await writeFile(path, body);
+        else await rm(path, { force: true });
+      })
+      .then(
+        () => null,
+        (raw: unknown): Error => {
+          const error = raw instanceof Error ? raw : new Error(String(raw));
+          console.error(`[brevi] memory store write failed: ${error.message}`);
+          return error;
+        },
+      );
   }
 }
 

@@ -1,7 +1,5 @@
-import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-import { LEASES_PATH } from "@brevi/shared";
+import { readFile } from "node:fs/promises";
+import { atomicWriteJson, LEASES_PATH, WriteQueue } from "@brevi/shared";
 
 /**
  * Persists WorkerRegistry's outstanding leases to LEASES_PATH so a host
@@ -56,8 +54,8 @@ function isPersistedLease(value: unknown): value is PersistedLease {
 export class LeaseStore {
   readonly #path: string;
   #leases = new Map<string, PersistedLease>();
-  /** Tail of the write chain, like RunStore#io: every write, immediate or debounced, is appended here. */
-  #io: Promise<void> = Promise.resolve();
+  /** Every write, immediate or debounced, serializes through here (see WriteQueue). */
+  #io = new WriteQueue("lease store");
   #debounceTimer?: NodeJS.Timeout;
 
   constructor(path: string = LEASES_PATH) {
@@ -113,7 +111,7 @@ export class LeaseStore {
       clearTimeout(this.#debounceTimer);
       this.#debounceTimer = undefined;
     }
-    await this.#enqueue(() => this.#persist(this.list()));
+    await this.#io.enqueue(() => this.#persist(this.list()));
   }
 
   delete(id: string): void {
@@ -124,7 +122,7 @@ export class LeaseStore {
   /** Wait for every pending write, including one still sitting behind the debounce, to land on disk. */
   async flush(): Promise<void> {
     if (this.#debounceTimer) this.#writeNow();
-    await this.#io;
+    await this.#io.flush();
   }
 
   #writeDebounced(): void {
@@ -139,40 +137,15 @@ export class LeaseStore {
       clearTimeout(this.#debounceTimer);
       this.#debounceTimer = undefined;
     }
-    void this.#enqueue(() => this.#persist(this.list())).catch(() => undefined);
+    void this.#io.enqueue(() => this.#persist(this.list())).catch(() => undefined);
   }
 
   /**
-   * Append one write to the chain and hand back a promise for *that* write.
-   * The chain itself (`#io`) always resolves, so one failure never wedges the
-   * writes behind it; the returned promise is the only thing that rejects, so
-   * a caller that needs durability (see putDurable) can hear about it while
-   * fire-and-forget callers stay fire-and-forget.
+   * Atomic (see atomicWriteJson) because a corrupt leases.json is treated as
+   * "no leases", losing every in-flight run's claim on restart rather than
+   * just the last debounce window.
    */
-  #enqueue(task: () => Promise<void>): Promise<void> {
-    const write = this.#io.then(task, task);
-    this.#io = write.catch((error: unknown) => {
-      console.error(`[brevi] lease store write failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
-    return write;
-  }
-
-  /**
-   * Write goes to a sibling temp file and is renamed into place (same as
-   * config.ts): a crash or a reader arriving mid-write never sees a
-   * truncated or half-written leases.json, which matters here because a
-   * corrupt file is treated as "no leases", losing every in-flight run's
-   * claim on restart rather than just the last debounce window.
-   */
-  async #persist(leases: PersistedLease[]): Promise<void> {
-    await mkdir(dirname(this.#path), { recursive: true });
-    const temp = `${this.#path}.${randomBytes(6).toString("hex")}.tmp`;
-    try {
-      await writeFile(temp, `${JSON.stringify(leases, null, 2)}\n`);
-      await rename(temp, this.#path);
-    } catch (error) {
-      await rm(temp, { force: true }).catch(() => undefined);
-      throw error;
-    }
+  #persist(leases: PersistedLease[]): Promise<void> {
+    return atomicWriteJson(this.#path, leases);
   }
 }

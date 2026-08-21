@@ -21,28 +21,28 @@ import { OrchestratorError } from "./errors.js";
 
 /**
  * The dashboard's GitHub pull request proxy: every method resolves the repo
- * and token from the live config, calls GitHub, and maps failures onto
+ * and token from the current config, calls GitHub, and maps failures onto
  * OrchestratorError codes the routes serve. No scheduling state; the server
  * routes call this directly so the Orchestrator stays a scheduler.
  */
 export class PullService {
-  /** The live config object the Orchestrator mutates in place. */
-  readonly #config: BreviConfig;
+  /** Yields the Orchestrator's current config snapshot; re-read per call so credential changes apply immediately. */
+  readonly #config: () => BreviConfig;
 
-  constructor(config: BreviConfig) {
+  constructor(config: () => BreviConfig) {
     this.#config = config;
   }
 
   /** The GitHub token, or the 400 every pull route answers without one. */
   #githubToken(): string {
-    const token = this.#config.github.token;
+    const token = this.#config().github.token;
     if (!token) throw new OrchestratorError("invalid", "GitHub is not connected");
     return token;
   }
 
   /** Resolve a repo key from config.repos to its "owner/name" remote. */
   #remote(repoKey: string): string {
-    const repo = this.#config.repos[repoKey];
+    const repo = this.#config().repos[repoKey];
     if (!repo) throw new OrchestratorError("not-found", `no configured repository "${repoKey}"`);
     return repo.remote;
   }
@@ -65,7 +65,7 @@ export class PullService {
    */
   async list(): Promise<PullListResponse> {
     const token = this.#githubToken();
-    const repos = Object.entries(this.#config.repos);
+    const repos = Object.entries(this.#config().repos);
     const settled = await Promise.all(
       repos.map(async ([key, repo]) => {
         try {

@@ -8,11 +8,8 @@ import {
   configSchema,
   CONFIG_PATH,
   changedSecretPaths,
-  isPlainObject,
   isSafePathSegment,
   isTerminal,
-  isUnsafeConfigKey,
-  SETTINGS_SECRET_PATHS,
   MASKED_SECRET,
   mergeConfigPatch,
   needsRestart,
@@ -263,39 +260,15 @@ function dialableHost(bindHost: string): { host: string; remote: boolean } {
 }
 
 /**
-/**
- * Write a dotted path into a plain-object tree, creating missing levels.
- * Only used for the fixed credential paths, which contain no dots.
+ * Freeze a config snapshot in place, recursively, so nothing can mutate the
+ * live config by reference: every change must go through #updateConfig.
  */
-function writeConfigPath(target: object, path: string, value: unknown): void {
-  const segments = path.split(".");
-  const leaf = segments.pop();
-  if (leaf === undefined || segments.some(isUnsafeConfigKey) || isUnsafeConfigKey(leaf)) return;
-  let cursor = target as Record<string, unknown>;
-  for (const segment of segments) {
-    const next = cursor[segment];
-    if (!isPlainObject(next)) cursor[segment] = {};
-    cursor = cursor[segment] as Record<string, unknown>;
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object") {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
   }
-  cursor[leaf] = value;
-}
-
-function assignInPlace<T extends object>(target: T, source: T): void {
-  const to = target as Record<string, unknown>;
-  const from = source as Record<string, unknown>;
-  for (const key of Object.keys(to)) {
-    if (!Object.hasOwn(from, key)) delete to[key];
-  }
-  for (const [key, value] of Object.entries(from)) {
-    // `to[key] = value` on "__proto__" reassigns the prototype instead of
-    // adding a property. Every source reaching this today is schema output,
-    // which drops such keys, but the guard belongs on the write itself rather
-    // than on an assumption about every present and future caller.
-    if (isUnsafeConfigKey(key)) continue;
-    const current = to[key];
-    if (isPlainObject(value) && isPlainObject(current)) assignInPlace(current, value);
-    else to[key] = value;
-  }
+  return value;
 }
 
 /**
@@ -316,7 +289,6 @@ type LinearRefreshOutcome =
  */
 export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   readonly store: RunStore;
-  readonly config: BreviConfig;
   /** What brevi has learned about each repo, carried across sandboxes. */
   readonly memories: MemoryStore;
   /** Who is enrolled as a worker of this host, and the credentials that prove it. */
@@ -400,16 +372,14 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   #polling?: Promise<void>;
   /** A poll was requested while one was in flight; run one more cycle when it finishes. */
   #pollAgain = false;
-  /** Tail of the config write chain; #persistConfig appends so writes never interleave. */
-  #configWrite: Promise<unknown> = Promise.resolve();
-  /** Tail of the config transaction chain; see #transact. */
-  #configTx: Promise<unknown> = Promise.resolve();
+  /** The current frozen config snapshot; read through the `config` getter, replaced only by #updateConfig and the hand-edit reload. */
+  #current: BreviConfig;
+  /** Tail of the serialized config-operation chain; every update and reload runs through #serializeConfigOp so none can interleave. */
+  #configOps: Promise<unknown> = Promise.resolve();
   /** Watches config.json for hand edits, so the file stays the source of truth. */
   #configWatcher?: FSWatcher;
   /** Debounce for the watcher above; editors save in several syscalls. */
   #configReloadTimer?: NodeJS.Timeout;
-  /** Exact text of the last config brevi itself wrote, so its own writes don't look like hand edits. */
-  #lastWritten?: string;
   /** Recovery hooks handed to LinearService so every Linear call shares one refresh path. */
   readonly #linearAuth: LinearAuthHooks = {
     recover: () => this.#recoverLinearAuth(),
@@ -424,13 +394,23 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     fleet: FleetStore = new FleetStore(),
   ) {
     super();
-    this.config = config;
+    // Cloned so freezing never reaches an object the caller still owns.
+    this.#current = deepFreeze(structuredClone(config));
     this.store = store;
     this.memories = memories;
     this.fleet = fleet;
     this.#configPath = configPath ?? CONFIG_PATH;
-    this.pulls = new PullService(config);
-    if (config.linear.apiKey) this.#linear = new LinearService(config, this.#linearAuth);
+    this.pulls = new PullService(() => this.config);
+    if (config.linear.apiKey) this.#linear = new LinearService(() => this.config, this.#linearAuth);
+  }
+
+  /**
+   * The current config snapshot. Immutable: consumers hold this accessor (or
+   * re-read the property), never a mutable reference, and #updateConfig swaps
+   * the whole snapshot after each persisted change.
+   */
+  get config(): BreviConfig {
+    return this.#current;
   }
 
   /**
@@ -731,7 +711,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     await this.fleet.init();
 
     this.#workers = new WorkerRegistry({
-      config: this.config,
+      config: () => this.config,
       store: this.store,
       memories: this.memories,
       fleet: this.fleet,
@@ -996,53 +976,52 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   async updateCredentials(request: CredentialsUpdateRequest): Promise<CredentialsUpdateResponse> {
     const results: CredentialsUpdateResponse["results"] = {};
     let linearChanged = false;
+    /** Validated mutations, applied to one snapshot draft in a single write below. */
+    const sets: ((draft: BreviConfig) => void)[] = [];
 
     const apply = async (
       value: string | undefined,
       validate: (key: string) => Promise<CredentialResult>,
-      set: (key: string) => void,
+      set: (draft: BreviConfig, key: string) => void,
     ): Promise<CredentialResult | undefined> => {
       if (value === undefined) return undefined;
       const trimmed = value.trim();
       if (trimmed === "") {
-        set("");
+        sets.push((draft) => set(draft, ""));
         return { ok: true, detail: "Disconnected" };
       }
       const result = await validate(trimmed);
-      if (result.ok) set(trimmed);
+      if (result.ok) sets.push((draft) => set(draft, trimmed));
       return result;
     };
 
     const [linear, github, anthropic, codex, grok] = await Promise.all([
-      apply(request.linearApiKey, validateLinearApiKey, (key) => {
-        this.config.linear.apiKey = key;
+      apply(request.linearApiKey, validateLinearApiKey, (draft, key) => {
+        draft.linear.apiKey = key;
         // A manually pasted key (or a disconnect) replaces any OAuth grant;
         // the stale refresh token/expiry would otherwise outlive the key
         // they belonged to.
-        this.config.linear.refreshToken = "";
-        this.config.linear.tokenExpiresAt = "";
-        // Applied here rather than after the save: an in-flight refresh must
-        // see the generation bump before it can write stale tokens back.
-        this.#resetLinearConnection();
+        draft.linear.refreshToken = "";
+        draft.linear.tokenExpiresAt = "";
         linearChanged = true;
       }),
-      apply(request.githubToken, validateGithubToken, (key) => {
-        this.config.github.token = key;
+      apply(request.githubToken, validateGithubToken, (draft, key) => {
+        draft.github.token = key;
       }),
-      apply(request.anthropicApiKey, validateAnthropicApiKey, (key) => {
-        this.config.agent.anthropicApiKey = key;
+      apply(request.anthropicApiKey, validateAnthropicApiKey, (draft, key) => {
+        draft.agent.anthropicApiKey = key;
         // A manual key (or a disconnect) replaces any host-discovered login.
-        this.config.agent.claudeCodeOauthToken = "";
+        draft.agent.claudeCodeOauthToken = "";
       }),
-      apply(request.codexApiKey, validateCodexApiKey, (key) => {
-        this.config.agent.codexApiKey = key;
+      apply(request.codexApiKey, validateCodexApiKey, (draft, key) => {
+        draft.agent.codexApiKey = key;
         // A manual key (or a disconnect) replaces any host-discovered login.
-        this.config.agent.codexAuthJson = "";
+        draft.agent.codexAuthJson = "";
       }),
-      apply(request.xaiApiKey, validateXaiApiKey, (key) => {
-        this.config.agent.xaiApiKey = key;
+      apply(request.xaiApiKey, validateXaiApiKey, (draft, key) => {
+        draft.agent.xaiApiKey = key;
         // A manual key (or a disconnect) replaces any host-discovered login.
-        this.config.agent.grokAuthJson = "";
+        draft.agent.grokAuthJson = "";
       }),
     ]);
     if (linear) results.linear = linear;
@@ -1053,7 +1032,14 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
 
     const anyApplied = Object.values(results).some((r) => r.ok);
     if (anyApplied) {
-      await this.#persistConfig();
+      await this.#updateConfig((draft) => {
+        for (const set of sets) set(draft);
+      });
+      // After the write, not before: the snapshot only carries the new key
+      // once #updateConfig swaps it. A refresh in flight across this write
+      // re-checks the stored refresh token inside the serialized chain (see
+      // #refreshLinear), so it can no longer write stale tokens back.
+      if (linearChanged) this.#resetLinearConnection();
       this.emit("config", redactConfig(this.config));
     }
     if (linearChanged) {
@@ -1068,13 +1054,12 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     return { results, config: redactConfig(this.config) };
   }
 
-  /** Persist a credential mutation and hot-apply it. */
-  async #saveCredential(set: () => void, linearChanged = false): Promise<void> {
-    set();
-    // Applied before the save so an in-flight refresh can't write a stale
-    // grant over the one just set.
+  /** Persist a credential mutation (applied to a snapshot draft) and hot-apply it. */
+  async #saveCredential(set: (draft: BreviConfig) => void, linearChanged = false): Promise<void> {
+    await this.#updateConfig(set);
+    // After the write, not before: see updateCredentials for why this is safe
+    // against an in-flight refresh.
     if (linearChanged) this.#resetLinearConnection();
-    await this.#persistConfig();
     this.emit("config", redactConfig(this.config));
     if (linearChanged) {
       this.emit("linear-status", this.linearStatus);
@@ -1086,7 +1071,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   async connectProvider(provider: CredentialProvider, serverUrl: string): Promise<ConnectResponse> {
     return connectors.connectProvider(
       {
-        config: this.config,
+        config: () => this.config,
         saveCredential: (set) => this.#saveCredential(set),
         setGithubDevice: (session) => {
           this.#githubDevice = session;
@@ -1110,8 +1095,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     if (outcome.state === "error") return { status: "error", detail: outcome.detail };
     const result = await validateGithubToken(outcome.token);
     if (!result.ok) return { status: "error", detail: result.detail };
-    await this.#saveCredential(() => {
-      this.config.github.token = outcome.token;
+    await this.#saveCredential((draft) => {
+      draft.github.token = outcome.token;
     });
     return { status: "connected", detail: result.detail, config: redactConfig(this.config) };
   }
@@ -1127,8 +1112,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       const tokens = await exchangeLinearCode(session, code);
       const result = await validateLinearApiKey(tokens.accessToken);
       if (!result.ok) return result;
-      await this.#saveCredential(() => {
-        this.#applyLinearTokens(tokens, { rotation: false });
+      await this.#saveCredential((draft) => {
+        this.#applyLinearTokens(draft, tokens, { rotation: false });
       }, true);
       return result;
     } catch (error) {
@@ -1153,11 +1138,14 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   }
 
   /**
-   * The one write path for config.json: merge a deep-partial patch from a
-   * settings form, validate the whole config, persist it, and apply it to the
-   * live orchestrator. Validation runs against the merged result rather than
-   * the patch, so no field is ever judged in isolation and the file on disk
-   * is never left invalid.
+   * The settings write path for config.json: merge a deep-partial patch from
+   * a settings form, validate the whole config, persist it, and swap the live
+   * snapshot. Validation runs against the merged result rather than the
+   * patch, so no field is ever judged in isolation and the file on disk is
+   * never left invalid. The compute runs inside the serialized update chain,
+   * so it always merges onto the latest snapshot: a connect flow landing
+   * concurrently can never be reverted, which also means the secrets a patch
+   * provably never touches (see changedSecretPaths) carry through unchanged.
    */
   async updateSettings(patch: ConfigPatch): Promise<SettingsUpdateResponse> {
     // The dashboard only ever sees the mask, so a form that round-tripped one
@@ -1166,9 +1154,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       throw new OrchestratorError("invalid", "connect.linearClientSecret: replace it or leave it alone");
     }
 
-    return this.#transact(async () => {
-      const before = structuredClone(this.config);
-      const merged = mergeConfigPatch(before as unknown as Record<string, unknown>, patch);
+    const { before, config: saved } = await this.#updateConfig((draft) => {
+      const merged = mergeConfigPatch(draft as unknown as Record<string, unknown>, patch);
       const result = configSchema.safeParse(merged);
       if (!result.success) {
         const issue = result.error.issues[0];
@@ -1178,79 +1165,55 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
           path ? `${path}: ${issue?.message}` : (issue?.message ?? "invalid settings"),
         );
       }
-      const next = result.data;
       // Compared on the parsed result, not on the patch: naming no secret
       // path is not the same as changing no secret. Deleting a whole section
       // ({"linear": null}) lets the schema's defaults refill it with empty
       // strings, which would disconnect the provider through a form.
-      const secrets = changedSecretPaths(before, next);
+      const secrets = changedSecretPaths(draft, result.data);
       if (secrets.length > 0) {
         throw new OrchestratorError(
           "invalid",
           `${secrets.join(", ")} cannot be changed here; connect the provider instead`,
         );
       }
-      const saved = await this.#writeAndApply(next, patch);
-      this.#reactToSettings(before, saved);
-      return {
-        config: redactConfig(this.config),
-        applied: needsRestart(before, saved) ? "restart" : "live",
-      };
+      return result.data;
     });
+    this.#reactToSettings(before, saved);
+    return {
+      config: redactConfig(this.config),
+      applied: needsRestart(before, saved) ? "restart" : "live",
+    };
   }
 
-  /**
-   * Serialize whole config transactions: snapshot, merge, validate, write,
-   * apply. Chaining only the write is not enough, because two overlapping
-   * transactions would each snapshot the config before the other applied and
-   * the second would write the first's change straight back out.
-   */
-  #transact<T>(work: () => Promise<T>): Promise<T> {
-    // Both handlers, so one transaction failing doesn't strand the queue.
-    const run = this.#configTx.then(work, work);
-    this.#configTx = run.catch(() => undefined);
+  /** Serialize config operations (updates and hand-edit reloads) so none can interleave. */
+  #serializeConfigOp<T>(work: () => Promise<T>): Promise<T> {
+    // Both handlers, so one failed operation doesn't strand the queue.
+    const run = this.#configOps.then(work, work);
+    this.#configOps = run.catch(() => undefined);
     return run;
   }
 
   /**
-   * Write a candidate config and install it, as one step of the write chain.
-   * Doing both here (rather than applying first and rolling back on failure)
-   * means the live config never holds values that didn't reach disk, and
-   * leaves no rollback that could revert a change made in the meantime.
+   * The one write path for config.json: compute the next config from the
+   * current snapshot, persist it atomically (saveConfig validates first, so
+   * an invalid result never reaches disk or the live snapshot), then swap
+   * the frozen snapshot. `compute` gets a mutable draft of the current
+   * snapshot and may mutate it, return a replacement, or return null to
+   * abort without writing; it runs inside the serialized chain, so it always
+   * sees the state every earlier update produced.
    */
-  async #writeAndApply(candidate: BreviConfig, patch: ConfigPatch): Promise<BreviConfig> {
-    const write = this.#configWrite.then(async () => {
-      // Credentials are owned by the connect flows, which mutate the live
-      // config directly and can land while this transaction is in flight.
-      // Settings patches provably never touch them (see changedSecretPaths),
-      // so the live values are always the ones to persist.
-      const merged = structuredClone(candidate);
-      for (const path of SETTINGS_SECRET_PATHS) {
-        writeConfigPath(merged, path, readConfigPath(this.config, path));
-      }
-      const written = await saveConfig(merged, this.#configPath);
-      // The write awaited above, and a connect flow (a token refresh, an R2
-      // provision) may have moved the live config meanwhile. Installing the
-      // candidate wholesale would revert it, and that flow's own queued
-      // persist would then write the reverted state out. Re-applying just this
-      // transaction's patch onto the config as it now stands keeps both.
-      const applied = configSchema.parse(
-        mergeConfigPatch(structuredClone(this.config) as unknown as Record<string, unknown>, patch),
-      );
-      if (serializeConfig(applied) !== serializeConfig(written)) {
-        // Reconcile the file in this same step rather than relying on the
-        // other flow's persist to arrive: until the two agree, the config
-        // watcher would read the file back as a hand edit and undo the
-        // change that landed here.
-        await saveConfig(applied, this.#configPath);
-      }
-      this.#lastWritten = serializeConfig(applied);
-      assignInPlace(this.config, applied);
-      return applied;
+  #updateConfig(
+    compute: (draft: BreviConfig) => BreviConfig | null | undefined | void,
+  ): Promise<{ before: BreviConfig; config: BreviConfig; changed: boolean }> {
+    return this.#serializeConfigOp(async () => {
+      const before = this.#current;
+      const draft = structuredClone(before);
+      const next = compute(draft);
+      if (next === null) return { before, config: before, changed: false };
+      const saved = await saveConfig(next ?? draft, this.#configPath);
+      this.#current = deepFreeze(saved);
+      return { before, config: saved, changed: true };
     });
-    // Keep the chain alive after a failed write; only the caller sees the error.
-    this.#configWrite = write.catch(() => undefined);
-    return write;
   }
 
   /** Pick up whatever the new config changed: timers, queue, and the dashboard. */
@@ -1340,9 +1303,10 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       if (!provisioned.ok) {
         return { status: "provision-failed", reason: provisioned.reason, r2: await this.r2Status() };
       }
-      this.config.r2.bucket = provisioned.bucket;
-      this.config.r2.publicBaseUrl = provisioned.publicBaseUrl;
-      await this.#persistConfig();
+      await this.#updateConfig((draft) => {
+        draft.r2.bucket = provisioned.bucket;
+        draft.r2.publicBaseUrl = provisioned.publicBaseUrl;
+      });
       this.emit("config", redactConfig(this.config));
       return { status: "connected", r2: await this.r2Status() };
     }
@@ -1782,17 +1746,18 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   }
 
   /**
-   * Apply a fresh Linear token grant to config. On a rotation (a refresh) a
-   * response that omits refresh_token means Linear didn't issue a new one,
-   * so the existing one is kept; a fresh exchange always overwrites, since a
-   * leftover value from a previous connection would otherwise stick around.
+   * Apply a fresh Linear token grant to a config draft. On a rotation (a
+   * refresh) a response that omits refresh_token means Linear didn't issue a
+   * new one, so the existing one is kept; a fresh exchange always overwrites,
+   * since a leftover value from a previous connection would otherwise stick
+   * around.
    */
-  #applyLinearTokens(tokens: LinearTokens, { rotation }: { rotation: boolean }): void {
-    this.config.linear.apiKey = tokens.accessToken;
-    this.config.linear.refreshToken = rotation
-      ? (tokens.refreshToken ?? this.config.linear.refreshToken)
+  #applyLinearTokens(draft: BreviConfig, tokens: LinearTokens, { rotation }: { rotation: boolean }): void {
+    draft.linear.apiKey = tokens.accessToken;
+    draft.linear.refreshToken = rotation
+      ? (tokens.refreshToken ?? draft.linear.refreshToken)
       : (tokens.refreshToken ?? "");
-    this.config.linear.tokenExpiresAt = tokens.expiresIn
+    draft.linear.tokenExpiresAt = tokens.expiresIn
       ? new Date(Date.now() + tokens.expiresIn * 1000).toISOString()
       : "";
   }
@@ -1809,33 +1774,13 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     this.#linearAuthError = undefined;
     this.#linearRefreshFailing = undefined;
     this.#linear = this.config.linear.apiKey
-      ? new LinearService(this.config, this.#linearAuth)
+      ? new LinearService(() => this.config, this.#linearAuth)
       : undefined;
-  }
-
-  /**
-   * Persist config through one chain so writes never interleave. config is
-   * shared by reference and serialized at write time, so the last chained
-   * write always matches the final in-memory state; without the chain a
-   * slow write from an older mutation (a token refresh) could land after a
-   * newer one (a disconnect) and revive credentials the user removed.
-   */
-  #persistConfig(): Promise<void> {
-    const write = this.#configWrite.then(async () => {
-      const saved = await saveConfig(this.config, this.#configPath);
-      // Remember what landed on disk so the config watcher can tell brevi's
-      // own writes apart from a hand edit without any extra bookkeeping.
-      this.#lastWritten = serializeConfig(saved);
-      return saved;
-    });
-    // Keep the chain alive after a failed write; only the caller sees the error.
-    this.#configWrite = write.catch(() => undefined);
-    return write.then(() => undefined);
   }
 
   /** The config file changed under us; adopt it, or say why it was ignored. */
   async #reloadConfigFile(): Promise<void> {
-    await this.#transact(async () => {
+    await this.#serializeConfigOp(async () => {
       if (this.#stopped) return;
       let raw: string;
       try {
@@ -1846,9 +1791,11 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       // stop() can land while the read is in flight; applying after shutdown
       // would emit to closed clients and re-arm the poll timer.
       if (this.#stopped) return;
-      // Our own writes come back through the watcher too. Comparing the
-      // serialized form skips them with no bookkeeping to fall out of sync.
-      if (raw === this.#lastWritten) return;
+      // Our own writes come back through the watcher too. Every own write
+      // lands through this same serialized chain and the file it leaves is
+      // exactly the current snapshot's serialization, so a matching file is
+      // an own write (or a no-op edit) and needs nothing.
+      if (raw === serializeConfig(this.config)) return;
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw);
@@ -1862,13 +1809,14 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         );
         return;
       }
-      const before = structuredClone(this.config);
+      const before = this.config;
       const next = result.data;
       if (serializeConfig(before) === serializeConfig(next)) return;
       console.log(`[brevi] Reloaded ${this.#configPath} after an external edit.`);
       // Secrets live in this same file, so a hand edit legitimately carries
-      // them; they are applied like any other field.
-      assignInPlace(this.config, next);
+      // them; the file is already the source of truth, so the snapshot is
+      // simply swapped with nothing written back.
+      this.#current = deepFreeze(next);
       if (
         before.linear.apiKey !== next.linear.apiKey ||
         before.linear.refreshToken !== next.linear.refreshToken
@@ -1949,7 +1897,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    * while the credential is still the one the refresh started from; a
    * connect, disconnect, or manual key mid-flight makes it stale and it is
    * discarded. LinearService picks up the new key on its own the next time
-   * it's used, since config is shared by reference.
+   * it's used, since it reads the current snapshot through its accessor.
    */
   #refreshLinear(): Promise<LinearRefreshOutcome> {
     if (this.#linearRefresh) return this.#linearRefresh;
@@ -1971,16 +1919,24 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
       const source = app ? { app } : { apiBase: this.config.connect.apiBase };
       try {
         const tokens = await refreshLinearToken(source, refreshToken);
-        if (
-          generation !== this.#linearGeneration ||
-          this.config.linear.refreshToken !== refreshToken
-        ) {
-          return { ok: false, reason: "stale" };
-        }
-        this.#applyLinearTokens(tokens, { rotation: true });
+        const { changed } = await this.#updateConfig((draft) => {
+          // Checked inside the serialized chain, against the draft: a
+          // credential change enqueued while the refresh was in flight has
+          // already rewritten linear.* by the time this compute runs, and
+          // stale tokens must not clobber it. The generation check catches
+          // the same races that resolve before this update is enqueued.
+          if (
+            generation !== this.#linearGeneration ||
+            draft.linear.refreshToken !== refreshToken
+          ) {
+            return null;
+          }
+          this.#applyLinearTokens(draft, tokens, { rotation: true });
+          return draft;
+        });
+        if (!changed) return { ok: false, reason: "stale" };
         this.#linearRefreshBackoff = undefined;
         this.#clearLinearRefreshFailing();
-        await this.#persistConfig();
         this.emit("config", redactConfig(this.config));
         return { ok: true };
       } catch (error) {

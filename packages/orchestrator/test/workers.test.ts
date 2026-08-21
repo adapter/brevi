@@ -91,7 +91,7 @@ describe("WorkerRegistry", () => {
     workerId = "";
     credential = "";
     registry = new WorkerRegistry({
-      config,
+      config: () => config,
       store,
       memories,
       fleet,
@@ -706,7 +706,7 @@ describe("WorkerRegistry", () => {
     const fastFleet = new FleetStore(join(dir, "fleet-fast.json"));
     await fastFleet.init();
     const fastRegistry = new WorkerRegistry({
-      config: fastConfig,
+      config: () => fastConfig,
       store,
       memories,
       fleet: fastFleet,
@@ -1377,7 +1377,7 @@ describe("WorkerRegistry", () => {
     await seedLeases.flush();
 
     const restoredRegistry = new WorkerRegistry({
-      config,
+      config: () => config,
       store,
       memories,
       fleet,

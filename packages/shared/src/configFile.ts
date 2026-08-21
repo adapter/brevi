@@ -1,7 +1,6 @@
-import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import { CONFIG_VERSION, configSchema, type BreviConfig } from "./config.js";
+import { atomicWriteFile } from "./jsonStore.js";
 import { CONFIG_PATH } from "./paths.js";
 
 /**
@@ -44,35 +43,16 @@ export function serializeConfig(config: BreviConfig): string {
 }
 
 /**
- * Validate, then replace config.json in one step. The write goes to a
- * sibling temp file and is renamed into place, so a crash (or a reader
- * arriving mid-write) never sees a truncated or half-written config: the old
- * file stays intact until the new one is complete. Rejecting before the
- * rename also means an invalid config can't reach disk at all.
- *
- * The temp file is created 0600, and since the rename replaces the inode that
- * is the mode config.json ends up with. The file holds API tokens, so leaving
- * it at whatever the process umask produces (commonly 0644, readable by every
- * local user) is not acceptable.
+ * Validate, then atomically replace config.json in one step (see
+ * atomicWriteFile). Rejecting before the write means an invalid config can't
+ * reach disk at all. Written 0600 because the file holds API tokens; the
+ * process umask's default (commonly 0644) is readable by every local user.
  */
 export async function saveConfig(
   config: unknown,
   path: string = CONFIG_PATH,
 ): Promise<BreviConfig> {
   const parsed = configSchema.parse(config);
-  await mkdir(dirname(path), { recursive: true });
-  // Random, not pid-based: two brevi processes pointed at one config file
-  // would otherwise pick the same temp name only when they share a pid, but
-  // a retry after a crash can, and clobbering a live temp file publishes the
-  // other writer's bytes.
-  const temp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-  try {
-    await writeFile(temp, serializeConfig(parsed), { mode: 0o600 });
-    await rename(temp, path);
-  } catch (error) {
-    // Never leave a token-bearing temp file behind on a failed save.
-    await rm(temp, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  await atomicWriteFile(path, serializeConfig(parsed), { mode: 0o600 });
   return parsed;
 }
