@@ -42,6 +42,11 @@ mac:
   entitlements: assets/entitlements.mac.plist
   entitlementsInherit: assets/entitlements.mac.plist
   notarize: true
+  # bun installs both @lydell/node-pty darwin platform packages, so the x64 and
+  # arm64 app bundles each carry identical copies of both prebuilds and the
+  # universal merge refuses to combine them. x64ArchFiles marks them as allowed
+  # to be identical across slices; node-pty picks the right one at runtime.
+  x64ArchFiles: "**/node_modules/@lydell/node-pty-darwin-*/**"
 linux:
   category: Development
   icon: assets/icon.png
