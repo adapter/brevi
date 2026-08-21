@@ -347,6 +347,12 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
    * nothing was ever executed for it to follow up on.
    */
   #followUps = new Set<string>();
+  /**
+   * Operator-typed instructions for a queued follow-up, keyed by run id.
+   * Purely in-memory like #followUps' queued gap: a restart before dispatch
+   * degrades the follow-up to a plain "take another look".
+   */
+  #followUpInstructions = new Map<string, string>();
   /** #dispatchQueued logs "waiting on fleet capacity" once per stretch of unavailability, not on every attempt. */
   #warnedNoCapacity = false;
   #stopped = false;
@@ -1384,6 +1390,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         // timer (starting the follow-up cleared it, and nothing will reach
         // #onRunSettled to re-arm it), so restore the reaper here.
         if (this.#followUps.delete(runId)) this.#scheduleReap(runId);
+        this.#followUpInstructions.delete(runId);
         return this.store.setStatus(runId, "cancelled", { finishedAt: new Date().toISOString() });
       }
       const outcome: CancelOutcome = this.#workers?.cancel(runId) ?? "unknown";
@@ -1546,16 +1553,17 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
 
   /**
    * Start a follow-up on a completed run's open PR: rebase onto the latest
-   * base, address review feedback, push, and comment. The ticket's Linear
-   * state is left untouched. Serialized under the run's mutation lock so it
-   * can never interleave with a cancel or retry of the same run.
+   * base, address review feedback and any operator instructions, push, and
+   * comment. The ticket's Linear state is left untouched. Serialized under
+   * the run's mutation lock so it can never interleave with a cancel or
+   * retry of the same run.
    */
-  followUpRun(runId: string): Promise<Run> {
+  followUpRun(runId: string, instructions?: string): Promise<Run> {
     if (!isSafePathSegment(runId)) throw new OrchestratorError("invalid", "malformed run id");
-    return this.#withRunLock(runId, () => this.#followUpRunLocked(runId));
+    return this.#withRunLock(runId, () => this.#followUpRunLocked(runId, instructions));
   }
 
-  async #followUpRunLocked(runId: string): Promise<Run> {
+  async #followUpRunLocked(runId: string, instructions?: string): Promise<Run> {
     const run = this.store.get(runId);
     if (!run) throw new OrchestratorError("not-found", `no run with id ${runId}`);
     if (this.#followUps.has(runId)) {
@@ -1604,6 +1612,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     // marker #buildDispatchPayload claims; it is released only on failure
     // here, when a queued follow-up is cancelled, or by a successful dispatch.
     this.#followUps.add(runId);
+    if (instructions) this.#followUpInstructions.set(runId, instructions);
     try {
       try {
         const pr = await fetchPrStatus(prUrl, this.config.github.token);
@@ -1654,10 +1663,22 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         archivedAt: undefined,
       });
       if (!this.#queue.includes(runId)) this.#queue.push(runId);
+      // Surface what was asked for in the run's activity feed; instructions
+      // are the operator's own text, never a secret.
+      if (instructions) {
+        this.store.appendEvent({
+          runId,
+          ts: new Date().toISOString(),
+          type: "log",
+          stream: "system",
+          text: `follow-up instructions: ${instructions}`,
+        });
+      }
       this.#dispatchQueued();
       return queued;
     } catch (error) {
       this.#followUps.delete(runId);
+      this.#followUpInstructions.delete(runId);
       // Re-arm the reaper in case the timer was already cleared above; a
       // no-op when the run holds no retained disk.
       this.#scheduleReap(runId);
@@ -2345,13 +2366,15 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     const memories = this.config.memory.enabled
       ? selectMemories(this.memories.list(memoryKeyFor(repo.remote)), this.config.memory.maxChars)
       : [];
+    const followUp = this.#followUps.has(runId);
     const prompts: DispatchPrompts = {
       prDescription: "concise",
       memories,
       recordMemories: this.config.memory.enabled,
+      followUpInstructions: followUp ? this.#followUpInstructions.get(runId) : undefined,
     };
     return {
-      kind: this.#followUps.has(runId) ? "follow-up" : "implementation",
+      kind: followUp ? "follow-up" : "implementation",
       run,
       repoKey,
       repo,
@@ -2371,6 +2394,9 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     const run = this.store.get(runId);
     if (run?.status === "waiting") this.#scheduleResume(runId);
     if (run?.sandbox.retainedUntil) this.#scheduleReap(runId);
+    // The dispatched payload carried the instructions; a settled run is done
+    // with them (a later follow-up brings its own).
+    if (run && isTerminal(run.status)) this.#followUpInstructions.delete(runId);
     this.#dispatchQueued();
   }
 

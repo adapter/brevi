@@ -5,6 +5,7 @@ import type {
   CredentialsUpdateResponse,
   DevicePollResponse,
   FleetResponse,
+  FollowUpRequest,
   ForgetMemoryRequest,
   GithubRepo,
   MemoriesResponse,
@@ -91,8 +92,16 @@ export const api = {
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/archive`, { method: "POST" }),
   unarchiveRun: (runId: string) =>
     json<Run>(`/api/runs/${encodeURIComponent(runId)}/unarchive`, { method: "POST" }),
-  followUpRun: (runId: string) =>
-    json<Run>(`/api/runs/${encodeURIComponent(runId)}/followup`, { method: "POST" }),
+  followUpRun: (runId: string, instructions?: string) =>
+    json<Run>(`/api/runs/${encodeURIComponent(runId)}/followup`, {
+      method: "POST",
+      ...(instructions
+        ? {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ instructions } satisfies FollowUpRequest),
+          }
+        : {}),
+    }),
   prStatus: (runId: string) => json<PrStatusResponse>(`/api/runs/${encodeURIComponent(runId)}/pr`),
   pulls: () => json<PullListResponse>("/api/pulls"),
   pullDetail: (repoKey: string, number: number) =>

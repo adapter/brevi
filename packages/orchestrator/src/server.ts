@@ -20,6 +20,7 @@ import {
   type BreviConfig,
   type ClientMessage,
   type CredentialsUpdateRequest,
+  type FollowUpRequest,
   type ForgetMemoryRequest,
   type HealthResponse,
   type HostExecution,
@@ -433,8 +434,17 @@ function buildApp(
   });
 
   app.post("/api/runs/:id/followup", async (c) => {
+    // The body is optional: a bare POST is the plain "take another look".
+    const body = (await c.req.json().catch(() => ({}))) as FollowUpRequest;
+    if (body?.instructions !== undefined && typeof body.instructions !== "string") {
+      return c.json({ error: "instructions must be a string" }, 400);
+    }
+    const instructions = body?.instructions?.trim();
+    if (instructions && instructions.length > 10_000) {
+      return c.json({ error: "instructions must be 10000 characters or fewer" }, 400);
+    }
     try {
-      return c.json(await orchestrator.followUpRun(c.req.param("id")));
+      return c.json(await orchestrator.followUpRun(c.req.param("id"), instructions || undefined));
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }

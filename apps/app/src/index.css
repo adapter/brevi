@@ -267,8 +267,10 @@
 /*
   Frameless window ergonomics (macOS): the sidebar header doubles as the
   window's drag strip and clears the inset traffic lights; every control
-  inside it opts back out so it still takes clicks. The floating sidebar
-  trigger shifts right for the same reason.
+  inside it opts back out so it still takes clicks. The static sidebar
+  trigger shifts right of the traffic lights for the same reason, and since
+  it is window-fixed it overlays the drag strip while the sidebar is open,
+  so its button opts out too.
 */
 [data-platform="mac"] [data-slot="sidebar-header"] {
   padding-left: 4.75rem;
@@ -278,8 +280,11 @@
 [data-platform="mac"] [data-slot="sidebar-header"] a {
   -webkit-app-region: no-drag;
 }
-[data-platform="mac"] .floating-sidebar-trigger {
+[data-platform="mac"] .static-sidebar-trigger {
   left: 5rem;
+}
+[data-platform="mac"] .static-sidebar-trigger button {
+  -webkit-app-region: no-drag;
 }
 
 /*

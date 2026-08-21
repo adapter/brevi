@@ -532,13 +532,17 @@ export function useOrchestrator() {
     }
   }, []);
 
-  const followUpRun = useCallback(async (runId: string) => {
+  /** Resolves to the queued run, or undefined when the request failed (the notice says why). */
+  const followUpRun = useCallback(async (runId: string, instructions?: string) => {
     dispatch({ t: "busy", key: runId, on: true });
     dispatch({ t: "notice", notice: null });
     try {
-      dispatch({ t: "run", run: await api.followUpRun(runId) });
+      const run = await api.followUpRun(runId, instructions);
+      dispatch({ t: "run", run });
+      return run;
     } catch (err) {
       dispatch({ t: "notice", notice: `Could not start the follow-up. ${errorText(err)}` });
+      return undefined;
     } finally {
       dispatch({ t: "busy", key: runId, on: false });
     }

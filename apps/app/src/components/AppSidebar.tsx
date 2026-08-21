@@ -23,7 +23,6 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
-  SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
 import { api } from "../lib/api";
@@ -70,10 +69,11 @@ function useTodayCost(): number | null {
   }, 0);
 }
 
-/** Orchestrator connection states, compact enough for the sidebar header. */
+/** Orchestrator connection states, compact enough for the Runs heading row. */
 const CONNECTION = {
   connecting: { label: "Connecting", dot: "bg-haze-600", text: "text-haze-500", pulse: false },
-  live: { label: "Live", dot: "bg-mint-500", text: "text-haze-500", pulse: true },
+  // Live is the steady state, so its dot holds still; only reconnecting pulses.
+  live: { label: "Live", dot: "bg-mint-500", text: "text-haze-500", pulse: false },
   reconnecting: { label: "Reconnecting", dot: "bg-iris-400", text: "text-haze-500", pulse: true },
   offline: { label: "Offline", dot: "bg-rust-500", text: "text-rust-400", pulse: false },
 } as const;
@@ -190,24 +190,9 @@ export function AppSidebar({
 
   return (
     <Sidebar collapsible="offcanvas" className="border-sidebar-border">
-      <SidebarHeader className="h-12 justify-center px-3">
-        <div className="flex items-center justify-end gap-2">
-          <span
-            className={`flex items-center gap-1.5 ${CONNECTION[conn].text}`}
-            title={conn === "offline" ? "Orchestrator offline" : CONNECTION[conn].label}
-          >
-            <span
-              className={`inline-block size-[6px] rounded-full ${CONNECTION[conn].dot} ${
-                CONNECTION[conn].pulse ? "animate-beacon" : ""
-              }`}
-            />
-            <span className="text-[10.5px] leading-none font-medium">
-              {CONNECTION[conn].label}
-            </span>
-          </span>
-          <SidebarTrigger className="text-haze-500" aria-label="Collapse sidebar" />
-        </div>
-      </SidebarHeader>
+      {/* Empty on purpose: the window's static trigger (see App) floats over
+          its left edge, and on macOS this strip is the drag region. */}
+      <SidebarHeader className="h-12 px-3" />
 
       <SidebarContent>
         {/* The Pull Requests entry sits above the runs: runs produce PRs, and
@@ -268,6 +253,20 @@ export function AppSidebar({
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
+            {/* The orchestrator connection state, inline with the heading. */}
+            <span
+              className={`flex items-center gap-1.5 ${CONNECTION[conn].text}`}
+              title={conn === "offline" ? "Orchestrator offline" : CONNECTION[conn].label}
+            >
+              <span
+                className={`inline-block size-[6px] rounded-full ${CONNECTION[conn].dot} ${
+                  CONNECTION[conn].pulse ? "animate-beacon" : ""
+                }`}
+              />
+              <span className="text-[10.5px] leading-none font-medium">
+                {CONNECTION[conn].label}
+              </span>
+            </span>
             <span className="ml-auto">
               <Button
                 variant="ghost"

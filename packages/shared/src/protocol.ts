@@ -21,10 +21,11 @@ import type { PrState, RepoMemory, Run, RunEvent, Ticket } from "./types.js";
  *        Start a new attempt of a failed, cancelled, or waiting run. A waiting
  *        run resumes immediately instead of waiting for its limit to lift.
  *   POST /api/runs/:id/followup          -> Run
- *        Start a follow-up on a completed run's open PR: rebase onto the
- *        latest base, address review feedback, push with force-with-lease,
- *        and post a summary comment. 409 while another execution is active or
- *        when the PR is merged/closed.
+ *        body: FollowUpRequest (optional). Start a follow-up on a completed
+ *        run's open PR: rebase onto the latest base, address review feedback
+ *        plus any operator instructions, push with force-with-lease, and post
+ *        a summary comment. 409 while another execution is active or when the
+ *        PR is merged/closed.
  *   GET  /api/runs/:id/pr                -> PrStatusResponse
  *        Open/merged/closed state of the run's PR, for the dashboard's
  *        follow-up button.
@@ -298,6 +299,12 @@ export interface GithubRepo {
   description: string;
   /** ISO timestamp of the last push. */
   pushedAt: string;
+}
+
+/** Optional body of POST /api/runs/:id/followup. */
+export interface FollowUpRequest {
+  /** Operator-typed instructions handed to the follow-up agent alongside the PR's review feedback. */
+  instructions?: string;
 }
 
 /** Live state of the pull request a completed run opened, probed from GitHub on demand. */

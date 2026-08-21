@@ -17,7 +17,19 @@ import { clock, elapsed, oneLine } from "../lib/format";
 import { STATUS_TONE } from "../lib/status";
 import { Plate } from "./Bits";
 import { DiffTable } from "./Diff";
-import { Check, ChevronRight, Doc, Pin, Terminal as TerminalIcon } from "./Icons";
+import { Check, ChevronRight, Doc, Pin, Send, Terminal as TerminalIcon } from "./Icons";
+
+/** The follow-up instruction input pinned under the feed; see RunDetail for the gating. */
+export interface ActivityComposer {
+  /** False renders the input disabled; the hint says why. */
+  enabled: boolean;
+  /** Why sending is unavailable right now, shown under the disabled input. */
+  hint?: string;
+  /** A follow-up is already queueing or running; keeps the send button spinning. */
+  busy: boolean;
+  /** Queue the follow-up run; resolves true when accepted, which clears the draft. */
+  onSend: (text: string) => Promise<boolean>;
+}
 
 /**
  * The run's activity feed: what the agent said, thought, edited, and ran,
@@ -29,10 +41,12 @@ export function Activity({
   runId,
   events,
   live,
+  composer,
 }: {
   runId: string;
   events: RunEvent[];
   live: boolean;
+  composer?: ActivityComposer;
 }) {
   const items = useMemo(() => toActivity(events), [events]);
 
@@ -143,7 +157,82 @@ export function Activity({
           </div>
         )}
       </div>
+
+      {composer && <Composer runId={runId} composer={composer} />}
     </Card>
+  );
+}
+
+/**
+ * Codex-style prompt input pinned under the feed: Enter sends, Shift+Enter
+ * breaks a line, and a send queues a follow-up run on the run's PR.
+ */
+function Composer({ runId, composer }: { runId: string; composer: ActivityComposer }) {
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const box = useRef<HTMLTextAreaElement>(null);
+  // The draft belongs to the run it was typed for.
+  useEffect(() => setText(""), [runId]);
+  // Grow with the draft, up to a handful of lines.
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+  }, [text]);
+  const spinning = sending || composer.busy;
+  const canSend = composer.enabled && !spinning && text.trim().length > 0;
+  const send = () => {
+    if (!canSend) return;
+    setSending(true);
+    void composer
+      .onSend(text.trim())
+      .then((ok) => {
+        if (ok) setText("");
+      })
+      .finally(() => setSending(false));
+  };
+  return (
+    <div className="shrink-0 border-t border-ink-700 bg-ink-850 px-3 py-2.5">
+      <div className="flex items-end gap-2">
+        <textarea
+          ref={box}
+          value={text}
+          rows={1}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              send();
+            }
+          }}
+          disabled={!composer.enabled || spinning}
+          placeholder="Tell the agent what to change on this pull request…"
+          aria-label="Follow-up instructions"
+          className="max-h-[132px] min-h-[34px] w-full resize-none rounded-md border border-ink-600 bg-ink-950/70 px-2.5 py-2 text-[12.5px] leading-relaxed text-haze-100 placeholder:text-haze-700 focus:border-ink-400 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+        />
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={send}
+          disabled={!canSend}
+          aria-label="Send follow-up instructions"
+          title="Send (Enter); starts a follow-up run on the pull request"
+          className="shrink-0"
+        >
+          {spinning ? (
+            <span className="size-3 animate-spin rounded-full border border-haze-600 border-t-transparent" />
+          ) : (
+            <Send className="size-3.5" />
+          )}
+        </Button>
+      </div>
+      <p className="mt-1.5 font-mono text-[10.5px] leading-relaxed text-haze-700">
+        {composer.enabled
+          ? "Enter to send, Shift+Enter for a new line. Sending starts a follow-up run on this pull request."
+          : (composer.hint ?? "Follow-up instructions are unavailable for this run.")}
+      </p>
+    </div>
   );
 }
 

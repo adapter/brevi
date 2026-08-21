@@ -95,6 +95,9 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
   // brevi push; runs persisted before it existed fall back to the completion
   // time, which lands seconds after the original push.
   const commentsSince = result.pushedAt ?? run.finishedAt;
+  // Operator-typed instructions from the dashboard's follow-up composer; they
+  // force an agent session even when GitHub itself has nothing new.
+  const instructions = prompts.followUpInstructions?.trim() || undefined;
 
   await store.beginAttempt(run.id, "follow-up");
   try {
@@ -286,7 +289,7 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
 
     // ---- running (only when there is something for the agent to do) ------
     const actionable = hasActionableFeedback(feedback);
-    const needAgent = actionable || rebase.status === "conflicted";
+    const needAgent = actionable || rebase.status === "conflicted" || Boolean(instructions);
     if (needAgent) {
       await store.setStatus(run.id, "running");
       const { mainModel, mainEffort, delegate } = agentModelPlan(config);
@@ -301,6 +304,7 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
           // The full gathered bundle, verbatim: even a conflict-only session
           // needs the PR's mergeability and CI state.
           feedback: formatPrFeedback(feedback),
+          instructions,
           rebase,
           delegate,
           memories: recalled,
@@ -382,7 +386,7 @@ export async function executeFollowUp(ctx: RunContext): Promise<void> {
     // no-op (branch already current, nothing to address) posts nothing.
     // Reviewers' threads are deliberately left unresolved; resolving them is
     // the reviewer's call.
-    if (headChanged || actionable) {
+    if (headChanged || actionable || instructions) {
       // Last signal check before the other remote side effect; a push that
       // already landed stays (pushedAt above already recorded it).
       throwIfAborted(signal);
