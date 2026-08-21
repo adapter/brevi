@@ -74,7 +74,7 @@ async function startHost(ttlMinutes?: number): Promise<Host> {
   const fleet = ttlMinutes === undefined ? new FleetStore(fleetPath) : new FleetStore(fleetPath, ttlMinutes);
   await fleet.init();
   const registry = new WorkerRegistry({
-    config,
+    config: () => config,
     store,
     memories,
     fleet,

@@ -220,7 +220,8 @@ export interface RestoredLease {
 }
 
 export interface WorkerRegistryOptions {
-  config: BreviConfig;
+  /** Accessor for the orchestrator's current config snapshot; re-read per use so settings and credential changes apply without a rebuild. */
+  config: () => BreviConfig;
   store: RunStore;
   memories: MemoryStore;
   /** Who is enrolled, and the credentials that prove it; see fleet.ts. */
@@ -332,7 +333,7 @@ function mergeSandbox(
 }
 
 export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
-  readonly #config: BreviConfig;
+  readonly #config: () => BreviConfig;
   readonly #store: RunStore;
   readonly #memories: MemoryStore;
   readonly #fleet: FleetStore;
@@ -880,9 +881,9 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       type: "attach-open",
       attachId,
       runId,
-      // The live config, not a snapshot: a credential rotated after the
-      // sandbox was retained still has to reach it on this attach.
-      config: this.#config,
+      // The current config snapshot, read at attach time: a credential
+      // rotated after the sandbox was retained still has to reach it here.
+      config: this.#config(),
       cols: options.cols,
       rows: options.rows,
     });
@@ -989,7 +990,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
         workerName: entry.workerName,
         kind: entry.kind,
         issuedAt: entry.issuedAt,
-        expiresAt: Date.now() + this.#config.fleet.reconnectGraceSeconds * 1000,
+        expiresAt: Date.now() + this.#config().fleet.reconnectGraceSeconds * 1000,
         appliedSeq: entry.appliedSeq,
         // Nothing is applied out of order or in flight in a process that has
         // only just booted: the worker replays everything above the
@@ -1121,8 +1122,8 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   #leaseDeadline(): number {
     return (
       Date.now() +
-      (this.#config.fleet.heartbeatTimeoutSeconds +
-        this.#config.fleet.reconnectGraceSeconds) *
+      (this.#config().fleet.heartbeatTimeoutSeconds +
+        this.#config().fleet.reconnectGraceSeconds) *
         1000
     );
   }
@@ -1171,7 +1172,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
   /** Pull a lease's deadline in to just its reconnect grace window; called when the lease's worker is known to be gone. */
   #pullInLeaseDeadline(lease: Lease): void {
     lease.expiresAt =
-      Date.now() + this.#config.fleet.reconnectGraceSeconds * 1000;
+      Date.now() + this.#config().fleet.reconnectGraceSeconds * 1000;
     this.#leaseStore.put(this.#toPersisted(lease));
   }
 
@@ -1574,7 +1575,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
         `[brevi] worker ${entry.name} (${entry.id}) missed its heartbeat; dropping the connection`,
       );
       entry.socket.terminate();
-    }, this.#config.fleet.heartbeatTimeoutSeconds * 1000);
+    }, this.#config().fleet.heartbeatTimeoutSeconds * 1000);
     timer.unref();
     this.#heartbeatTimers.set(entry.id, timer);
   }
@@ -1665,7 +1666,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
 
     const leases = this.#leasesForWorker(entry.id);
     if (leases.length === 0) return;
-    const graceSeconds = this.#config.fleet.reconnectGraceSeconds;
+    const graceSeconds = this.#config().fleet.reconnectGraceSeconds;
     console.warn(
       `[brevi] worker ${entry.name} (${entry.id}) disconnected with ${leases.length} run(s) in flight; ` +
         `giving it ${graceSeconds}s to reconnect before treating them as interrupted`,
@@ -2104,7 +2105,7 @@ export class WorkerRegistry extends EventEmitter<WorkerRegistryEvents> {
       message.repo,
       message.learned,
       {
-        maxEntries: this.#config.memory.maxEntries,
+        maxEntries: this.#config().memory.maxEntries,
         ident: message.ident,
       },
     );

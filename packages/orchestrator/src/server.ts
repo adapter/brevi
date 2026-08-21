@@ -211,7 +211,6 @@ async function workerApi(
 
 function buildApp(
   orchestrator: Orchestrator,
-  config: BreviConfig,
   /**
    * The port actually listening, not `config.server.port`: the port is
    * editable from the dashboard and takes effect on restart, so the live
@@ -266,7 +265,9 @@ function buildApp(
     return c.json(health);
   });
 
-  app.get("/api/config", (c) => c.json(redactConfig(config)));
+  // Read through the orchestrator: config is an immutable snapshot swapped on
+  // every change, not a shared mutable object.
+  app.get("/api/config", (c) => c.json(redactConfig(orchestrator.config)));
 
   app.get("/api/tickets", (c) => c.json(orchestrator.tickets));
 
@@ -768,7 +769,6 @@ interface WsClient {
 function attachWebSockets(
   server: HttpServer,
   orchestrator: Orchestrator,
-  config: BreviConfig,
   managementToken: string | undefined,
 ): { close(): void } {
   const wss = new WebSocketServer({ noServer: true });
@@ -821,7 +821,7 @@ function attachWebSockets(
       type: "hello",
       runs: orchestrator.listRuns(),
       tickets: orchestrator.tickets,
-      config: redactConfig(config),
+      config: redactConfig(orchestrator.config),
       linearStatus: orchestrator.linearStatus,
       workers: orchestrator.listWorkers(),
     });
@@ -977,7 +977,6 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
   let boundPort = config.server.port;
   const app = buildApp(
     orchestrator,
-    config,
     () => boundPort,
     options.hostExecution,
     options.managementToken,
@@ -999,7 +998,7 @@ export async function startOrchestrator(options: StartOptions = {}): Promise<Orc
   // restart-required, so a saved change reaches the live config while this
   // socket stays where it is (see Orchestrator#dashboardEndpoint).
   orchestrator.setDashboardEndpoint({ host: config.server.host, port });
-  const sockets = attachWebSockets(server, orchestrator, config, options.managementToken);
+  const sockets = attachWebSockets(server, orchestrator, options.managementToken);
   const fleetListener = await startFleetListener(orchestrator, config);
 
   return {

@@ -1,6 +1,7 @@
 export * from "./types.js";
 export * from "./config.js";
 export * from "./configFile.js";
+export * from "./jsonStore.js";
 export * from "./paths.js";
 export * from "./safepath.js";
 export * from "./protocol.js";
