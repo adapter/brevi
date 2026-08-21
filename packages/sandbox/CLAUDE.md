@@ -5,9 +5,10 @@ The execution environment for agent runs. One `Sandbox` holds one run's workspac
 ## Layout (src/)
 
 - `types.ts`: the `Sandbox` / `SandboxProvider` interface
-- `select.ts`: `createSandboxProvider()` picks by platform (Linux: bwrap, macOS: seatbelt) after `ensureAvailable()`
-- `bwrap/`: bubblewrap provider (Linux namespaces); every launch runs through pasta (passt) for a private netns with outbound-only user-mode networking, no host loopback access
-- `seatbelt/`: macOS provider: per-run SBPL profile run through `sandbox-exec`. Policy confinement, not namespaces: writes limited to the run root and tmp, credential trees and the rest of `~/.brevi` unreadable, outbound network open. The weaker of the two providers
+- `provider.ts`: the one concrete `Sandbox`/`SandboxProvider`, parameterized by a per-platform `SandboxStrategy` (argv wrap, availability probe, per-run setup/cleanup, process-group reaping)
+- `select.ts`: `createSandboxProvider()` picks the strategy by platform (Linux: bwrap, macOS: seatbelt) after `ensureAvailable()`
+- `bwrap/`: bubblewrap strategy (Linux namespaces); every launch runs through pasta (passt) for a private netns with outbound-only user-mode networking, no host loopback access
+- `seatbelt/`: macOS strategy: per-run SBPL profile run through `sandbox-exec`. Policy confinement, not namespaces: writes limited to the run root and tmp, credential trees and the rest of `~/.brevi` unreadable, outbound network open. The weaker of the two sandboxes
 - `exec.ts`, `host.ts`, `paths.ts`: shared exec/streaming and path helpers
 - `hostfs.ts`: symlink-safe host-side reads/writes into agent-controlled trees (Linux: dirfd walk with O_NOFOLLOW; macOS: O_NOFOLLOW_ANY)
 

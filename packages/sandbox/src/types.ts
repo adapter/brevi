@@ -28,12 +28,6 @@ export interface ExecResult {
   stderr: string;
 }
 
-/** How a host process can open an interactive session inside a sandbox. */
-export type SandboxConnection = {
-  kind: "local";
-  workspacePath: string;
-};
-
 /** argv to spawn a command inside the sandbox (exec and PTY attach). */
 export interface SandboxLaunch {
   file: string;
@@ -67,8 +61,6 @@ export interface Sandbox {
   pullDirectory(srcPath: string, localPath: string): Promise<void>;
   writeFile(path: string, contents: string): Promise<void>;
   readFile(path: string): Promise<string>;
-  /** How to open an interactive session inside this sandbox from the host. */
-  connection(): SandboxConnection;
   /**
    * argv that runs `command` inside the sandbox (PTY attach uses the same
    * wrap as exec). `env` is extra environment merged over the sandbox's

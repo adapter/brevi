@@ -45,16 +45,66 @@ async function darwinOpenWithin(
 const O_SYMLINK = 0x200000;
 
 /**
- * macOS directory copy out of the sandbox (e.g. pulling the workspace after a
+ * Directory copy out of the sandbox (e.g. pulling the workspace after a
  * run). fs.cp would re-walk pathnames a still-running sandbox process could
- * swap for symlinks mid-copy; instead every file is opened with
- * O_NOFOLLOW_ANY (a racing swap turns into ELOOP, never a host read) and
- * symlink entries are copied verbatim as symlinks, never followed.
+ * swap for symlinks mid-copy; instead every file is opened without following
+ * symlinks (macOS: O_NOFOLLOW_ANY; Linux: a dirfd walk with O_NOFOLLOW), so
+ * a racing swap turns into ELOOP, never a host read, and symlink entries are
+ * copied verbatim as symlinks, never followed.
  */
 export async function copyDirOutOfWithin(rootDir: string, srcDir: string, destDir: string): Promise<void> {
   const parts = relativeParts(rootDir, srcDir, "copy");
-  const real = await realpath(rootDir);
-  await copyOut(real, parts, destDir);
+  if (DARWIN) {
+    const real = await realpath(rootDir);
+    await copyOut(real, parts, destDir);
+    return;
+  }
+  let dir = await openRoot(rootDir);
+  try {
+    for (const part of parts) dir = await step(dir, part, false);
+    await copyOutFrom(dir, destDir);
+  } finally {
+    await dir.close();
+  }
+}
+
+/**
+ * Linux copy-out: the source directory is a verified handle, children are
+ * opened through /proc/self/fd/<dirfd> with O_NOFOLLOW, so no component of
+ * any source path is ever re-walked as a plain string.
+ */
+async function copyOutFrom(dir: FileHandle, destDir: string): Promise<void> {
+  await mkdir(destDir, { recursive: true });
+  for (const entry of await readdir(procPath(dir, "."), { withFileTypes: true })) {
+    const childDest = join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      const child = await openAt(dir, entry.name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+      try {
+        await copyOutFrom(child, childDest);
+      } finally {
+        await child.close();
+      }
+    } else if (entry.isSymbolicLink()) {
+      // The link's content is copied as a string; nothing ever follows it.
+      const target = await readlink(procPath(dir, entry.name));
+      await rm(childDest, { recursive: true, force: true });
+      await symlink(target, childDest);
+    } else if (entry.isFile()) {
+      // O_NONBLOCK so a regular file swapped for a fifo between readdir and
+      // open cannot block this host-side read; the fstat below then rejects
+      // the non-regular file.
+      const src = await openAt(dir, entry.name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+      try {
+        const stats = await src.stat();
+        if (!stats.isFile()) continue;
+        await rm(childDest, { recursive: true, force: true });
+        await pipeline(src.createReadStream(), createWriteStream(childDest, { mode: stats.mode & 0o777 }));
+      } finally {
+        await src.close();
+      }
+    }
+    // Sockets and fifos are not copied.
+  }
 }
 
 async function copyOut(rootReal: string, parts: string[], destDir: string): Promise<void> {
@@ -92,18 +142,90 @@ async function copyOut(rootReal: string, parts: string[], destDir: string): Prom
 }
 
 /**
- * macOS directory copy into the sandbox (checkout push, follow-up .git
- * refresh). Destination files are created through O_NOFOLLOW_ANY opens and
- * every directory level is verified after mkdir, so a swapped component
- * fails the copy instead of redirecting it. A replaced symlink entry is
- * re-verified with O_SYMLINK | O_NOFOLLOW_ANY after creation and removed if
- * the verification fails.
+ * Directory copy into the sandbox (checkout push, follow-up .git refresh).
+ * Destination files are created through symlink-refusing opens (macOS:
+ * O_NOFOLLOW_ANY; Linux: a dirfd walk with O_NOFOLLOW) and every directory
+ * level is verified after mkdir, so a swapped component fails the copy
+ * instead of redirecting it. On macOS a replaced symlink entry is re-verified
+ * with O_SYMLINK | O_NOFOLLOW_ANY after creation and removed if the
+ * verification fails.
  */
 export async function copyDirIntoWithin(rootDir: string, srcDir: string, destDir: string): Promise<void> {
   const parts = relativeParts(rootDir, destDir, "create");
-  const real = await realpath(rootDir);
-  await darwinDescendDir(rootDir, parts, true);
-  await copyInto(real, parts, srcDir);
+  if (DARWIN) {
+    const real = await realpath(rootDir);
+    await darwinDescendDir(rootDir, parts, true);
+    await copyInto(real, parts, srcDir);
+    return;
+  }
+  let dir = await openRoot(rootDir);
+  try {
+    for (const part of parts) dir = await step(dir, part, true);
+    await copyIntoAt(dir, srcDir);
+  } finally {
+    await dir.close();
+  }
+}
+
+/**
+ * Linux copy-in: the destination directory is a verified handle and every
+ * destination entry is addressed through /proc/self/fd/<dirfd>/<name>, so
+ * ancestors cannot be swapped out from under the copy; O_NOFOLLOW on the
+ * final component turns a planted symlink into ELOOP.
+ */
+async function copyIntoAt(dir: FileHandle, srcDir: string): Promise<void> {
+  for (const entry of await readdir(srcDir, { withFileTypes: true })) {
+    const childSrc = join(srcDir, entry.name);
+    const destPath = procPath(dir, entry.name);
+    if (entry.isDirectory()) {
+      const existing = await lstat(destPath).catch(() => undefined);
+      if (existing && !existing.isDirectory()) await rm(destPath, { force: true, recursive: false });
+      try {
+        await mkdir(destPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        // EEXIST covers a symlink here too; the O_NOFOLLOW open below rejects it.
+      }
+      const child = await openAt(dir, entry.name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+      try {
+        await copyIntoAt(child, childSrc);
+      } finally {
+        await child.close();
+      }
+    } else if (entry.isSymbolicLink()) {
+      const target = await readlink(childSrc);
+      const existing = await lstat(destPath).catch(() => undefined);
+      if (existing?.isDirectory()) {
+        throw new Error(`refusing to replace directory ${entry.name} with a symlink`);
+      }
+      if (existing) await rm(destPath, { force: true, recursive: false });
+      await symlink(target, destPath);
+    } else if (entry.isFile()) {
+      const stats = await lstat(childSrc);
+      const src = await open(childSrc, O_RDONLY);
+      try {
+        // ELOOP means an existing symlink entry; one non-recursive unlink of
+        // that single entry and a retry covers the overwrite-a-symlink case.
+        let dest: FileHandle;
+        try {
+          dest = await open(destPath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, stats.mode & 0o777);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ELOOP") throw error;
+          await rm(destPath, { force: true, recursive: false });
+          dest = await open(destPath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, stats.mode & 0o777);
+        }
+        try {
+          // open()'s mode only applies at creation; fchmod covers overwrites.
+          await dest.chmod(stats.mode & 0o777);
+          await pipeline(src.createReadStream(), dest.createWriteStream());
+        } finally {
+          await dest.close();
+        }
+      } finally {
+        await src.close();
+      }
+    }
+  }
 }
 
 /**
@@ -176,6 +298,8 @@ async function copyInto(rootReal: string, parts: string[], srcDir: string): Prom
           dest = await open(destPath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, stats.mode & 0o777);
         }
         try {
+          // open()'s mode only applies at creation; fchmod covers overwrites.
+          await dest.chmod(stats.mode & 0o777);
           await pipeline(src.createReadStream(), dest.createWriteStream());
         } finally {
           await dest.close();

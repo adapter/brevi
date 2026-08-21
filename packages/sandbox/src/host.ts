@@ -1,15 +1,6 @@
 import { access, constants } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 
-/** True when the path exists and is both readable and writable by this process. */
-export async function isReadWritable(path: string): Promise<boolean> {
-  return accessible(path, constants.R_OK | constants.W_OK);
-}
-
-export async function fileExists(path: string): Promise<boolean> {
-  return accessible(path, constants.F_OK);
-}
-
 /**
  * Resolves an executable the way a shell would: absolute/relative paths are checked
  * directly, bare names are looked up on PATH. Returns undefined when not found.

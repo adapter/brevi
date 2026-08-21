@@ -1,4 +1,14 @@
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -175,7 +185,7 @@ describe("directory containment", () => {
   });
 });
 
-describe.if(process.platform === "darwin")("directory copies on macOS", () => {
+describe("directory copies", () => {
   test("round-trips a tree, copying symlink entries verbatim", async () => {
     const src = join(outside, "src");
     mkdirSync(join(src, "nested"), { recursive: true });
@@ -192,6 +202,22 @@ describe.if(process.platform === "darwin")("directory copies on macOS", () => {
     await copyDirOutOfWithin(root, join(root, "workspace", "in"), out);
     expect(readFileSync(join(out, "nested", "b.txt"), "utf8")).toBe("beta");
     expect(lstatSync(join(out, "link")).isSymbolicLink()).toBe(true);
+  });
+
+  test("push applies the source mode when overwriting an existing file", async () => {
+    const src = join(outside, "src-mode");
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "run.sh"), "#!/bin/sh\n");
+    chmodSync(join(src, "run.sh"), 0o755);
+
+    const dest = join(root, "workspace", "in-mode");
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, "run.sh"), "old");
+    chmodSync(join(dest, "run.sh"), 0o644);
+
+    await copyDirIntoWithin(root, src, dest);
+    expect(readFileSync(join(dest, "run.sh"), "utf8")).toBe("#!/bin/sh\n");
+    expect(statSync(join(dest, "run.sh")).mode & 0o777).toBe(0o755);
   });
 
   test("push refuses a symlinked destination component", async () => {

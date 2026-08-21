@@ -13,14 +13,11 @@ const TIMEOUT_EXIT_CODE = 124;
 const FORCE_KILL_DELAY_MS = 5_000;
 
 export interface RunCommandOptions {
-  cwd?: string;
   /** Complete environment for the child. When omitted the host environment is inherited. */
   env?: Record<string, string>;
   timeoutMs?: number;
   /** Terminates the child when aborted; the returned promise still resolves. */
   signal?: AbortSignal;
-  /** Written to the child's stdin and then closed. */
-  input?: string;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
   /**
@@ -46,7 +43,6 @@ export async function runCommand(
   const stderr = new OutputBuffer(options.onStderr);
 
   const execaOptions: Options = {
-    cwd: options.cwd,
     env: options.env,
     extendEnv: options.env === undefined,
     timeout: options.timeoutMs ?? 0,
@@ -55,7 +51,7 @@ export async function runCommand(
     buffer: false,
     reject: false,
     ...(options.detached ? { detached: true } : {}),
-    ...(options.input === undefined ? { stdin: "ignore" } : { input: options.input }),
+    stdin: "ignore",
   };
 
   const subprocess = execa(file, args, execaOptions);
@@ -108,19 +104,6 @@ export async function runCommand(
     stdout: stdout.finish(),
     stderr: stderr.finish(),
   };
-}
-
-/** Convenience wrapper for internal commands where a non-zero exit is a bug, not a result. */
-export async function runOrThrow(
-  file: string,
-  args: string[],
-  options: RunCommandOptions = {},
-): Promise<string> {
-  const result = await runCommand(file, args, options);
-  if (result.exitCode !== 0) {
-    throw new Error(`${file} failed (exit ${result.exitCode}): ${result.stderr.trim()}`);
-  }
-  return result.stdout;
 }
 
 interface CommandOutcome {

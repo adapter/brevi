@@ -1,5 +1,6 @@
-import { BwrapProvider } from "./bwrap/provider.js";
-import { SeatbeltProvider } from "./seatbelt/provider.js";
+import { bwrapStrategy } from "./bwrap/strategy.js";
+import { PlatformSandboxProvider } from "./provider.js";
+import { seatbeltStrategy } from "./seatbelt/strategy.js";
 import type { SandboxProvider } from "./types.js";
 
 /**
@@ -9,8 +10,9 @@ import type { SandboxProvider } from "./types.js";
  * and no cross-platform switch.
  */
 export async function createSandboxProvider(): Promise<SandboxProvider> {
-  const provider: SandboxProvider =
-    process.platform === "darwin" ? new SeatbeltProvider() : new BwrapProvider();
+  const provider = new PlatformSandboxProvider(
+    process.platform === "darwin" ? seatbeltStrategy : bwrapStrategy,
+  );
   await provider.ensureAvailable();
   return provider;
 }

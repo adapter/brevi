@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { BREVI_HOME } from "@brevi/shared";
 import { SANDBOX_DNS_ADDR, wrapInBwrap } from "../src/bwrap/wrap.js";
-import { collectBwrapProblems, sandboxEnv } from "../src/bwrap/provider.js";
+import { bwrapStrategy, collectBwrapProblems } from "../src/bwrap/strategy.js";
+import { sandboxEnv } from "../src/provider.js";
 
 const ENV = { HOME: "/tmp/run-1/home", TMPDIR: "/tmp", PATH: "/usr/bin:/bin" };
 const TOOLS = { bwrap: "/usr/bin/bwrap", pasta: "/usr/bin/pasta" };
@@ -144,7 +145,7 @@ describe("wrapInBwrap", () => {
 
 describe("sandboxEnv", () => {
   test("forces HOME and TMPDIR and drops host secrets", () => {
-    const env = sandboxEnv("/tmp/run-1/home", { ANTHROPIC_API_KEY: "sk-test" });
+    const env = sandboxEnv("/tmp/run-1/home", bwrapStrategy.env, { ANTHROPIC_API_KEY: "sk-test" });
     expect(env.HOME).toBe("/tmp/run-1/home");
     expect(env.TMPDIR).toBe("/tmp");
     expect(env.ANTHROPIC_API_KEY).toBe("sk-test");
@@ -152,11 +153,16 @@ describe("sandboxEnv", () => {
     expect(env.BREVI_WORKER_CREDENTIAL).toBeUndefined();
   });
 
-  // This is the merge BwrapSandbox.wrap() applies to a caller's `options.env`;
-  // exercised directly here because BwrapProvider.create() needs bwrap/pasta
+  // This is the merge PlatformSandbox.wrap() applies to a caller's `options.env`;
+  // exercised directly here because creating a bwrap sandbox needs bwrap/pasta
   // on PATH, which this (macOS) test host does not have.
   test("caller extras from wrap() override create-time env for the same key and keep the rest", () => {
-    const env = sandboxEnv("/tmp/run-1/home", { CODEX_HOME: "/create-time", KEPT: "yes" }, { CODEX_HOME: "/x" });
+    const env = sandboxEnv(
+      "/tmp/run-1/home",
+      bwrapStrategy.env,
+      { CODEX_HOME: "/create-time", KEPT: "yes" },
+      { CODEX_HOME: "/x" },
+    );
     expect(env.HOME).toBe("/tmp/run-1/home");
     expect(env.CODEX_HOME).toBe("/x");
     expect(env.KEPT).toBe("yes");
