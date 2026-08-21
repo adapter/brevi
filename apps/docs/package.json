@@ -14,13 +14,13 @@
     "deploy:preview": "wrangler versions upload --env production"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.41.6",
-    "astro": "^7.1.6",
-    "posthog-js": "^1.412.0",
+    "@astrojs/starlight": "^0.41.7",
+    "astro": "^7.2.2",
+    "posthog-js": "^1.417.4",
     "sharp": "^0.35.3"
   },
   "devDependencies": {
-    "oxlint": "^1.77.0",
-    "wrangler": "^4.118.0"
+    "oxlint": "^1.78.0",
+    "wrangler": "^4.123.0"
   }
 }
