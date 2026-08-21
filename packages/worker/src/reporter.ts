@@ -13,7 +13,7 @@ import {
   type RunStatus,
   type WorkerMessage,
 } from "@brevi/shared";
-import { resolveWithin } from "@brevi/orchestrator/internal";
+import { resolveWithin } from "@brevi/shared";
 import type { WorkerConnection } from "./connection.js";
 import type { RunSink } from "./sink.js";
 

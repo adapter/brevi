@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { WORKSPACES_DIR } from "@brevi/shared";
 import type { Sandbox } from "@brevi/sandbox";
-import { isSafePathSegment } from "@brevi/orchestrator/internal";
+import { isSafePathSegment } from "@brevi/shared";
 import { buildCredentialProfile, buildGitAskpass } from "./resume.js";
 
 export interface ProvisionedCredentials {

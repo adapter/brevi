@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { WORKSPACES_DIR } from "@brevi/shared";
+import { isContainedRegularFile, isTerminal, WORKSPACES_DIR } from "@brevi/shared";
 import type { Sandbox } from "@brevi/sandbox";
 import {
   AgentLimitError,
@@ -11,18 +11,15 @@ import {
   formatPrFeedback,
   gatherPrFeedback,
   hasActionableFeedback,
-  isContainedRegularFile,
-  isTerminal,
   memoryKeyFor,
   parsePrUrl,
   plainRemote,
   postPrComment,
   readRunMemories,
   resolveCommitIdentity,
-  RunCancelledError,
-  throwIfAborted,
   type PrFeedback,
-} from "@brevi/orchestrator/internal";
+} from "@brevi/integrations";
+import { RunCancelledError, throwIfAborted } from "./util.js";
 import { resolveCcusageCommand } from "./ccusage.js";
 import { buildFollowUpPrompt } from "./prompts.js";
 import { provisionCredentials } from "./provision.js";

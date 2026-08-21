@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { WORKER_MAX_USAGE_SNAPSHOT_BYTES } from "@brevi/shared";
 import { readdirWithin, readFileWithin } from "@brevi/sandbox";
-import { isSafePathSegment } from "@brevi/orchestrator/internal";
+import { isSafePathSegment } from "@brevi/shared";
 
 /**
  * Post-execution export of usage-only Claude session snapshots (PD-74): find

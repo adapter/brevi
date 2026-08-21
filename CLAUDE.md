@@ -8,6 +8,7 @@ Mission Control is the only host. Its Electron main process owns the orchestrato
 - `apps/app`: local-only React renderer.
 - `packages/orchestrator`: scheduler and private loopback API.
 - `packages/worker`: dedicated `brevi-worker` daemon, binary, and installer.
+- `packages/integrations`: GitHub, Linear, R2, credential, and usage-limit integrations shared by host and worker.
 - `packages/sandbox`: sandbox providers: bubblewrap (Linux), Seatbelt (macOS).
 - `packages/shared`: config, domain, and wire types.
 - `apps/api`: hosted OAuth helper.

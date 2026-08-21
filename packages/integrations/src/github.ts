@@ -15,13 +15,13 @@ import type {
   Ticket,
 } from "@brevi/shared";
 
-export interface RemoteParts {
+interface RemoteParts {
   owner: string;
   name: string;
 }
 
 /** Split an "owner/name" remote into its parts. */
-export function parseRemote(remote: string): RemoteParts {
+function parseRemote(remote: string): RemoteParts {
   const [owner, name] = remote.split("/");
   if (!owner || !name) throw new Error(`invalid repo remote "${remote}", expected "owner/name"`);
   return { owner, name };
@@ -137,27 +137,6 @@ export async function markPullRequestReady(prUrl: string, token: string): Promis
     }`,
     { id: pr.data.node_id },
   );
-}
-
-/**
- * Live state of the pull request at an html url. Returns null when the url
- * is not a GitHub PR url or GitHub cannot be reached, so a transient failure
- * never flips a stored state.
- */
-export async function fetchPullRequestState(prUrl: string, token: string): Promise<PrState | null> {
-  try {
-    return (await fetchPrStatus(prUrl, token)).state;
-  } catch {
-    return null;
-  }
-}
-
-/** Default branch reported by GitHub; used when repo config doesn't say. */
-export async function defaultBranchOf(remote: string, token: string): Promise<string> {
-  const { owner, name } = parseRemote(remote);
-  const octokit = new Octokit({ auth: token });
-  const repo = await octokit.rest.repos.get({ owner, repo: name });
-  return repo.data.default_branch;
 }
 
 export interface CommitIdentity {

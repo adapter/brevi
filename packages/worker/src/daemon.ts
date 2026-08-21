@@ -4,6 +4,8 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   CONFIG_DEFAULTS,
+  isTerminal,
+  loadConfig,
   resolveWorkerOs,
   WORKSPACES_DIR,
   type BreviConfig,
@@ -19,8 +21,7 @@ import {
   type WorkerState,
 } from "@brevi/shared";
 import { createSandboxProvider, resolveBinary, type SandboxProvider } from "@brevi/sandbox";
-import { loadConfig } from "@brevi/orchestrator";
-import { isTerminal, LinearService, readMachineUsage } from "@brevi/orchestrator/internal";
+import { LinearService, readMachineUsage } from "@brevi/integrations";
 import { createAttachSessions, type AttachSessions } from "./attach.js";
 import { connectToHost, type WorkerConnection } from "./connection.js";
 import { executeFollowUp } from "./followup.js";

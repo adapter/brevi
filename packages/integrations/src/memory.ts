@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { MEMORIES_DIR, type RepoMemory } from "@brevi/shared";
-import { isContainedRegularFile } from "./safepath.js";
+import { isContainedRegularFile, MEMORIES_DIR, type RepoMemory } from "@brevi/shared";
 
 /**
  * Per-repository memories: the durable half of what a run learns. Every run
@@ -48,7 +47,7 @@ function dedupeKey(text: string): string {
  * should not have been stored is worse than one that was never captured, since
  * every later run in the repo is handed it.
  */
-export function parseMemories(markdown: string): string[] {
+function parseMemories(markdown: string): string[] {
   const candidates: string[] = [];
   for (const rawLine of markdown.split("\n")) {
     const line = rawLine.trim();

@@ -9,7 +9,8 @@
 
 import type { Sandbox } from "@brevi/sandbox";
 import { formatDuration, type BreviConfig, type CostEntry, type Ticket } from "@brevi/shared";
-import { agentProvider, lineSink, RunCancelledError, throwIfAborted } from "@brevi/orchestrator/internal";
+import { agentProvider } from "@brevi/integrations";
+import { lineSink, RunCancelledError, throwIfAborted } from "./util.js";
 import { ccusageCostEntry, readCodexSessionUsage } from "./ccusage.js";
 import { usageCollector } from "./costs.js";
 import { buildReviewerPrompt, buildReviewSynthesisPrompt, type ReviewAngle } from "./prompts.js";
