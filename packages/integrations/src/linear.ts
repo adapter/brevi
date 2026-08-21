@@ -179,6 +179,36 @@ export class LinearService {
     return closures;
   }
 
+  /**
+   * Current workflow state name per issue, one request per 50 ids. Feeds the
+   * poll loop's refresh of stored run tickets, which are enqueue-time
+   * snapshots and leave the eligible pool the moment their state moves on.
+   */
+  ticketStates(ids: string[]): Promise<Map<string, string>> {
+    return this.#withAuthRecovery(() => this.#ticketStates(ids));
+  }
+
+  async #ticketStates(ids: string[]): Promise<Map<string, string>> {
+    const states = new Map<string, string>();
+    // Raw query so each batch is a single request; the SDK's lazy issue.state
+    // would cost one request per issue on every poll.
+    const query = `query TicketStates($ids: [ID!]!) {
+      issues(filter: { id: { in: $ids } }, first: 50) {
+        nodes { id state { name } }
+      }
+    }`;
+    for (let offset = 0; offset < ids.length; offset += 50) {
+      const response = await this.#client.client.rawRequest<
+        { issues: { nodes: { id: string; state: { name: string } | null }[] } },
+        { ids: string[] }
+      >(query, { ids: ids.slice(offset, offset + 50) });
+      for (const node of response.data?.issues.nodes ?? []) {
+        if (node.state) states.set(node.id, node.state.name);
+      }
+    }
+    return states;
+  }
+
   /** Projects visible to the credential, for the dashboard's repo-mapping picker. */
   listProjects(): Promise<LinearProject[]> {
     return this.#withAuthRecovery(async () => {

@@ -638,8 +638,9 @@ function RunRow({
           </span>
         </span>
       </span>
+      {/* min-h-8 reserves both clamp lines, so one-line cards keep the same height. */}
       <span
-        className={`pointer-events-none relative mt-0.5 line-clamp-2 text-[12px] leading-[16px] ${
+        className={`pointer-events-none relative mt-0.5 line-clamp-2 min-h-8 text-[12px] leading-[16px] ${
           selected ? "text-haze-50" : "text-haze-200"
         }`}
       >
@@ -711,7 +712,7 @@ function TicketRow({
         href={ticket.url}
         target="_blank"
         rel="noreferrer"
-        className="mt-0.5 line-clamp-2 text-[12px] leading-[16px] text-haze-200 hover:text-haze-50"
+        className="mt-0.5 line-clamp-2 min-h-8 text-[12px] leading-[16px] text-haze-200 hover:text-haze-50"
       >
         {ticket.title}
       </a>

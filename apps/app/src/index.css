@@ -282,6 +282,17 @@
   left: 5rem;
 }
 
+/*
+  Content headers that sit in the floating trigger's corner while the sidebar
+  is collapsed start their content right of the button instead of under it.
+*/
+.collapsed-trigger-offset {
+  padding-left: 2.75rem;
+}
+[data-platform="mac"] .collapsed-trigger-offset {
+  padding-left: 7.25rem;
+}
+
 /* Scrollable strips (tab bars, the sidebar body) that hide their scrollbar. */
 @utility no-scrollbar {
   scrollbar-width: none;
