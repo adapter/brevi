@@ -12,7 +12,7 @@
     "release": "bun run --filter=@brevi/desktop package"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.31.1",
+    "@changesets/cli": "^3.0.1",
     "@types/node": "^26.2.0",
     "prettier": "^3.9.6",
     "turbo": "^2.10.10",
