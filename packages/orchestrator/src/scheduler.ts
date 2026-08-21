@@ -212,6 +212,8 @@ const PR_POLL_INTERVAL_MS = 120_000;
 const ARCHIVE_SWEEP_INTERVAL_MS = 10 * 60_000;
 /** Only this many of the newest eligible runs are checked per cycle. */
 const PR_POLL_RECENT_RUNS = 20;
+/** Newest unarchived runs whose ticket state each poll re-checks against Linear (one request per 50). */
+const TICKET_STATE_RECENT_RUNS = 50;
 /** Delay before retrying a failed retained-sandbox reap (the disk holds credential material). */
 const REAP_RETRY_MS = 60_000;
 /** How long config.json has to stay untouched before a hand edit is reloaded. */
@@ -882,12 +884,47 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     }
     this.#tickets = tickets;
     this.emit("tickets", tickets);
+    await this.#refreshTicketStates(tickets);
     for (const ticket of tickets) {
       try {
         await this.#maybeAutoQueue(ticket);
       } catch (error) {
         console.error(`[brevi] failed to queue ${ticket.identifier}: ${error instanceof Error ? error.message : String(error)}`);
       }
+    }
+  }
+
+  /**
+   * Keep stored runs' ticket state in step with Linear. A run's ticket is an
+   * enqueue-time snapshot, and an issue that left the eligible pool (In
+   * Progress, Done, ...) never comes back through fetchEligibleTickets, so
+   * without this the dashboard's State chip would show "Todo" forever. The
+   * store.update broadcast streams each change to the dashboard.
+   */
+  async #refreshTicketStates(eligible: Ticket[]): Promise<void> {
+    const linear = this.#linear;
+    if (!linear) return;
+    const fresh = new Map(eligible.map((ticket) => [ticket.id, ticket.state]));
+    const runs = this.store
+      .list()
+      .filter((run) => run.archivedAt === undefined)
+      .slice(0, TICKET_STATE_RECENT_RUNS);
+    const unknown = [...new Set(runs.map((run) => run.ticket.id))].filter((id) => !fresh.has(id));
+    if (unknown.length > 0) {
+      try {
+        for (const [id, state] of await linear.ticketStates(unknown)) fresh.set(id, state);
+      } catch (error) {
+        // Best effort: the eligible tickets' own states below still apply.
+        console.error(`[brevi] ticket state refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    for (const run of runs) {
+      const state = fresh.get(run.ticket.id);
+      if (state === undefined) continue;
+      // Re-read: the snapshot above is stale after the awaited fetch.
+      const current = this.store.get(run.id);
+      if (!current || current.ticket.state === state) continue;
+      await this.store.update(run.id, { ticket: { ...current.ticket, state } });
     }
   }
 

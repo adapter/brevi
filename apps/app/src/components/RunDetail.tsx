@@ -14,6 +14,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { useSidebar } from "@/components/ui/sidebar";
 import { api } from "../lib/api";
 import { clock, duration, elapsed } from "../lib/format";
 import { queueOnly } from "../lib/fleet";
@@ -137,10 +138,18 @@ export function RunDetail({
   const worker = run.sandbox.workerId
     ? workers.find((w) => w.id === run.sandbox.workerId)
     : undefined;
+  // While the sidebar is collapsed the floating trigger overlays this corner;
+  // shift the header content clear of it (see .collapsed-trigger-offset).
+  const { open, openMobile, isMobile } = useSidebar();
+  const sidebarClosed = isMobile ? !openMobile : !open;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700 bg-background px-4 py-2">
+      <div
+        className={`flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700 bg-background px-4 py-2 ${
+          sidebarClosed ? "collapsed-trigger-offset" : ""
+        }`}
+      >
         <span
           className="min-w-0 max-w-full flex-1 basis-52 truncate text-[13.5px] font-semibold text-haze-50"
           title={run.ticket.title}
