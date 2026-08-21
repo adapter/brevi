@@ -175,7 +175,7 @@ describe("directory containment", () => {
   });
 });
 
-describe.if(process.platform === "darwin")("directory copies on macOS", () => {
+describe("directory copies", () => {
   test("round-trips a tree, copying symlink entries verbatim", async () => {
     const src = join(outside, "src");
     mkdirSync(join(src, "nested"), { recursive: true });

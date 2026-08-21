@@ -1,8 +1,10 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
+import { PlatformSandboxProvider } from "../src/provider.js";
 import { seatbeltPolicy } from "../src/seatbelt/policy.js";
-import { SeatbeltProvider, seatbeltAvailable, wrapInSeatbelt } from "../src/seatbelt/provider.js";
+import { collectSeatbeltProblems, seatbeltStrategy } from "../src/seatbelt/strategy.js";
+import { wrapInSeatbelt } from "../src/seatbelt/wrap.js";
 
 const darwin = process.platform === "darwin";
 
@@ -63,11 +65,11 @@ describe("wrapInSeatbelt", () => {
 
 describe.if(darwin)("SeatbeltProvider on macOS", () => {
   test("probe passes on a healthy Mac", async () => {
-    expect(await seatbeltAvailable()).toBe(true);
+    expect(await collectSeatbeltProblems()).toEqual([]);
   }, 30_000);
 
   test("execs inside the workspace, denies writes and secret reads outside it", async () => {
-    const provider = new SeatbeltProvider();
+    const provider = new PlatformSandboxProvider(seatbeltStrategy);
     const id = `seatbelt-test-${Date.now()}`;
     const sandbox = await provider.create({ id });
     try {
@@ -92,7 +94,7 @@ describe.if(darwin)("SeatbeltProvider on macOS", () => {
   }, 60_000);
 
   test("wrap() merges caller env over create-time env and keeps HOME forced", async () => {
-    const provider = new SeatbeltProvider();
+    const provider = new PlatformSandboxProvider(seatbeltStrategy);
     const id = `seatbelt-wrap-env-${Date.now()}`;
     const sandbox = await provider.create({ id, env: { CODEX_HOME: "/create-time", KEPT: "yes" } });
     try {
@@ -107,7 +109,7 @@ describe.if(darwin)("SeatbeltProvider on macOS", () => {
   });
 
   test("reaps a daemonized descendant when the command returns", async () => {
-    const provider = new SeatbeltProvider();
+    const provider = new PlatformSandboxProvider(seatbeltStrategy);
     const id = `seatbelt-reap-${Date.now()}`;
     const sandbox = await provider.create({ id });
     const alive = (p) => {
