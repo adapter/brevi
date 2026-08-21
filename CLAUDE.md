@@ -33,5 +33,5 @@ cd apps/desktop && bun run start
 - SSH secrets and pairing tokens stay in Electron's main process. Never place them in renderer state, logs, config, or process arguments.
 - Commit and PR titles start with the Linear ticket, for example `PD-75: ...`.
 - Do not add attribution trailers.
-- `apps/desktop/package.json` owns the desktop version. `packages/worker/package.json` owns the dedicated worker version; keep release versions coordinated.
-- CI still requires a changeset file. Use an empty changeset for desktop releases because no npm package is published.
+- `apps/desktop/package.json` owns the desktop version and `packages/worker/package.json` owns the dedicated worker version; they are a changesets fixed group, so never hand-edit either.
+- Every PR adds a changeset with a real patch/minor bump for the packages it changes (`bun run changeset`; empty only when the change should not ship in a release). The Release workflow rolls pending changesets into a "Release: version packages" PR; merging that PR bumps the versions on main, which triggers the worker-binary and desktop-release publishes. Nothing is published to npm.

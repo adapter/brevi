@@ -5,6 +5,7 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
+  "fixed": [["@brevi/desktop", "@brevi/worker"]],
   "ignore": [],
-  "privatePackages": false
+  "privatePackages": { "version": true, "tag": false }
 }

@@ -184,9 +184,11 @@ jobs:
         run: |
           # Pinned to the exact wrangler version apps/api already depends on
           # (apps/api/package.json / bun.lock): this handles the Cloudflare
-          # token, so it must not float to whatever npx would otherwise
+          # token, so it must not float to whatever bunx would otherwise
           # resolve as latest. Bump it deliberately, in step with apps/api.
-          wrangler="npx --yes wrangler@4.118.0"
+          # bunx, not npx: npm trips over the repo's bun packageManager
+          # (EBADDEVENGINES) and never puts the wrangler bin on PATH.
+          wrangler="bunx wrangler@4.118.0"
 
           # Binary first, manifest last: the manifest's presence at this path
           # is what clients treat as "this worker version/arch is published"
