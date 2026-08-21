@@ -16,15 +16,14 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useSidebar } from "@/components/ui/sidebar";
 import { api } from "../lib/api";
-import { clock, duration, elapsed } from "../lib/format";
+import { clock, elapsed } from "../lib/format";
 import { queueOnly } from "../lib/fleet";
 import { isActive, isTerminal } from "../lib/status";
-import { Activity } from "./Activity";
+import { Activity, type ActivityComposer } from "./Activity";
 import { Artifacts } from "./Artifacts";
 import { Plate, PrChip, RepoChip, StatusChip } from "./Bits";
 import { CostBadge, CostBreakdown } from "./CostBadge";
 import { Archive, External, Play, Refresh, Stop, Unarchive } from "./Icons";
-import { ResultCard } from "./ResultCard";
 
 export function RunDetail({
   run,
@@ -38,12 +37,13 @@ export function RunDetail({
   onRetry,
   onArchive,
   onFollowUp,
+  onOpenPull,
   onOpenWorkers,
 }: {
   run: Run;
   /** owner/name of the mapped repo, resolved from config. */
   repoName: string | undefined;
-  /** The enrolled fleet, to resolve run.sandbox.workerId to a human name. */
+  /** The enrolled fleet, for the queued banner's capacity check. */
   workers: WorkerView[];
   /** Whether this machine can execute runs itself, for the queued banner. */
   health: HealthResponse | null;
@@ -54,7 +54,10 @@ export function RunDetail({
   onRetry: () => void;
   /** Archives the run, or restores it when the run is already archived. */
   onArchive: () => void;
-  onFollowUp: () => void | Promise<void>;
+  /** Queue a follow-up run, with the composer's instructions when given; resolves to the queued run or undefined on failure. */
+  onFollowUp: (instructions?: string) => Promise<Run | undefined>;
+  /** Opens brevi's own pull request page for the run's PR. */
+  onOpenPull: (repoKey: string, number: number) => void;
   /** Opens the Workers config page, for the queued banner's fix. */
   onOpenWorkers: () => void;
 }) {
@@ -65,7 +68,6 @@ export function RunDetail({
     health?.hostExecution?.kind === "none" && queueOnly(health, workers)
       ? health.hostExecution
       : undefined;
-  const hasOutcome = isTerminal(run.status) || Boolean(run.result || run.error);
   const retryable = run.status === "failed" || run.status === "cancelled";
   // The header chip renders from the run-level PR metadata streamed by the
   // orchestrator's background poll; the follow-up button below keeps its own
@@ -115,30 +117,44 @@ export function RunDetail({
   // Covers the gap between the click's POST and the active run snapshot
   // arriving, so the slow GitHub preflight still shows a spinner.
   const followUpPending = busy || followUpInFlight;
-  const [tab, setTab] = useState<LeftTab>(hasOutcome ? "result" : "activity");
-  // Selecting a different run resets the view, and the outcome drives it while
-  // a run stays open: the Result tab appears and takes focus the moment the
-  // run finishes, and hands back to the activity feed when a retry clears the
-  // outcome (no other tab is a sensible default then).
-  useEffect(() => {
-    setTab(hasOutcome ? "result" : "activity");
-  }, [run.id, hasOutcome]);
+  // The composer under the activity feed shares the follow-up gating: it can
+  // send exactly when "Take another look" can, and otherwise says why not.
+  const composerEnabled = followUpReady && (prState === "open" || prState === "draft") && !followUpPending;
+  const composerHint = live
+    ? followUpInFlight
+      ? "A follow-up is running; more instructions can be sent when it finishes."
+      : "The run is still working; instructions can be sent when it finishes."
+    : !followUpReady
+      ? "Only finished runs that delivered a pull request can take follow-up instructions."
+      : prState === "merged" || prState === "closed"
+        ? `The pull request is ${prState}; nothing left to follow up on.`
+        : prState === "unknown"
+          ? "Checking the pull request…"
+          : undefined;
+  const composer: ActivityComposer = {
+    enabled: composerEnabled,
+    hint: composerHint,
+    busy: followUpPending,
+    onSend: async (text) => {
+      const queued = await onFollowUp(text);
+      setProbeTick((t) => t + 1);
+      return queued !== undefined;
+    },
+  };
+  const repoKey = run.ticket.repo;
+  /** Internal open handler for a PR url, when its number and repo mapping resolve. */
+  const openPr = (url: string): (() => void) | undefined => {
+    const number = prNumberOf(url);
+    return repoKey && number !== undefined ? () => onOpenPull(repoKey, number) : undefined;
+  };
   const artifacts = run.result?.artifacts ?? collectArtifacts(events);
-  const hasResult = Boolean(run.result);
   const hasArtifacts = artifacts.length > 0;
-  const shipped = run.status === "completed";
   // Older persisted runs may carry costTotals without a byModel breakdown;
   // fall back to recomputing from the raw entries, mirroring CostBadge.
   const computedCosts = run.costs.length > 0 ? summarizeCosts(run.costs) : undefined;
   const costTotals = run.costTotals ?? computedCosts;
   const costByModel = run.costTotals?.byModel ?? computedCosts?.byModel ?? [];
-  // The worker that holds this run's sandbox. Offline workers stay in the
-  // fleet, so this only misses once one has been revoked; then the raw id is
-  // all an old run has left to name it by.
-  const worker = run.sandbox.workerId
-    ? workers.find((w) => w.id === run.sandbox.workerId)
-    : undefined;
-  // While the sidebar is collapsed the floating trigger overlays this corner;
+  // While the sidebar is collapsed the static trigger overlays this corner;
   // shift the header content clear of it (see .collapsed-trigger-offset).
   const { open, openMobile, isMobile } = useSidebar();
   const sidebarClosed = isMobile ? !openMobile : !open;
@@ -146,7 +162,7 @@ export function RunDetail({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div
-        className={`flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700 bg-background px-4 py-2 ${
+        className={`flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 bg-background px-4 py-2 ${
           sidebarClosed ? "collapsed-trigger-offset" : ""
         }`}
       >
@@ -178,7 +194,9 @@ export function RunDetail({
               {run.ticket.state}
             </span>
           </Badge>
-          {prChipUrl && prChipState && <PrChip url={prChipUrl} state={prChipState} />}
+          {prChipUrl && prChipState && (
+            <PrChip url={prChipUrl} state={prChipState} onOpen={openPr(prChipUrl)} />
+          )}
           {(live || retryable || showFollowUp || isTerminal(run.status)) && (
             <span aria-hidden className="h-4 w-px shrink-0 bg-ink-700" />
           )}
@@ -249,79 +267,27 @@ export function RunDetail({
             />
           )}
 
-          {/* Two explicit rows: the tab strip alone on top, then the active
-              panel and the evidence card side by side in one stretched row,
-              so both cards share a top edge and a bottom edge. */}
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-x-4 gap-y-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] xl:grid-rows-[auto_minmax(0,1fr)]">
-              <div className="no-scrollbar flex items-end gap-1 self-end overflow-x-auto border-b border-ink-700/70 xl:col-start-1 xl:row-start-1" role="tablist">
-                {hasOutcome && (
-                  <TabButton active={tab === "result"} onClick={() => setTab("result")}>
-                    Result
-                  </TabButton>
-                )}
-                <TabButton active={tab === "activity"} onClick={() => setTab("activity")}>
-                  Activity
-                </TabButton>
+          {/* What stopped the run; the header's PR chip covers the happy path. */}
+          {run.error && (
+            <Alert
+              variant="destructive"
+              className="shrink-0 rounded-lg border-rust-500/35 bg-rust-500/8 p-3"
+            >
+              <AlertTitle className="plate text-rust-400">Error</AlertTitle>
+              <AlertDescription className="mt-1 min-w-0 font-mono text-[11.5px] leading-relaxed text-wrap break-words whitespace-pre-wrap text-rust-400/90 md:text-wrap">
+                {run.error}
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* The activity feed and the evidence column side by side in one
+              stretched row, so both cards share a top edge and a bottom edge. */}
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-x-4 gap-y-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
+              <div className="h-[max(320px,calc(100svh-19rem))] min-h-0 min-w-0 xl:h-auto">
+                <Activity runId={run.id} events={events} live={live} composer={composer} />
               </div>
 
-              {/* Inactive panels hide instead of unmounting, so the activity
-                  feed keeps its scroll position across tab switches. */}
-              <div className="h-[max(320px,calc(100svh-21rem))] min-h-0 min-w-0 xl:h-auto xl:col-start-1 xl:row-start-2">
-                <div className={tab === "result" ? "h-full" : "hidden"}>
-                  <Card className="flex h-full min-h-[320px] flex-col gap-0 overflow-hidden py-0">
-                    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-800/60 px-3">
-                      <Plate className="text-haze-400">Result</Plate>
-                      {hasResult && shipped && <span className="plate text-mint-400">Shipped</span>}
-                    </div>
-                    <div className="min-h-0 flex-1 overflow-y-auto p-4">
-                      {run.error && (
-                        <Alert
-                          variant="destructive"
-                          className="mb-4 rounded-lg border-rust-500/35 bg-rust-500/8 p-3"
-                        >
-                          <AlertTitle className="plate text-rust-400">Error</AlertTitle>
-                          <AlertDescription className="mt-1 min-w-0 font-mono text-[11.5px] leading-relaxed text-wrap break-words whitespace-pre-wrap text-rust-400/90 md:text-wrap">
-                            {run.error}
-                          </AlertDescription>
-                        </Alert>
-                      )}
-                      <ResultCard run={run} />
-                      {!hasResult && !run.error && (
-                        <p className="text-[12.5px] leading-relaxed text-haze-600">
-                          The run ended without producing a result.
-                        </p>
-                      )}
-                    </div>
-                  </Card>
-                </div>
-                <div className={tab === "activity" ? "h-full" : "hidden"}>
-                  <Activity runId={run.id} events={events} live={live} />
-                </div>
-              </div>
-
-            <aside className="flex min-h-0 min-w-0 flex-col gap-3 xl:col-start-2 xl:row-start-2">
-              {/* The key figures the phase spine used to carry. */}
-              <Card className="block shrink-0 px-4 py-3.5">
-                <div className="grid grid-cols-2 gap-x-5 gap-y-3">
-                  <Field label="Elapsed">
-                    {run.finishedAt && run.startedAt
-                      ? duration(run.startedAt, Date.parse(run.finishedAt))
-                      : duration(run.startedAt ?? run.createdAt, now)}
-                  </Field>
-                  {run.attempts.length > 1 && (
-                    <Field label="Attempts">{run.attempts.length}</Field>
-                  )}
-                  {run.sandbox.provider && <Field label="Sandbox">{run.sandbox.provider}</Field>}
-                  {run.sandbox.workerId && (
-                    <Field label="Worker">{worker ? worker.name : run.sandbox.workerId}</Field>
-                  )}
-                  {run.sandbox.id && run.sandbox.id !== run.id && (
-                    <Field label="Sandbox id">{run.sandbox.id}</Field>
-                  )}
-                  <Field label="Run">{run.id}</Field>
-                </div>
-              </Card>
-
+            <aside className="flex min-h-0 min-w-0 flex-col gap-3">
               {costTotals && (
                 <Card className="block shrink-0 px-4 py-3.5">
                   <span className="plate text-haze-700">Cost</span>
@@ -356,43 +322,10 @@ export function RunDetail({
   );
 }
 
-type LeftTab = "result" | "activity";
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <span className="plate text-haze-700">{label}</span>
-      <p className="mt-1 truncate font-mono text-[11px] text-haze-300" title={String(children)}>
-        {children}
-      </p>
-    </div>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={`-mb-px shrink-0 touch-target border-b-2 px-3 py-2 text-[12px] font-medium whitespace-nowrap transition-colors ${
-        active
-          ? "border-haze-50 text-haze-50"
-          : "cursor-pointer border-transparent text-haze-600 hover:text-haze-200"
-      }`}
-    >
-      {children}
-    </button>
-  );
+/** PR number from its GitHub URL, for opening brevi's own pull request page. */
+function prNumberOf(url: string): number | undefined {
+  const match = /\/pull\/(\d+)(?:[/?#]|$)/.exec(url);
+  return match ? Number(match[1]) : undefined;
 }
 
 /** The run is parked on an agent usage limit; say why, until when, and offer to skip the wait. */

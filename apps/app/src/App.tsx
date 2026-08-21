@@ -3,7 +3,7 @@ import type React from "react";
 import type { Run } from "@brevi/shared";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { SidebarInset, SidebarProvider, SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "./components/AppSidebar";
 import { ConfigurationPage } from "./components/Configuration";
 import { Overview } from "./components/Overview";
@@ -19,17 +19,17 @@ import { useNow } from "./lib/useNow";
 import { useOrchestrator, type ConfigSection } from "./lib/useOrchestrator";
 
 /**
- * With no top bar, a collapsed sidebar leaves nothing to reopen it with;
- * this floats a toggle in the content corner exactly while it is closed
- * (the open sidebar carries its own trigger in its header).
+ * The one sidebar toggle: fixed to the window's top-left (right of the
+ * macOS traffic lights, see .static-sidebar-trigger) in both states, so the
+ * sidebar slides under it while the trigger itself never moves. top-2
+ * centers the 28px button in a page header's 44px first row, so the
+ * collapsed state reads as one line (see .collapsed-trigger-offset).
  */
-function FloatingSidebarTrigger() {
-  const { open, openMobile, isMobile } = useSidebar();
-  if (isMobile ? openMobile : open) return null;
+function StaticSidebarTrigger() {
   return (
-    <div className="floating-sidebar-trigger absolute top-2.5 left-2.5 z-30">
+    <div className="static-sidebar-trigger fixed top-2 left-2.5 z-30">
       <SidebarTrigger
-        aria-label="Open runs"
+        aria-label="Toggle the sidebar"
         className="rounded-lg border border-ink-700 bg-ink-850 text-haze-400 shadow-sm"
       />
     </div>
@@ -136,7 +136,7 @@ export default function App() {
       />
 
       <SidebarInset className="relative flex h-svh min-w-0 flex-col overflow-hidden">
-        <FloatingSidebarTrigger />
+        <StaticSidebarTrigger />
 
         {notice && (
           <Alert
@@ -175,7 +175,8 @@ export default function App() {
                 onArchive={() =>
                   void (selectedRun.archivedAt ? unarchiveRun : archiveRun)(selectedRun.id)
                 }
-                onFollowUp={() => followUpRun(selectedRun.id)}
+                onFollowUp={(instructions) => followUpRun(selectedRun.id, instructions)}
+                onOpenPull={openPull}
                 onOpenWorkers={() => openConfig("fleet")}
               />
             ) : (

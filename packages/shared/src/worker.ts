@@ -811,6 +811,8 @@ export const dispatchPromptsSchema = z.object({
   memories: z.array(z.string()).default([]),
   /** Ask the agent to write `.brevi/memories.md` back, so this run's learning reaches the host's memory store. */
   recordMemories: z.boolean().default(false),
+  /** Operator-typed instructions for a follow-up session, verbatim; absent on plain follow-ups and implementations. */
+  followUpInstructions: z.string().optional(),
 });
 export type DispatchPrompts = z.infer<typeof dispatchPromptsSchema>;
 

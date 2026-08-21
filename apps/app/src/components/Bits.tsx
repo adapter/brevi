@@ -3,7 +3,7 @@ import { Badge, badgeVariants } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { STATUS_TONE } from "../lib/status";
-import { Merge, Pull, Repo, Warn } from "./Icons";
+import { External, Merge, Pull, Repo, Warn } from "./Icons";
 
 /** Small shared parts. Every field on a strip is built from these. */
 
@@ -58,37 +58,75 @@ const PR_TONE: Record<PrState, { label: string; fg: string; wash: string; edge: 
   closed: { label: "Closed", fg: "text-pr-closed", wash: "bg-pr-closed/12", edge: "border-pr-closed/40" },
 };
 
-/** The run's PR and its fate on GitHub; links out without touching the card. */
+/**
+ * The run's PR and its fate on GitHub. With `onOpen` the chip opens brevi's
+ * own pull request view and a small satellite icon links out to GitHub;
+ * without it the chip itself links out, as before.
+ */
 export function PrChip({
   url,
   state,
+  onOpen,
   className,
 }: {
   url: string;
   state: PrState;
+  /** Opens the internal pull request page for this PR. */
+  onOpen?: () => void;
   className?: string;
 }) {
   const tone = PR_TONE[state];
+  const face = cn(
+    badgeVariants({ variant: "outline" }),
+    "touch-target transition-[filter] hover:brightness-110",
+    tone.wash,
+    tone.edge,
+    tone.fg,
+  );
+  const icon = state === "merged" ? <Merge className="size-3" /> : <Pull className="size-3" />;
+  if (!onOpen) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={`Pull request ${tone.label.toLowerCase()}, opens on GitHub`}
+        title={`Pull request ${tone.label.toLowerCase()} on GitHub`}
+        onClick={(event) => event.stopPropagation()}
+        className={cn(face, className)}
+      >
+        {icon}
+        {tone.label}
+      </a>
+    );
+  }
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noreferrer"
-      aria-label={`Pull request ${tone.label.toLowerCase()}, opens on GitHub`}
-      title={`Pull request ${tone.label.toLowerCase()} on GitHub`}
-      onClick={(event) => event.stopPropagation()}
-      className={cn(
-        badgeVariants({ variant: "outline" }),
-        "touch-target transition-[filter] hover:brightness-110",
-        tone.wash,
-        tone.edge,
-        tone.fg,
-        className,
-      )}
-    >
-      {state === "merged" ? <Merge className="size-3" /> : <Pull className="size-3" />}
-      {tone.label}
-    </a>
+    <span className={cn("inline-flex items-center gap-1", className)}>
+      <button
+        type="button"
+        aria-label={`Pull request ${tone.label.toLowerCase()}, opens in Mission Control`}
+        title={`Pull request ${tone.label.toLowerCase()}; open it here`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpen();
+        }}
+        className={cn(face, "cursor-pointer")}
+      >
+        {icon}
+        {tone.label}
+      </button>
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        aria-label="Open the pull request on GitHub"
+        title="Open on GitHub"
+        onClick={(event) => event.stopPropagation()}
+        className="touch-target inline-flex items-center text-haze-600 transition-colors hover:text-haze-200"
+      >
+        <External className="size-3" />
+      </a>
+    </span>
   );
 }
 

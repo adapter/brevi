@@ -174,6 +174,12 @@ export const Pin = (p: IconProps) => (
   </Svg>
 );
 
+export const Send = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M8 12.8V3.2m0 0L4.4 6.8M8 3.2l3.6 3.6" />
+  </Svg>
+);
+
 export const Sun = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="8" cy="8" r="3" />

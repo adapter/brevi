@@ -170,6 +170,8 @@ export function buildFollowUpPrompt(options: {
   baseBranch: string;
   /** Pre-formatted feedback bundle (markdown), or empty when there is none. */
   feedback: string;
+  /** Operator-typed instructions from the dashboard, verbatim; absent on plain follow-ups. */
+  instructions?: string;
   rebase: { status: "clean" } | { status: "conflicted"; detail: string };
   delegate?: boolean;
   /** Facts earlier runs recorded about this repo; empty or absent when memories are off. */
@@ -177,7 +179,8 @@ export function buildFollowUpPrompt(options: {
   /** Ask for `.brevi/memories.md` back, so this session's learning is kept too. */
   recordMemories?: boolean;
 }): string {
-  const { ticket, prUrl, branch, baseBranch, feedback, rebase, delegate, memories, recordMemories } = options;
+  const { ticket, prUrl, branch, baseBranch, feedback, instructions, rebase, delegate, memories, recordMemories } =
+    options;
   return [
     `You are an autonomous coding agent working in a git checkout of the pull request branch \`${branch}\` for the ticket below. The PR (${prUrl}) has received review feedback and/or drifted behind its base branch \`${baseBranch}\`. Bring the branch up to date and address the feedback end to end without asking questions.`,
     ...(delegate
@@ -203,6 +206,14 @@ export function buildFollowUpPrompt(options: {
           rebase.detail,
           "```",
         ].join("\n"),
+    ...(instructions
+      ? [
+          "",
+          "## Operator instructions",
+          "The operator who requested this follow-up asked for the following. Treat it as feedback to address alongside anything under Review feedback below:",
+          instructions,
+        ]
+      : []),
     "",
     "## Review feedback",
     feedback || "(none: this follow-up only brings the branch up to date)",

@@ -67,7 +67,7 @@ export interface RunContext {
    * (not flattened) so it never collides with the recordMemories callback
    * above, which is a different thing with the same word in it.
    */
-  prompts: Pick<DispatchPrompts, "prDescription" | "recordMemories">;
+  prompts: Pick<DispatchPrompts, "prDescription" | "recordMemories" | "followUpInstructions">;
   /**
    * Delivers a post-execution ccusage snapshot to the host's usage archive
    * (see usageSnapshot.ts); absent when the dispatch channel has no way to

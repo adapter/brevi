@@ -395,7 +395,11 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
       recordMemories: async (repo, learned) => {
         connection.send({ type: "run-memories", leaseId: lease.id, runId: run.id, repo, ident: run.ticket.identifier, learned });
       },
-      prompts: { prDescription: prompts.prDescription, recordMemories: prompts.recordMemories },
+      prompts: {
+        prDescription: prompts.prDescription,
+        recordMemories: prompts.recordMemories,
+        followUpInstructions: prompts.followUpInstructions,
+      },
       // Rides the lease's durable replay buffer (see connection.ts), so a
       // snapshot outlives a reconnect and always lands before run-complete
       // is acknowledged.
