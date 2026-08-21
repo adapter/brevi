@@ -24,7 +24,7 @@ export const MAX_SANDBOX_CONCURRENCY = 16;
 /**
  * Current ~/.brevi/config.json migration stamp. Stored configs materialize
  * every schema default, so changing a default cannot reach existing installs
- * on its own; loadConfig (packages/orchestrator) rewrites stale stored
+ * on its own; loadConfig (configFile.ts) rewrites stale stored
  * defaults for files stamped below this version, then stamps them current.
  * v1: pollIntervalSeconds default dropped from 60 to 15.
  */

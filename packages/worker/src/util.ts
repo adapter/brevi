@@ -14,22 +14,6 @@ export function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new RunCancelledError();
 }
 
-export async function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  throwIfAborted(signal);
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => reject(new RunCancelledError());
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([promise, aborted]);
-  } finally {
-    if (onAbort) signal.removeEventListener("abort", onAbort);
-    // If we lost the race, don't let the abandoned promise become an unhandled rejection.
-    promise.catch(() => undefined);
-  }
-}
-
 /** Buffers chunks and invokes the callback once per complete, non-empty line. */
 export function lineSink(onLine: (line: string) => void): { write(chunk: string): void; flush(): void } {
   let buffer = "";

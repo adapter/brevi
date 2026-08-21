@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, migrateConfig, saveConfig } from "../src/config.js";
+import { loadConfig, migrateConfig, saveConfig } from "../src/configFile.js";
 
-// Run with `bun test packages/orchestrator` from the repo root. Exercises the
+// Run with `bun test packages/shared` from the repo root. Exercises the
 // CONFIG_VERSION migration against a real temp file: a stale stored default
 // (pollIntervalSeconds: 60, no stamp) rewrites to the new 15s default and
 // gets stamped, while an already-stamped file (even one that kept the old

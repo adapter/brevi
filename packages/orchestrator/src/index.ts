@@ -1,16 +1,5 @@
-export { loadConfig, saveConfig } from "./config.js";
 export { startOrchestrator } from "./server.js";
 export type { OrchestratorHandle, StartOptions } from "./server.js";
-export { validateLinearApiKey, validateGithubToken } from "./credentials.js";
-export {
-  discoverAnthropicCredential,
-  discoverCodexCredential,
-  discoverXaiCredential,
-} from "./connect.js";
-export type { DiscoveredCredential } from "./connect.js";
-export { checkBucketAccessible, checkWrangler } from "./r2.js";
-export type { WranglerAuth } from "./r2.js";
 export { ORCHESTRATOR_LOG_PATH, attachOrchestratorLogFile } from "./logfile.js";
-export { agentProvider } from "./limits.js";
 export { FleetStore, sanitizeWorkerName } from "./fleet.js";
 export type { WorkerRecord } from "./fleet.js";

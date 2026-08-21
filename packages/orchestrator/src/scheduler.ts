@@ -9,6 +9,8 @@ import {
   CONFIG_PATH,
   changedSecretPaths,
   isPlainObject,
+  isSafePathSegment,
+  isTerminal,
   isUnsafeConfigKey,
   SETTINGS_SECRET_PATHS,
   MASKED_SECRET,
@@ -16,6 +18,8 @@ import {
   needsRestart,
   readConfigPath,
   redactConfig,
+  saveConfig,
+  serializeConfig,
   type BreviConfig,
   type ConnectResponse,
   type CredentialProvider,
@@ -33,11 +37,6 @@ import {
   type PairingTokenResponse,
   type PrState,
   type PrStatusResponse,
-  type PullDetailResponse,
-  type PullListResponse,
-  type PullMergeMethod,
-  type PullMergeResponse,
-  type PullSummary,
   type ConfigPatch,
   type R2ConnectResponse,
   type R2Status,
@@ -52,58 +51,43 @@ import {
   type MachineUsage,
   type UsageResponse,
 } from "@brevi/shared";
-import { saveConfig, serializeConfig } from "./config.js";
-import { readMachineUsage } from "./machineUsage.js";
 import {
-  discoverAnthropicCredential,
-  discoverCodexCredential,
-  discoverGithubToken,
-  discoverXaiCredential,
-  exchangeLinearCode,
-  githubClientId,
-  hostedApiReachable,
-  linearOauthApp,
-  LinearRefreshError,
-  pollGithubDeviceFlow,
-  refreshLinearToken,
-  startGithubDeviceFlow,
-  startLinearOauth,
-  type GithubDeviceSession,
-  type LinearOauthSession,
-  type LinearTokens,
-} from "./connect.js";
-import {
-  validateAnthropicApiKey,
-  validateAnthropicCredential,
-  validateCodexApiKey,
-  validateCodexChatgptAuth,
-  validateGithubToken,
-  validateLinearApiKey,
-  validateGrokAuth,
-  validateXaiApiKey,
-} from "./credentials.js";
-import { FleetStore, sanitizeWorkerName } from "./fleet.js";
-import {
+  agentProvider,
   branchNameFor,
-  commentOnPull,
+  checkWrangler,
+  DEFAULT_EVIDENCE_BUCKET,
+  exchangeLinearCode,
   fetchPrStatus,
   findPullRequestForBranch,
-  gatherPullDetail,
-  listPullRequests,
+  isLinearAuthError,
+  linearOauthApp,
+  LinearRefreshError,
+  LinearService,
   listRepos,
-  markPullRequestReady,
-  mergePullRequest,
-  replyToReviewComment,
-  setPullRequestState,
-  setReviewThreadResolved,
-  submitPullReview,
-} from "./github.js";
-import { agentProvider, probeAgentLimit } from "./limits.js";
-import { isLinearAuthError, LinearService, type LinearAuthHooks } from "./linear.js";
-import { memoryKeyFor, MemoryStore, selectMemories } from "./memory.js";
-import { checkWrangler, DEFAULT_EVIDENCE_BUCKET, provisionBucket, startWranglerLogin } from "./r2.js";
-import { isSafePathSegment } from "./safepath.js";
-import { ACTIVE_STATUSES, RunStore, isTerminal } from "./state.js";
+  memoryKeyFor,
+  MemoryStore,
+  pollGithubDeviceFlow,
+  probeAgentLimit,
+  provisionBucket,
+  readMachineUsage,
+  refreshLinearToken,
+  selectMemories,
+  startWranglerLogin,
+  validateAnthropicApiKey,
+  validateCodexApiKey,
+  validateGithubToken,
+  validateLinearApiKey,
+  validateXaiApiKey,
+  type GithubDeviceSession,
+  type LinearAuthHooks,
+  type LinearOauthSession,
+  type LinearTokens,
+} from "@brevi/integrations";
+import * as connectors from "./connectors.js";
+import { OrchestratorError } from "./errors.js";
+import { FleetStore, sanitizeWorkerName } from "./fleet.js";
+import { PullService } from "./pulls.js";
+import { ACTIVE_STATUSES, RunStore } from "./state.js";
 import {
   LocalWorkerRefusalError,
   WorkerRegistry,
@@ -200,16 +184,7 @@ export function planRunRecovery(
   return { leased, queue, interrupted };
 }
 
-/** Error with an HTTP-mappable code, thrown by orchestrator commands. */
-export class OrchestratorError extends Error {
-  constructor(
-    readonly code: "not-found" | "conflict" | "invalid" | "gone",
-    message: string,
-  ) {
-    super(message);
-    this.name = "OrchestratorError";
-  }
-}
+export { OrchestratorError } from "./errors.js";
 
 interface OrchestratorEvents {
   tickets: [Ticket[]];
@@ -346,6 +321,8 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
   readonly memories: MemoryStore;
   /** Who is enrolled as a worker of this host, and the credentials that prove it. */
   readonly fleet: FleetStore;
+  /** GitHub PR proxy for the /api/pulls routes; not a scheduling concern. */
+  readonly pulls: PullService;
 
   /**
    * What the worker channel's own listener actually bound (see
@@ -452,6 +429,7 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     this.memories = memories;
     this.fleet = fleet;
     this.#configPath = configPath ?? CONFIG_PATH;
+    this.pulls = new PullService(config);
     if (config.linear.apiKey) this.#linear = new LinearService(config, this.#linearAuth);
   }
 
@@ -1104,182 +1082,22 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
     }
   }
 
-  /**
-   * One-click connect: try host discovery / OAuth flows for a provider.
-   * Falls back to "manual" (dashboard shows the key input) with a reason.
-   */
-  async connectProvider(
-    provider: CredentialProvider,
-    serverUrl: string,
-  ): Promise<ConnectResponse> {
-    switch (provider) {
-      case "github": {
-        const discovered = await discoverGithubToken();
-        if (discovered) {
-          const result = await validateGithubToken(discovered.value);
-          if (result.ok) {
-            await this.#saveCredential(() => {
-              this.config.github.token = discovered.value;
-            });
-            return {
-              status: "connected",
-              provider,
-              detail: `${result.detail} (via ${discovered.source})`,
-              config: redactConfig(this.config),
-            };
-          }
-        }
-        const clientId = githubClientId(this.config);
-        const deviceSource = clientId
-          ? { clientId }
-          : (await hostedApiReachable(this.config.connect.apiBase))
-            ? { apiBase: this.config.connect.apiBase }
-            : null;
-        if (deviceSource) {
-          const session = await startGithubDeviceFlow(deviceSource);
+  /** One-click connect; see connectors.ts for the per-provider flows. */
+  async connectProvider(provider: CredentialProvider, serverUrl: string): Promise<ConnectResponse> {
+    return connectors.connectProvider(
+      {
+        config: this.config,
+        saveCredential: (set) => this.#saveCredential(set),
+        setGithubDevice: (session) => {
           this.#githubDevice = session;
-          return {
-            status: "device",
-            provider,
-            userCode: session.userCode,
-            verificationUri: session.verificationUri,
-            interval: session.interval,
-            expiresIn: Math.floor((session.expiresAt - Date.now()) / 1000),
-          };
-        }
-        return {
-          status: "manual",
-          provider,
-          reason:
-            "No GitHub CLI login found and the brevi connect service is unreachable. Run `gh auth login` and connect again, or paste a token.",
-        };
-      }
-      case "linear": {
-        const app = linearOauthApp(this.config);
-        if (app) {
-          const { session, url } = startLinearOauth({ app, serverUrl });
+        },
+        setLinearOauth: (session) => {
           this.#linearOauth = session;
-          return { status: "redirect", provider, url };
-        }
-        if (await hostedApiReachable(this.config.connect.apiBase)) {
-          const { session, url } = startLinearOauth({
-            apiBase: this.config.connect.apiBase,
-            // From the URL the caller bound, not config.server.port: the port
-            // is editable from the dashboard and only takes effect on restart,
-            // so the config can name a port nothing is listening on. The
-            // hosted backend redirects the callback to whatever it is told.
-            port: Number(new URL(serverUrl).port) || this.config.server.port,
-          });
-          this.#linearOauth = session;
-          return { status: "redirect", provider, url };
-        }
-        return {
-          status: "manual",
-          provider,
-          reason:
-            "The brevi connect service is unreachable and no personal OAuth app is configured (connect.linearClientId/Secret). Paste a personal API key instead.",
-        };
-      }
-      case "anthropic": {
-        const found = await discoverAnthropicCredential();
-        if (!found) {
-          return {
-            status: "manual",
-            provider,
-            reason:
-              "No Anthropic credential found on this machine (checked ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, and the Claude Code login). Paste an API key instead.",
-          };
-        }
-        const result = await validateAnthropicCredential(
-          found.value,
-          found.kind === "oauth" ? "oauth" : "api-key",
-        );
-        if (!result.ok) {
-          return {
-            status: "manual",
-            provider,
-            reason: `Found a credential from ${found.source}, but it failed: ${result.detail}`,
-          };
-        }
-        await this.#saveCredential(() => {
-          if (found.kind === "oauth") this.config.agent.claudeCodeOauthToken = found.value;
-          else this.config.agent.anthropicApiKey = found.value;
-        });
-        return {
-          status: "connected",
-          provider,
-          detail: `${result.detail} (from ${found.source})`,
-          config: redactConfig(this.config),
-        };
-      }
-      case "codex": {
-        const found = await discoverCodexCredential();
-        if (!found) {
-          return {
-            status: "manual",
-            provider,
-            reason:
-              "No Codex credential found on this machine (checked OPENAI_API_KEY and ~/.codex/auth.json). Log in with `codex login` and connect again, or paste an OpenAI API key.",
-          };
-        }
-        const result =
-          found.kind === "chatgpt"
-            ? validateCodexChatgptAuth(found.value)
-            : await validateCodexApiKey(found.value);
-        if (!result.ok) {
-          return {
-            status: "manual",
-            provider,
-            reason: `Found a credential from ${found.source}, but it failed: ${result.detail}`,
-          };
-        }
-        await this.#saveCredential(() => {
-          if (found.kind === "chatgpt") this.config.agent.codexAuthJson = found.value;
-          else this.config.agent.codexApiKey = found.value;
-        });
-        return {
-          status: "connected",
-          provider,
-          detail: `${result.detail} (from ${found.source})`,
-          config: redactConfig(this.config),
-        };
-      }
-      case "grok": {
-        const found = await discoverXaiCredential();
-        if (!found) {
-          return {
-            status: "manual",
-            provider,
-            reason:
-              "No Grok credential found on this machine (checked XAI_API_KEY, GROK_CODE_XAI_API_KEY, GROK_AUTH, and ~/.grok/auth.json). Log in with `grok login` and connect again, or paste an xAI API key.",
-          };
-        }
-        const result =
-          found.kind === "grok" ? validateGrokAuth(found.value) : await validateXaiApiKey(found.value);
-        if (!result.ok) {
-          return {
-            status: "manual",
-            provider,
-            reason: `Found a credential from ${found.source}, but it failed: ${result.detail}`,
-          };
-        }
-        await this.#saveCredential(() => {
-          if (found.kind === "grok") {
-            this.config.agent.grokAuthJson = found.value;
-            this.config.agent.xaiApiKey = "";
-          } else {
-            this.config.agent.xaiApiKey = found.value;
-            this.config.agent.grokAuthJson = "";
-          }
-        });
-        return {
-          status: "connected",
-          provider,
-          detail: `${result.detail} (from ${found.source})`,
-          config: redactConfig(this.config),
-        };
-      }
-    }
+        },
+      },
+      provider,
+      serverUrl,
+    );
   }
 
   /** Poll the in-flight GitHub device authorization. */
@@ -1861,157 +1679,6 @@ export class Orchestrator extends EventEmitter<OrchestratorEvents> {
         "invalid",
         `could not check the pull request: ${error instanceof Error ? error.message : String(error)}`,
       );
-    }
-  }
-
-  /** The GitHub token, or the 400 every pull route answers without one. */
-  #githubToken(): string {
-    const token = this.config.github.token;
-    if (!token) throw new OrchestratorError("invalid", "GitHub is not connected");
-    return token;
-  }
-
-  /** Resolve a repo key from config.repos to its "owner/name" remote. */
-  #pullRemote(repoKey: string): string {
-    const repo = this.config.repos[repoKey];
-    if (!repo) throw new OrchestratorError("not-found", `no configured repository "${repoKey}"`);
-    return repo.remote;
-  }
-
-  /** Map a GitHub API failure onto an orchestrator error the routes can serve. */
-  static #wrapGithubError(error: unknown): OrchestratorError {
-    const status = (error as { status?: number }).status;
-    const message = `GitHub said: ${error instanceof Error ? error.message : String(error)}`;
-    if (status === 404) return new OrchestratorError("not-found", message);
-    // 405 (not mergeable) and 409 (head moved) are state conflicts, not bad input.
-    if (status === 405 || status === 409) return new OrchestratorError("conflict", message);
-    return new OrchestratorError("invalid", message);
-  }
-
-  /**
-   * Pull requests across every configured repository, newest activity first.
-   * Repos are fetched concurrently, and one failing repo (deleted remote,
-   * token without access) reports its error beside the others' results
-   * instead of failing the whole list.
-   */
-  async listPulls(): Promise<PullListResponse> {
-    const token = this.#githubToken();
-    const repos = Object.entries(this.config.repos);
-    const settled = await Promise.all(
-      repos.map(async ([key, repo]) => {
-        try {
-          const pulls = await listPullRequests(repo.remote, token);
-          return { ok: true as const, key, remote: repo.remote, pulls };
-        } catch (error) {
-          return {
-            ok: false as const,
-            key,
-            remote: repo.remote,
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-      }),
-    );
-    const pulls: PullSummary[] = [];
-    const errors: PullListResponse["errors"] = [];
-    for (const result of settled) {
-      if (result.ok) {
-        for (const pull of result.pulls) pulls.push({ repo: result.key, ...pull });
-      } else {
-        errors.push({ repo: result.key, remote: result.remote, message: result.error });
-      }
-    }
-    pulls.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    return { pulls, errors };
-  }
-
-  /** Everything the PR detail view renders, gathered from GitHub on demand. */
-  async pullDetail(repoKey: string, number: number): Promise<PullDetailResponse> {
-    const token = this.#githubToken();
-    const remote = this.#pullRemote(repoKey);
-    try {
-      const detail = await gatherPullDetail(remote, number, token);
-      return { ...detail, pull: { repo: repoKey, ...detail.pull } };
-    } catch (error) {
-      throw Orchestrator.#wrapGithubError(error);
-    }
-  }
-
-  async pullMerge(repoKey: string, number: number, method: PullMergeMethod): Promise<PullMergeResponse> {
-    const token = this.#githubToken();
-    const remote = this.#pullRemote(repoKey);
-    try {
-      return await mergePullRequest({ remote, number, method, token });
-    } catch (error) {
-      throw Orchestrator.#wrapGithubError(error);
-    }
-  }
-
-  async pullSetState(repoKey: string, number: number, state: "open" | "closed"): Promise<void> {
-    const token = this.#githubToken();
-    const remote = this.#pullRemote(repoKey);
-    try {
-      await setPullRequestState({ remote, number, state, token });
-    } catch (error) {
-      throw Orchestrator.#wrapGithubError(error);
-    }
-  }
-
-  /** Take the PR out of draft. */
-  async pullReady(repoKey: string, number: number): Promise<void> {
-    const token = this.#githubToken();
-    const remote = this.#pullRemote(repoKey);
-    try {
-      await markPullRequestReady(`https://github.com/${remote}/pull/${number}`, token);
-    } catch (error) {
-      throw Orchestrator.#wrapGithubError(error);
-    }
-  }
-
-  async pullComment(repoKey: string, number: number, body: string): Promise<void> {
-    const token = this.#githubToken();
-    const remote = this.#pullRemote(repoKey);
-    try {
-      await commentOnPull({ remote, number, body, token });
-    } catch (error) {
-      throw Orchestrator.#wrapGithubError(error);
-    }
-  }
-
-  async pullReview(
-    repoKey: string,
-    number: number,
-    event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT",
-    body: string,
-  ): Promise<void> {
-    const token = this.#githubToken();
-    const remote = this.#pullRemote(repoKey);
-    try {
-      await submitPullReview({ remote, number, event, body, token });
-    } catch (error) {
-      throw Orchestrator.#wrapGithubError(error);
-    }
-  }
-
-  async pullReply(repoKey: string, number: number, commentId: number, body: string): Promise<void> {
-    const token = this.#githubToken();
-    const remote = this.#pullRemote(repoKey);
-    try {
-      await replyToReviewComment({ remote, number, commentId, body, token });
-    } catch (error) {
-      throw Orchestrator.#wrapGithubError(error);
-    }
-  }
-
-  async pullResolveThread(repoKey: string, threadId: string, resolved: boolean): Promise<void> {
-    const token = this.#githubToken();
-    // The thread node id already names the PR; the repo lookup just 404s early
-    // on a key this config does not know.
-    this.#pullRemote(repoKey);
-    try {
-      await setReviewThreadResolved({ threadId, resolved, token });
-    } catch (error) {
-      throw Orchestrator.#wrapGithubError(error);
     }
   }
 

@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { CONFIG_PATH, CONFIG_VERSION, configSchema, type BreviConfig } from "@brevi/shared";
+import { CONFIG_VERSION, configSchema, type BreviConfig } from "./config.js";
+import { CONFIG_PATH } from "./paths.js";
 
 /**
  * Migrate a raw config.json object stamped below CONFIG_VERSION, or return

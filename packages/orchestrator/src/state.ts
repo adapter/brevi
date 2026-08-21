@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  isSafePathSegment,
   RUNS_DIR,
   summarizeCosts,
   type ArtifactRef,
@@ -12,7 +13,6 @@ import {
   type RunStatus,
   type Ticket,
 } from "@brevi/shared";
-import { isSafePathSegment } from "./safepath.js";
 
 /** Statuses for runs with an agent execution in flight (or about to start). */
 export const ACTIVE_STATUSES: ReadonlySet<RunStatus> = new Set([
@@ -21,13 +21,6 @@ export const ACTIVE_STATUSES: ReadonlySet<RunStatus> = new Set([
   "running",
   "finalizing",
 ]);
-
-const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set(["completed", "failed", "cancelled"]);
-
-/** Terminal = no further work will happen without a manual retry. "waiting" is neither active nor terminal. */
-export function isTerminal(status: RunStatus): boolean {
-  return TERMINAL_STATUSES.has(status);
-}
 
 /** Short, sortable run id: time prefix + random suffix, e.g. "20260804-153012-k3f9". */
 function newRunId(): string {

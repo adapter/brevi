@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { CONFIG_PATH, type BreviConfig } from "@brevi/shared";
-import { loadConfig, saveConfig } from "@brevi/orchestrator/config";
+import { loadConfig, saveConfig } from "@brevi/shared";
 
 export interface EnsureConfigResult {
   config: BreviConfig;

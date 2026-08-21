@@ -1,6 +1,5 @@
 import { execa } from "execa";
-import type { ArtifactRef, BreviConfig } from "@brevi/shared";
-import { resolveWithin } from "./safepath.js";
+import { resolveWithin, type ArtifactRef, type BreviConfig } from "@brevi/shared";
 
 /**
  * Cloudflare R2 evidence uploads: pushes a run's demo screenshots/recordings

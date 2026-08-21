@@ -1,8 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { CCUSAGE_DIR } from "@brevi/shared";
-import { isSafePathSegment, resolveWithin } from "./safepath.js";
+import { CCUSAGE_DIR, isSafePathSegment, resolveWithin } from "@brevi/shared";
 
 /**
  * Host-side usage accounting archive: minimized Claude session snapshots

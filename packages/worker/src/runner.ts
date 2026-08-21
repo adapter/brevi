@@ -7,6 +7,10 @@ import { execa, type Result as ExecaResult } from "execa";
 import {
   BREVI_HOME,
   formatDuration,
+  isContainedRegularFile,
+  isSafePathSegment,
+  isTerminal,
+  resolveWithin,
   WORKSPACES_DIR,
   type ArtifactRef,
   type BreviConfig,
@@ -27,23 +31,17 @@ import {
   detectLimit,
   FALLBACK_COMMIT_IDENTITY,
   isAgentFailureEvent,
-  isContainedRegularFile,
-  isSafePathSegment,
-  isTerminal,
   LinearService,
-  lineSink,
   markPullRequestReady,
   memoryKeyFor,
   plainRemote,
   readRunMemories,
   resolveCommitIdentity,
-  resolveWithin,
   resumeTimeFor,
-  RunCancelledError,
-  throwIfAborted,
   uploadRunEvidence,
   type UploadedEvidence,
-} from "@brevi/orchestrator/internal";
+} from "@brevi/integrations";
+import { lineSink, RunCancelledError, throwIfAborted } from "./util.js";
 import { ccusageCostEntry, resolveCcusageCommand, startCcusageSampler, type CcusageSampler } from "./ccusage.js";
 import { usageCollector } from "./costs.js";
 import { buildImplementationPrompt, buildReviewFixPrompt, type RepoMap } from "./prompts.js";
@@ -53,8 +51,6 @@ import type { RunSink } from "./sink.js";
 import { collectUsageSnapshots, projectKeyFor, type UsageSnapshot } from "./usageSnapshot.js";
 
 export const BREVI_FOOTER = "🤖 Automated by [brevi]";
-
-export { RunCancelledError } from "@brevi/orchestrator/internal";
 
 export interface RunContext {
   runId: string;

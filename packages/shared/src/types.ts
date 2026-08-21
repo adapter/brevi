@@ -28,6 +28,13 @@ export type RunStatus =
   | "failed"
   | "cancelled";
 
+const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set(["completed", "failed", "cancelled"]);
+
+/** Terminal = no further work will happen without a manual retry. "waiting" is neither active nor terminal. */
+export function isTerminal(status: RunStatus): boolean {
+  return TERMINAL_STATUSES.has(status);
+}
+
 /** Which coding agent's usage limit was hit. */
 export type LimitProvider = "claude" | "codex" | "grok";
 

@@ -1,13 +1,13 @@
 {
-  "name": "@brevi/orchestrator",
-  "version": "0.1.1",
+  "name": "@brevi/integrations",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/adapter/brevi.git",
-    "directory": "packages/orchestrator"
+    "directory": "packages/integrations"
   },
   "homepage": "https://brevi.dev",
   "bugs": "https://github.com/adapter/brevi/issues",
@@ -27,17 +27,14 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
-    "@brevi/integrations": "*",
     "@brevi/shared": "*",
-    "@hono/node-server": "^2.1.0",
-    "@lydell/node-pty": "^1.1.0",
-    "hono": "^4.13.0",
-    "ws": "^8.21.2"
+    "@linear/sdk": "^89.0.0",
+    "execa": "^10.0.1",
+    "octokit": "^5.0.5"
   },
   "devDependencies": {
     "@repo/typescript-config": "*",
     "@types/node": "^26.1.2",
-    "@types/ws": "^8.18.1",
     "oxlint": "^1.77.0",
     "typescript": "^7.0.2"
   }

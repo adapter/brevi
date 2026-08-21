@@ -9,7 +9,10 @@ import { Hono } from "hono";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   isPlainObject,
+  isSafePathSegment,
+  loadConfig,
   redactConfig,
+  resolveWithin,
   urlHost,
   WORKER_DEMAND_PATH,
   WORKER_SELF_STATE_PATH,
@@ -36,10 +39,8 @@ import {
   type WorkerProvisionResponse,
   type WorkerView,
 } from "@brevi/shared";
-import { loadConfig } from "./config.js";
 import { attachOrchestratorLogFile } from "./logfile.js";
 import { Orchestrator, OrchestratorError } from "./scheduler.js";
-import { isSafePathSegment, resolveWithin } from "./safepath.js";
 import { handleAttachSocket } from "./terminal.js";
 
 export interface StartOptions {
@@ -537,7 +538,7 @@ function buildApp(
 
   app.get("/api/pulls", async (c) => {
     try {
-      return c.json(await orchestrator.listPulls());
+      return c.json(await orchestrator.pulls.list());
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }
@@ -555,7 +556,7 @@ function buildApp(
     const params = pullParams(c);
     if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
     try {
-      return c.json(await orchestrator.pullDetail(params.repo, params.number));
+      return c.json(await orchestrator.pulls.detail(params.repo, params.number));
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }
@@ -574,7 +575,7 @@ function buildApp(
       return c.json({ error: 'method must be "merge", "squash", or "rebase"' }, 400);
     }
     try {
-      return c.json(await orchestrator.pullMerge(params.repo, params.number, body.method));
+      return c.json(await orchestrator.pulls.merge(params.repo, params.number, body.method));
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
     }
@@ -584,7 +585,7 @@ function buildApp(
     const params = pullParams(c);
     if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
     try {
-      await orchestrator.pullSetState(params.repo, params.number, "closed");
+      await orchestrator.pulls.setState(params.repo, params.number, "closed");
       return c.json({ ok: true });
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
@@ -595,7 +596,7 @@ function buildApp(
     const params = pullParams(c);
     if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
     try {
-      await orchestrator.pullSetState(params.repo, params.number, "open");
+      await orchestrator.pulls.setState(params.repo, params.number, "open");
       return c.json({ ok: true });
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
@@ -606,7 +607,7 @@ function buildApp(
     const params = pullParams(c);
     if (!params) return c.json({ error: "invalid repo or pull number" }, 400);
     try {
-      await orchestrator.pullReady(params.repo, params.number);
+      await orchestrator.pulls.ready(params.repo, params.number);
       return c.json({ ok: true });
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
@@ -626,7 +627,7 @@ function buildApp(
       return c.json({ error: "body must be a non-empty string" }, 400);
     }
     try {
-      await orchestrator.pullComment(params.repo, params.number, body.body);
+      await orchestrator.pulls.comment(params.repo, params.number, body.body);
       return c.json({ ok: true });
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
@@ -651,7 +652,7 @@ function buildApp(
       return c.json({ error: "this review event needs a comment body" }, 400);
     }
     try {
-      await orchestrator.pullReview(params.repo, params.number, body.event, text);
+      await orchestrator.pulls.review(params.repo, params.number, body.event, text);
       return c.json({ ok: true });
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
@@ -674,7 +675,7 @@ function buildApp(
       return c.json({ error: "body must be a non-empty string" }, 400);
     }
     try {
-      await orchestrator.pullReply(params.repo, params.number, body.commentId, body.body);
+      await orchestrator.pulls.reply(params.repo, params.number, body.commentId, body.body);
       return c.json({ ok: true });
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);
@@ -694,7 +695,7 @@ function buildApp(
       return c.json({ error: "threadId and resolved are required" }, 400);
     }
     try {
-      await orchestrator.pullResolveThread(params.repo, body.threadId, body.resolved);
+      await orchestrator.pulls.resolveThread(params.repo, body.threadId, body.resolved);
       return c.json({ ok: true });
     } catch (error) {
       return c.json({ error: errorMessage(error) }, statusForError(error) as 400);

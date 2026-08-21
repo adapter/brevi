@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { app, dialog, nativeImage, shell } from "electron";
 import type { HealthResponse } from "@brevi/shared";
 import { startOrchestrator } from "@brevi/orchestrator";
-import { loadConfig } from "@brevi/orchestrator/config";
+import { loadConfig } from "@brevi/shared";
 import { ensureConfig } from "./config.js";
 import { FleetMonitor } from "./fleet.js";
 import { orchestratorUrl, probeHealth } from "./health.js";

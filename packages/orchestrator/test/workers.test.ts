@@ -15,7 +15,7 @@ import { FakeSocket, flush } from "./fake-socket.js";
 import { CcusageArchive } from "../src/ccusageArchive.js";
 import { FleetStore } from "../src/fleet.js";
 import { LeaseStore } from "../src/leases.js";
-import { MemoryStore } from "../src/memory.js";
+import { MemoryStore } from "@brevi/integrations";
 import { RunStore } from "../src/state.js";
 import { WorkerRegistry } from "../src/workers.js";
 
