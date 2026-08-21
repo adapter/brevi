@@ -29,16 +29,16 @@
   "dependencies": {
     "@brevi/integrations": "*",
     "@brevi/shared": "*",
-    "@hono/node-server": "^2.1.0",
+    "@hono/node-server": "^2.1.1",
     "@lydell/node-pty": "^1.1.0",
-    "hono": "^4.13.0",
-    "ws": "^8.21.2"
+    "hono": "^4.13.2",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@repo/typescript-config": "*",
-    "@types/node": "^26.1.2",
+    "@types/node": "^26.2.0",
     "@types/ws": "^8.18.1",
-    "oxlint": "^1.77.0",
+    "oxlint": "^1.78.0",
     "typescript": "^7.0.2"
   }
 }
