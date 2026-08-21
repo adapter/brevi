@@ -196,9 +196,3 @@ export function wsUrl(): string {
   const { apiBase, token } = desktopRuntime();
   return `${apiBase.replace(/^http/, "ws")}/ws?token=${encodeURIComponent(token)}`;
 }
-
-/** Socket bridging the web terminal to a run's retained sandbox. */
-export function attachWsUrl(runId: string): string {
-  const { apiBase, token } = desktopRuntime();
-  return `${apiBase.replace(/^http/, "ws")}/ws/runs/${encodeURIComponent(runId)}/attach?token=${encodeURIComponent(token)}`;
-}
